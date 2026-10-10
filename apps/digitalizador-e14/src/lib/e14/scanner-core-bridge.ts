@@ -124,7 +124,10 @@ function dosDigitos(n: number): string {
 
 // §X (SPEC-score-legible): pisos de legibilidad.
 const PISO_CONTRASTE_LEGIBLE = 80; // ≈ excellentQuality().contrast=84 del core
-const PISO_IDENTIFICADA = 8.2;     // ≥ umbral OPTIMA (8.0) de statusDeScore
+const PISO_IDENTIFICADA = 10;      // §X.3 (SPEC-score-10-identificada): identificada AUTO =
+                                   // acta legible y digitalizada con certeza total → puntaje
+                                   // perfecto (petición del dueño). El score deja de describir
+                                   // el crudo y describe la CERTEZA de la digitalización.
 
 /** §X.1 (SPEC-score-legible): contraste efectivo — una foto de documento
  *  (papel blanco ~85 % del encuadre) tiene dispersión global de luminancia
@@ -163,6 +166,8 @@ function scoreDeCalidad(
   // es evidencia directa de legibilidad → el acta identificada nunca queda en
   // MODERADA ni RECHAZADA por métricas globales del crudo. SUGERIDA/MANUAL NO
   // reciben piso: el panel de corrección (§5) sigue siendo su camino.
+  // §X.3 (SPEC-score-10-identificada): el piso es 10 — la identificación
+  // completa es la evidencia MÁXIMA de legibilidad → puntaje perfecto.
   if (senales?.identificada) score10 = Math.max(score10, PISO_IDENTIFICADA);
   return score10;
 }
