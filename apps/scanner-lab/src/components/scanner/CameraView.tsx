@@ -647,6 +647,13 @@ export default function CameraView() {
    *  manual abre la cámara NATIVA (input capture=environment) — HQ-iOS,
    *  error #5 — y la auto-captura usa frames del stream ALTO (1920×1440). */
   const canTakePhotoRef = useRef(false);
+  /** FIX v6 (6.2) — LATIDO de frames del <video>: timestamp del ÚLTIMO
+   *  frame decodificado. Un video CONGELADO sin estar muted (lo que Safari
+   *  deja tras un takePhoto colgado) PASA isStreamDead() (readyState/muted
+   *  sanos) pero no produce frames nuevos → el watchdog de v4 no se
+   *  disparaba → negro para siempre. Lo alimentan: el bucle rVFC (primario,
+   *  Safari 15.4+ y Chrome) y onFrame del loop (fallback). */
+  const lastFrameAtRef = useRef(performance.now());
   /** FIX v4 4.1 — lista negra TEMPORAL de takePhoto: true tras un intento
    *  que expiró por timeout (sensor colgado: cada disparo volvería a
    *  congelar el visor 5 s). Mientras esté marcado, captureSmart va directo
@@ -1245,7 +1252,13 @@ export default function CameraView() {
       // el track muted/en silencio (readyState "live", sin frames). Si el
       // stream murió, recuperar YA — no disparamos el burst contra un video
       // muerto (el editor abriría sin imagen o nada).
-      if (shot?.timedOut && isStreamDead()) {
+      // FIX v6 (6.2): MISMA comprobación de FRESCURA — un takePhoto colgado
+      // puede dejar el video CONGELADO sin mutearlo (isStreamDead pasa):
+      // si el latido está viejo, el stream está igual de muerto.
+      if (
+        shot?.timedOut &&
+        (isStreamDead() || performance.now() - lastFrameAtRef.current > 4000)
+      ) {
         recoverStream();
         return;
       }
@@ -1765,7 +1778,37 @@ export default function CameraView() {
       if (flashRef.current && !torchOnRef.current) applySavedTorchWithRetry();
     };
     video.addEventListener("playing", onPlaying);
-    return () => video.removeEventListener("playing", onPlaying);
+    // FIX v6 (6.2) — LATIDO de frames: bucle rVFC que actualiza
+    // lastFrameAtRef en CADA frame decodificado (Safari 15.4+ y Chrome;
+    // si rVFC no existiera, el fallback es el onFrame del loop). El
+    // watchdog (abajo) usa este latido para detectar video congelado
+    // SIN estar muted — el hueco que v4 4.3 dejaba abierto.
+    lastFrameAtRef.current = performance.now(); // stream nuevo = latido fresco
+    let vfcHandle = 0;
+    const beat = () => {
+      lastFrameAtRef.current = performance.now();
+      vfcHandle = video.requestVideoFrameCallback(beat);
+    };
+    if (typeof video.requestVideoFrameCallback === "function") {
+      vfcHandle = video.requestVideoFrameCallback(beat);
+    }
+    // Al volver de background iOS reanuda el video (pausado = sin frames
+    // es NORMAL, no una muerte): reset del latido (gracia) + play() para
+    // que el watchdog no dispare una recuperación espuria.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        lastFrameAtRef.current = performance.now();
+        if (video.paused) void video.play().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      video.removeEventListener("playing", onPlaying);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (vfcHandle && video.cancelVideoFrameCallback) {
+        video.cancelVideoFrameCallback(vfcHandle);
+      }
+    };
   }, [hasStream, status, applySavedTorchWithRetry]);
 
   // FIX v4 4.3 — WATCHDOG de salud del stream: mientras está "live", vigila
@@ -1777,6 +1820,14 @@ export default function CameraView() {
   // (el video tarda en empezar a reproducir) y sin contar strikes durante
   // un disparo (el sensor puede pausar el preview al hacer la foto) ni
   // mientras corre una recuperación.
+  // FIX v6 (6.2) — FRESCURA de frames: la condición pasa a ser
+  // isStreamDead() || latido viejo (>4 s). Un video congelado SIN estar
+  // muted (lo que Safari deja tras un takePhoto colgado) pasa los checks
+  // de v4 pero no entrega frames → el latido lo delata. Solo se evalúa
+  // con la app EN PRIMER PLANO (en background iOS pausa el video → sin
+  // frames es lo esperado). Interacción con 5.4 (modo espera): el latido
+  // es de VIDEO — el stream sigue reproduciéndose aunque el análisis
+  // baje a 2 fps → NO hay falso positivo.
   useEffect(() => {
     if (status !== "live") return;
     const startedAt = Date.now();
@@ -1787,7 +1838,10 @@ export default function CameraView() {
         return;
       }
       if (Date.now() - startedAt < 8000) return; // gracia de arranque
-      strikes = isStreamDead() ? strikes + 1 : 0;
+      const inForeground =
+        typeof document === "undefined" || document.visibilityState === "visible";
+      const stale = inForeground && performance.now() - lastFrameAtRef.current > 4000;
+      strikes = isStreamDead() || stale ? strikes + 1 : 0;
       if (strikes >= 2) {
         strikes = 0;
         recoverStream();
@@ -1896,6 +1950,11 @@ export default function CameraView() {
     searchingSinceRef.current = null;
     loop.start(video, {
       onFrame: (t) => {
+        // FIX v6 (6.2) — fallback del LATIDO: actualiza lastFrameAtRef en
+        // cada frame procesado (cubriría navegadores sin rVFC). Con el
+        // análisis en modo espera (2 fps) el intervalo (~500 ms) queda MUY
+        // por debajo del umbral del watchdog (4 s) → sin falsos positivos.
+        lastFrameAtRef.current = performance.now();
         window.__cameraTelemetry = t;
         // F-ZSL: alimenta el buffer Best-Shot (~5 Hz) — cubre la ventana
         // pre-tap de 80–450 ms para la captura manual sin tap shock.
