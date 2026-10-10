@@ -76,6 +76,21 @@
 
 ---
 
+## 0-quin. E14 — Score 10 para acta identificada (rama `feat/e14-score-10`)
+
+**Base:** `main` en `d20737e` (PR #16 mergeado). SPEC: `SPEC-e14-score-10-identificada.md` (subida por el dueño). **Un archivo de código: `apps/digitalizador-e14/src/lib/e14/scanner-core-bridge.ts`** (+ este registro). Petición literal del dueño: «¿cómo podemos establecer para subir el score al 10/10, que no se quede en 8?».
+
+**Cambios (2 bloques EXACTOS, mismo archivo del PR #16):**
+
+- **`PISO_IDENTIFICADA`: 8.2 → 10** — una acta identificada AUTO (jerarquía divipol validada + mesa ≤ countTable + tipo de copia + página) puntúa 10/10: la identificación completa ES la evidencia de legibilidad total → el score deja de describir la foto cruda y describe la **CERTEZA de la digitalización** (extensión de la doctrina «el OCR manda» del PR #16). `Math.max(score10, PISO_IDENTIFICADA)` CONSERVADO (piso que nunca reduce — invariante del PR #16).
+- **Sin cambios en nada más:** `PISO_CONTRASTE_LEGIBLE` sigue 80 · techos fair 7.9 / poor 6.4 intactos · SUGERIDA/MANUAL sin piso (panel de corrección, score métrico honesto) · `statusDeScore` canónico intocado · UI con formato existente (10.0/10) · PDF export no lee el score.
+
+**Consecuencias de estados:** AUTO → SIEMPRE 10.0/10 ÓPTIMA auto-enviada (dueño 8.5→10, SIM 8.2→10, marco-gris 9.2→10) · SUGERIDA/MANUAL/rechazadas → SIN cambio (sin identificación no hay rescate; JAMÁS un MANUAL muestra 10).
+
+**Verificado:** `bun run lint` 0 · `bunx tsc --noEmit` 0 · build estático 0 · `git diff main...HEAD -- apps/scanner-lab packages` VACÍO · QA navegador 390×844 (AC1-AC6 del SPEC) · bytes verificados con node fs (lección AUD-PR11).
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
