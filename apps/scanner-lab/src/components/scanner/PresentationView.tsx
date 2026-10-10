@@ -20,6 +20,14 @@ import { ChevronLeft, ChevronRight, Eye, X } from "lucide-react";
 
 import type { ScanPage } from "@jg-stevan/scanner-core/types";
 
+/** FIX v6 (6.4) — página de presentación con marcador de placeholder.
+ *  displayPending=true mientras el src es el THUMBNAIL provisional
+ *  (~160 px) esperando la copia de display que EditorView genera en
+ *  background (apertura progresiva). Runtime-only: no se persiste. */
+export type PresentationPage = ScanPage & {
+  displayPending?: boolean;
+};
+
 const IOS_EASE = [0.32, 0.72, 0, 1] as const;
 
 /** Límites del zoom. */
@@ -48,7 +56,7 @@ export function PresentationView({
   onClose,
   onIndexChange,
 }: {
-  pages: ScanPage[];
+  pages: PresentationPage[];
   title: string;
   initialIndex: number;
   onClose: () => void;
@@ -537,6 +545,17 @@ export function PresentationView({
                  * movimiento). El código de eventos está VERIFICADO
                  * correcto; era SOLO el touch-action. */
                 className="max-h-full max-w-full touch-none rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                /* FIX v6 (6.4): placeholder estilo iOS mientras llega la
+                 * copia de display que se genera en background — el
+                 * thumbnail de ~160 px se escala por CSS con blur(8px)
+                 * (y un 3 % más de escala para que el difuminado no
+                 * descubra bordes transparentes). Al aterrizar la copia,
+                 * el swap es suave (transición del filtro). */
+                style={{
+                  filter: page.displayPending ? "blur(8px)" : "blur(0px)",
+                  transform: page.displayPending ? "scale(1.03)" : "scale(1)",
+                  transition: "filter 240ms ease, transform 240ms ease",
+                }}
               />
               {/* Overlay ORIGINAL (comparación antes/después) */}
               <AnimatePresence>
