@@ -122,12 +122,48 @@ function dosDigitos(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** Mapeo §4.1: PageQuality del core → score 0-10 (1 decimal) con techos por level. */
-function scoreDeCalidad(q: PageQuality): number {
-  const bruto = (q.sharpness * 0.4 + q.brightness * 0.3 + q.contrast * 0.3) / 10;
+// §X (SPEC-score-legible): pisos de legibilidad.
+const PISO_CONTRASTE_LEGIBLE = 80; // ≈ excellentQuality().contrast=84 del core
+const PISO_IDENTIFICADA = 8.2;     // ≥ umbral OPTIMA (8.0) de statusDeScore
+
+/** §X.1 (SPEC-score-legible): contraste efectivo — una foto de documento
+ *  (papel blanco ~85 % del encuadre) tiene dispersión global de luminancia
+ *  BAJA POR DISEÑO aunque la tinta sea nítida (evidencia §0.2: metricas=
+ *  {sharpness:80 brightness:95 contrast:22} → 6.7 MODERADA de un acta
+ *  clasificada AUTO). El contraste global del CRUDO no es evidencia de
+ *  ilegibilidad cuando el OCR leyó texto válido → piso de acta legible.
+ *  El OCR manda (principio §4.2 extendido). */
+function contrasteEfectivoDe(q: PageQuality, ocrLegible: boolean): number {
+  return ocrLegible ? Math.max(q.contrast, PISO_CONTRASTE_LEGIBLE) : q.contrast;
+}
+
+/** Mapeo §4.1: PageQuality del core → score 0-10 (1 decimal) con techos por
+ *  level. §X (SPEC-score-legible): recibe señales de legibilidad — OCR válido
+ *  y clasificación AUTO (identificación completa). */
+function scoreDeCalidad(
+  q: PageQuality,
+  senales?: { ocrLegible: boolean; identificada: boolean },
+): number {
+  const contrasteEf = contrasteEfectivoDe(q, senales?.ocrLegible ?? false);
+  const bruto = (q.sharpness * 0.4 + q.brightness * 0.3 + contrasteEf * 0.3) / 10;
   let score10 = Math.round(bruto * 10) / 10;
-  if (q.level === "fair") score10 = Math.min(score10, 7.9); // techo ADVERTENCIA
-  if (q.level === "poor") score10 = Math.min(score10, 6.4); // techo RECHAZADA
+  let level = q.level;
+  if (contrasteEf !== q.contrast) {
+    // Fuente: packages/scanner-core/src/image-processor.ts evaluateQuality —
+    // fórmula y umbrales del level DUPLICADAS aquí (packages/ es intocable,
+    // regla de oro) SOLO para recalcular el techo con el contraste efectivo.
+    const scoreCore = q.sharpness * 0.45 + q.brightness * 0.25 + contrasteEf * 0.3;
+    level =
+      scoreCore >= 80 ? "excellent" : scoreCore >= 62 ? "good" : scoreCore >= 45 ? "fair" : "poor";
+  }
+  if (level === "fair") score10 = Math.min(score10, 7.9); // techo ADVERTENCIA
+  if (level === "poor") score10 = Math.min(score10, 6.4); // techo RECHAZADA
+  // §X.2 piso por IDENTIFICACIÓN — ÚLTIMO (manda sobre los techos): una
+  // clasificación AUTO (jerarquía divipol validada + mesa ≤ countTable + tipo)
+  // es evidencia directa de legibilidad → el acta identificada nunca queda en
+  // MODERADA ni RECHAZADA por métricas globales del crudo. SUGERIDA/MANUAL NO
+  // reciben piso: el panel de corrección (§5) sigue siendo su camino.
+  if (senales?.identificada) score10 = Math.max(score10, PISO_IDENTIFICADA);
   return score10;
 }
 
@@ -335,8 +371,16 @@ export class RealCoreBridge implements E14Bridge {
     // 6) Mapeo §4 → status/score/rechazo + clasificación de cabecera
     //    (SPEC-cabecera-clasificacion §4: RECHAZADA solo por CALIDAD;
     //    cabecera sin clasificar → EN_REVISION_HUMANA con panel, NUNCA rechazo).
-    const score = scoreDeCalidad(calidad);
-    const gate = await this.evaluarGate(score, texto);
+    //    §X (SPEC-score-legible): la clasificación se calcula PRIMERO (barata:
+    //    regex + divipol cacheada) y alimenta el score — el OCR y la
+    //    identificación manda sobre las métricas globales del crudo.
+    const clasificacion = clasificarCabecera(texto, await cargarDivipol());
+    const ocrLegible = ocrTextIsValid(texto);
+    const score = scoreDeCalidad(calidad, {
+      ocrLegible,
+      identificada: clasificacion.nivel === "AUTO",
+    });
+    const gate = this.evaluarGate(score, texto, clasificacion);
 
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
@@ -347,7 +391,8 @@ export class RealCoreBridge implements E14Bridge {
         `cabeceraE14=${PATRON_CABECERA.test(texto)} score=${score} ` +
         `filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
-        `contrast:${calidad.contrast} level:${calidad.level}})`,
+        `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
+        `level:${calidad.level}})`,
     );
 
     return this.construirActa(opciones, parcial, {
@@ -470,9 +515,15 @@ export class RealCoreBridge implements E14Bridge {
 
     // 4) Mapeo §4 → status/score/rechazo + clasificación (idéntico al
     //    escaneo — helper ÚNICO evaluarGate, §4.4: AMBOS pipelines con el
-    //    MISMO criterio).
-    const score = scoreDeCalidad(calidad);
-    const gate = await this.evaluarGate(score, texto);
+    //    MISMO criterio). §X (SPEC-score-legible): clasificación primero,
+    //    score con señales de legibilidad.
+    const clasificacion = clasificarCabecera(texto, await cargarDivipol());
+    const ocrLegible = ocrTextIsValid(texto);
+    const score = scoreDeCalidad(calidad, {
+      ocrLegible,
+      identificada: clasificacion.nivel === "AUTO",
+    });
+    const gate = this.evaluarGate(score, texto, clasificacion);
 
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
@@ -481,7 +532,8 @@ export class RealCoreBridge implements E14Bridge {
         `cabeceraE14=${PATRON_CABECERA.test(texto)} score=${score} ` +
         `filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
-        `contrast:${calidad.contrast} level:${calidad.level}})`,
+        `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
+        `level:${calidad.level}})`,
     );
 
     // Acta ACTUALIZADA: identidad intacta (spread), campos reales nuevos y
@@ -529,11 +581,15 @@ export class RealCoreBridge implements E14Bridge {
    *     EN_REVISION_HUMANA con el panel de corrección (§5) precargado con
    *     la sugerencia. PROHIBIDO RECHAZADA por cabecera (§4.2).
    * PATRON_CABECERA ya NO decide el estado (§4.5) — solo traza en el log.
+   * §X (SPEC-score-legible): la clasificación llega calculada desde el
+   * pipeline — alimenta el score (piso por identificación).
    */
-  private async evaluarGate(score: number, ocrTexto: string): Promise<ResultadoGate> {
+  private evaluarGate(
+    score: number,
+    ocrTexto: string,
+    clasificacion: ClasificacionE14,
+  ): ResultadoGate {
     if (score >= 6.5) {
-      const base = await cargarDivipol(); // idempotente; nunca falla (base vacía → MANUAL)
-      const clasificacion = clasificarCabecera(ocrTexto, base);
       if (clasificacion.nivel === "AUTO") {
         return { status: statusDeScore(score), rechazo: null, clasificacion };
       }
