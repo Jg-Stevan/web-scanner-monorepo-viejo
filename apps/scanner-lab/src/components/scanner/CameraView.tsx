@@ -31,9 +31,11 @@ import {
   Layers,
   LayoutGrid,
   Loader2,
+  Moon,
   MoreVertical,
   Scan,
   X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -68,6 +70,18 @@ import {
 } from "@jg-stevan/scanner-core/sensor-profiler";
 
 type CameraStatus = "idle" | "live" | "synthetic" | "simulated";
+
+/** FIX v5 (5.5) — umbral de exposición (0-1, fracción de píxeles bien
+ *  expuestos) por debajo del cual el modo Auto enciende el torch para el
+ *  disparo. Constante local ajustable (empezar en 0.30). */
+const AUTO_FLASH_EXPOSURE = 0.3;
+
+/** FIX v5 (5.4) — modo espera: milisegundos SIN documento (corners null)
+ *  Y sin interacción del usuario tras los que el análisis baja a 2 fps.
+ *  El gasto real es el análisis, no el preview (el stream sigue vivo — el
+ *  watchdog de salud del fix v4 4.3 vigila readyState/muted del TRACK y
+ *  NO se ve afectado: solo cambia la cadencia de processFrame). */
+const STANDBY_AFTER_MS = 30_000;
 
 /* ── Lecciones de compatibilidad del producto (ARQUITECTURA §4) ──────────
  *  E3: presupuesto de píxeles — SOLO anchos/altos IDEAL, sin exact/min ni
@@ -166,18 +180,48 @@ function readCapsNum(v: unknown): number {
  *  medir el sensor real requiere abrir la cámara "pelada". Devuelve null
  *  si la cámara no se pudo abrir (queda descartada). El `finally` CIERRA
  *  el stream SIEMPRE — nunca hay dos cámaras abiertas a la vez (era la
- *  causa del bug v3: sondas con el stream vivo → NotReadableError). */
+ *  causa del bug v3: sondas con el stream vivo → NotReadableError).
+ *  FIX v5 (5.3): `timeoutMs` opcional — una sonda colgada (getUserMedia
+ *  que nunca resuelve, típico en algún driver Android) caduca y devuelve
+ *  null; si la apertura llega TARDE, su stream se cierra igualmente para
+ *  no dejar la cámara ocupada para siempre. */
 async function probeCamera(
   media: MediaDevices,
   deviceId: string,
-  label: string
+  label: string,
+  timeoutMs = 0
 ): Promise<CameraProbeResult | null> {
   let stream: MediaStream | null = null;
+  let timedOut = false;
   try {
-    stream = await media.getUserMedia({
+    const opening = media.getUserMedia({
       video: { deviceId: { exact: deviceId } },
       audio: false,
     });
+    if (timeoutMs > 0) {
+      stream = await Promise.race([
+        opening,
+        new Promise<null>((resolve) => {
+          window.setTimeout(() => {
+            timedOut = true;
+            resolve(null);
+          }, timeoutMs);
+        }),
+      ]);
+      if (timedOut || stream === null) {
+        // La sonda caducó: si la apertura resuelve después, cerrarla (sin
+        // esto la cámara quedaría abierta y las siguientes sondas darían
+        // NotReadableError en cadena).
+        void opening
+          .then((s) => {
+            s.getTracks().forEach((t) => t.stop());
+          })
+          .catch(() => undefined);
+        return null;
+      }
+    } else {
+      stream = await opening;
+    }
     const track = stream.getVideoTracks()[0];
     if (!track) return null;
     const caps = (track.getCapabilities?.() ?? {}) as {
@@ -242,6 +286,100 @@ interface LiveUi {
   score: number | null;
   fps: number;
   searching: boolean;
+}
+
+/* ── FIX v5 (5.3) — caché de la cámara principal elegida ──────────────
+ *  El arranque sondeaba TODAS las cámaras una por una (abrir, medir,
+ *  cerrar) antes de abrir la ganadora: en Android multi-cámara eran
+ *  varios segundos de pantalla vacía. La elección se persiste en
+ *  localStorage y los arranques siguientes abren la deviceId cacheada
+ *  DIRECTAMENTE. Sin TTL (el hardware no cambia); invalidación SOLO por
+ *  fallo de apertura (NotFound/NotReadable/…) → borrado y sondeo completo. */
+const MAIN_CAMERA_CACHE_KEY = "escaner-main-camera-v1";
+
+interface MainCameraCache {
+  deviceId: string;
+  label: string;
+  /** score = maxWidth×maxHeight (regla D3) — solo telemetría/depuración. */
+  score: number;
+  at: number;
+  torch: boolean;
+  focusModes: string[];
+  maxWidth: number;
+  maxHeight: number;
+}
+
+function readMainCameraCache(): MainCameraCache | null {
+  try {
+    const raw = localStorage.getItem(MAIN_CAMERA_CACHE_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw) as MainCameraCache;
+    if (!c || typeof c.deviceId !== "string" || c.deviceId === "") return null;
+    return c;
+  } catch {
+    return null; // almacenamiento corrupto/bloqueado — sondeo completo
+  }
+}
+
+function writeMainCameraCache(p: CameraProbeResult): void {
+  try {
+    const entry: MainCameraCache = {
+      deviceId: p.deviceId,
+      label: p.label,
+      score: p.maxWidth * p.maxHeight,
+      at: Date.now(),
+      torch: p.torch,
+      focusModes: p.focusModes,
+      maxWidth: p.maxWidth,
+      maxHeight: p.maxHeight,
+    };
+    localStorage.setItem(MAIN_CAMERA_CACHE_KEY, JSON.stringify(entry));
+  } catch {
+    /* cuota llena / modo privado — solo es una caché */
+  }
+}
+
+function clearMainCameraCache(): void {
+  try {
+    localStorage.removeItem(MAIN_CAMERA_CACHE_KEY);
+  } catch {
+    /* idem */
+  }
+}
+
+/** FIX v5 (5.3) — plazo por sonda (ms): una cámara lenta no puede bloquear
+ *  el arranque 10 s; caduca y se sigue con la siguiente. */
+const PROBE_TIMEOUT_MS = 2000;
+
+/** FIX v5 (5.2) — suelo de confianza para crear la página con el quad
+ *  VIVO en vez del marco completo + re-detección. SHUTTER_SCORE (0,8) es
+ *  el umbral del DISPARO automático; para el nacimiento manual basta un
+ *  quad estable y visible: el usuario lo vio en el overlay y ese es el
+ *  recorte que espera (WYSIWYG). Debajo de 0,6 la detección viva puede
+ *  ser basura (mala luz) → más seguro re-detectar en background. */
+const LIVE_QUAD_MIN_SCORE = 0.6;
+
+/** FIX v5 (5.2) — deriva media entre dos quads normalizados (0-1), en
+ *  fracción de la diagonal de la imagen (√2 normalizada). <2 % = mismo
+ *  recorte dentro del ruido de detección → no reemplazar (micro-saltos). */
+function quadDrift(a: Quad, b: Quad): number {
+  let sum = 0;
+  for (let i = 0; i < 4; i += 1) {
+    sum += Math.hypot(a[i]!.x - b[i]!.x, a[i]!.y - b[i]!.y);
+  }
+  return sum / 4 / Math.SQRT2;
+}
+
+/** FIX v5 (5.2) — dimensiones NATURALES de una fuente de captura (imagen
+ *  o canvas). Helpers separados: el narrowing de instanceof solo es fiable
+ *  sobre un parámetro fresco tipado como la unión (en el scope de captura,
+ *  el CFA ya estrecha `source` a HTMLImageElement). */
+function sourceNaturalWidth(src: HTMLImageElement | HTMLCanvasElement): number {
+  return src instanceof HTMLImageElement ? src.naturalWidth : src.width;
+}
+
+function sourceNaturalHeight(src: HTMLImageElement | HTMLCanvasElement): number {
+  return src instanceof HTMLImageElement ? src.naturalHeight : src.height;
 }
 
 /** Trapecio con jitter leve — fallback simulado mientras no hay worker. */
@@ -399,6 +537,7 @@ export default function CameraView() {
   const capturePages = useScannerStore((s) => s.capturePages);
   const addCapturePage = useScannerStore((s) => s.addCapturePage);
   const settings = useScannerStore((s) => s.settings);
+  const updateSettings = useScannerStore((s) => s.updateSettings);
   const batchSavedCount = useScannerStore((s) => s.batchSavedCount);
 
   // ── Refs y estado ──
@@ -460,7 +599,38 @@ export default function CameraView() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [precisionReady, setPrecisionReady] = useState(false);
   const [live, setLive] = useState<LiveUi>({ corners: null, score: null, fps: 0, searching: true });
+  /** FIX v5 (5.2): espejo por ref del último frame vivo — handleCaptureDataUrl
+   *  necesita la detección EN EL INSTANTE del disparo (el estado React llega
+   * tarde al closure; el ref siempre está fresco). */
+  const liveRef = useRef<LiveUi>({ corners: null, score: null, fps: 0, searching: true });
   const [videoDims, setVideoDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  /** FIX v5 (5.4) — modo espera (nivel 1): visor abierto SIN documento
+   *  durante 30 s y sin interacción → análisis a 2 fps (loop.setIdle) +
+   *  pill «Modo espera — toca para reactivar». Sale con: toque en el
+   *  visor, corners detectados de nuevo (el análisis a 2 fps sigue
+   *  evaluando → reacciona en <1 s) o captura. Nivel 2 (parar el stream a
+   *  los 3 min) deliberadamente NO implementado: el ahorro real ya lo da
+   *  el nivel 1 y un track parado es indistinguible de un stream MUERTO
+   *  para el watchdog del v4 (complejidad de recuperación > beneficio). */
+  const [standby, setStandby] = useState(false);
+  const standbyRef = useRef(false);
+  /** Cuándo empezó la racha actual de «sin corners» (null = hay documento). */
+  const searchingSinceRef = useRef<number | null>(null);
+  /** Última interacción del usuario con la cámara (toque en CUALQUIER parte). */
+  const lastInteractionRef = useRef(Date.now());
+
+  /** FIX v5 (5.4) — sale del modo espera: loop a régimen normal + pill
+   *  fuera. Si sigue sin documento, la ventana de 30 s se REINICIA (el
+   *  usuario acaba de interactuar — no volver a dormir de inmediato).
+   *  Vive AQUÍ (antes de runCaptureFlow y de los efectos) para ser
+   *  referenciale en sus deps sin TDZ. */
+  const exitStandby = useCallback(() => {
+    if (!standbyRef.current) return;
+    standbyRef.current = false;
+    setStandby(false);
+    loopRef.current?.setIdle(false);
+    if (liveRef.current.searching) searchingSinceRef.current = Date.now();
+  }, []);
   const [boxSize, setBoxSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
@@ -621,6 +791,14 @@ export default function CameraView() {
           apply({ autoQuadPending: false });
           return;
         }
+        // FIX v5 (5.2): micro-salto — si lo detectado full-res es
+        // prácticamente el quad actual de la página (<2 % de la diagonal),
+        // NO se reemplaza: el reproceso de preview cambiaría la cache por
+        // un recorte visualmente idéntico (salto/parpadeo injustificado).
+        if (quadDrift(page.quad, detected) < 0.02) {
+          apply({ autoQuadPending: false });
+          return;
+        }
         apply({ quad: detected, autoQuadPending: false });
       } catch {
         apply({ autoQuadPending: false });
@@ -669,13 +847,51 @@ export default function CameraView() {
         // (corre en background tras abrir el editor). La calidad sí se mide
         // aquí: es barata (canvas de ≤400 px) y alimenta el badge de calidad.
         const quality = await evaluateQuality(source);
+        // FIX v5 (5.2) — FIN DEL «DOBLE RECORTE»: lo que se vio EN VIVO es lo
+        // que llega al editor. Si al disparar había detección confiable, su
+        // quad (normalizado al frame del video) se usa DIRECTAMENTE para
+        // nacer la página — la re-detección full-res de applyAutoQuad podía
+        // entregar OTRO recorte distinto al del overlay (distinta resolución
+        // de análisis → distinto ajuste fino) y el usuario veía como si se
+        // recortara dos veces. Requisito de mapeo: los corners viven en el
+        // espacio del frame de ANÁLISIS del video (normalizados 0-1); la
+        // captura (foto full-sensor o snapshot) debe tener el MISMO aspect
+        // (±2 %) para que el mapeo directo sea fiel — si difiere (p. ej.
+        // foto 16:9 de un preview 4:3), el mapeo mentiría → background.
+        const t = liveRef.current;
+        let bornQuad: Quad | null = null;
+        if (
+          t.corners &&
+          t.score !== null &&
+          t.score >= LIVE_QUAD_MIN_SCORE
+        ) {
+          const vw = videoRef.current?.videoWidth ?? 0;
+          const vh = videoRef.current?.videoHeight ?? 0;
+          const iw = sourceNaturalWidth(source);
+          const ih = sourceNaturalHeight(source);
+          if (
+            vw > 0 &&
+            vh > 0 &&
+            iw > 0 &&
+            ih > 0 &&
+            Math.abs(vw / vh - iw / ih) <= 0.02
+          ) {
+            const c = t.corners;
+            bornQuad = [
+              { x: c[0]!.x, y: c[0]!.y },
+              { x: c[1]!.x, y: c[1]!.y },
+              { x: c[2]!.x, y: c[2]!.y },
+              { x: c[3]!.x, y: c[3]!.y },
+            ];
+          }
+        }
         const page: CapturePage = {
           id: nextId("page"),
           original: dataUrl,
           // Marco provisional (vista completa): el quad real llega en
           // background vía applyAutoQuad, sin bloquear la revisión.
-          quad: defaultQuad(),
-          autoQuadPending: true,
+          quad: bornQuad ?? defaultQuad(),
+          autoQuadPending: bornQuad === null,
           // F-DEFAULT-BW: «Mejora automática» (Ajustes › Procesamiento) decide
           // el filtro por defecto de cada captura — ON = B/N adaptativo (lo que
           // pidió el usuario), OFF = Original puro. Cambiable en el editor.
@@ -686,9 +902,15 @@ export default function CameraView() {
         addCapturePage(page);
         // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
         setView("editor");
-        // La detección vuela en background; cuando aterrice, el preview se
-        // re-procesa solo (cambia el quad → capturePageKey → cache miss).
-        void applyAutoQuad(page.id, source);
+        // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
+        // 2ª detección que cambiaba el recorte). Sin detección viva confiable
+        // (o aspect distinto): la detección vuela en background como antes;
+        // cuando aterrice, el preview se re-procesa solo (cambia el quad →
+        // capturePageKey → cache miss) y la pill «Ajustando recorte…» cubre
+        // la espera.
+        if (bornQuad === null) {
+          void applyAutoQuad(page.id, source);
+        }
       } catch (err) {
         console.error("handleCaptureDataUrl falló:", err);
         toast.error("No se pudo procesar la imagen");
@@ -905,6 +1127,9 @@ export default function CameraView() {
     if (cooldownRef.current > Date.now()) return;
     loopRef.current?.notifyCaptured();
     cooldownRef.current = Date.now() + 1500;
+    // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
+    // si estaba dormido — el disparo es interacción explícita).
+    exitStandby();
 
     /** F-ZSL — recupera el ganador pre-tap del buffer Best-Shot (mayor
      *  lapVar entre 80 y 450 ms antes del disparo: el impacto del dedo
@@ -969,7 +1194,29 @@ export default function CameraView() {
 
     // §5.4 — frame A ANTES de la foto: si takePhoto cuelga y cae (5 s),
     // ya queda un candidato válido medido.
+    // FIX v5 (5.5): frame A SIRVE ADEMÁS de medición FRESCA de exposición
+    // para el flash Auto (misma escala que la telemetría del loop:
+    // 1 − (under+over)/total) — resuelve el caso «duda entre el frame y el
+    // disparo >1 s» re-midiendo EN el instante del disparo.
     const snapA = snapshotVideo();
+
+    /* FIX v5 (5.5) — flash por captura: «on» fuerza torch para el disparo;
+     * «auto» decide con la exposición de snapA (fresca, pre-torch) o, si no
+     * hubo frame, la del último frame del loop; «off» nunca. El torch
+     * MANUAL (linterna de sesión) MANDA: si ya está ON no se toca — y por
+     * tanto tampoco se apaga al terminar. flashAppliedByUs marca lo que
+     * NOSOTROS encendimos (→ retirar tras obtener blob/frames). */
+    const flashMode = useScannerStore.getState().settings.flashMode;
+    let flashWanted = false;
+    if (flashMode === "on") {
+      flashWanted = true;
+    } else if (flashMode === "auto") {
+      const exp = snapA?.m?.exposure ?? window.__cameraTelemetry?.score?.exposure;
+      flashWanted = typeof exp === "number" && exp < AUTO_FLASH_EXPOSURE;
+    }
+    const flashAppliedByUs =
+      flashWanted && !torchOnRef.current ? await setTorchState(true) : false;
+    try {
     // FIX v4 4.1 — lista negra temporal: si un takePhoto ya expiró en este
     // stream, NO se vuelve a intentar (cada disparo volvería a congelar el
     // visor 5 s) — directo al fallback de frames hasta un stream nuevo.
@@ -1034,7 +1281,14 @@ export default function CameraView() {
       return;
     }
     await dispatchBestFrame([snapA, snapB]);
-  }, [snapshotVideo, takePhotoBlob, canvasToDataUrl, blobToDataUrl, handleCaptureDataUrl, status, isStreamDead, recoverStream]);
+    } finally {
+      // FIX v5 (5.5): retirar el torch que NOSOTROS encendimos para ESTE
+      // disparo (foto/frames ya en memoria). El torch MANUAL del usuario
+      // no se apaga nunca aquí (flashAppliedByUs solo es true si partía
+      // de OFF y el modo lo pidió).
+      if (flashAppliedByUs) void setTorchState(false);
+    }
+  }, [snapshotVideo, takePhotoBlob, canvasToDataUrl, blobToDataUrl, handleCaptureDataUrl, status, isStreamDead, recoverStream, setTorchState, exitStandby]);
 
   /** Captura inteligente con el obturador BLOQUEADO durante TODO el
    *  disparo (FIX v4 4.2). Antes solo processingRef protegía — y se activa
@@ -1269,16 +1523,109 @@ export default function CameraView() {
     };
 
     /** F-LENS v4 — arranque estilo codigo-test (donde el flash SÍ funciona):
+     *  0) FIX v5 (5.3) — CACHÉ: deviceId guardada → apertura DIRECTA con las
+     *     constraints del preview ideal (sin desbloqueo/sondeos/elección).
+     *     Falla → caché borrada y camino completo.
      *  1) desbloquea labels con un stream genérico que se cierra al instante;
      *  2) sondea TODAS las cámaras UNA POR UNA cerrando cada una antes de
      *     abrir la siguiente (v3 las sondeaba con el stream vivo → en muchos
      *     Android la 2ª apertura lanza NotReadableError y NADA cambiaba);
+     *     FIX v5 (5.3): cada sonda con plazo de 2 s (una cámara lenta no
+     *     puede bloquear el arranque);
      *  3) elige la principal con la regla D3/D6 (autofocus real → mayor
      *     resolución; torch desempata; sin AF → label más simple);
      *  4) abre SOLO la ganadora con el preview ligero (960×540 ideal —
-     *     DUAL PIPELINE; la captura hi-res va por takePhoto al sensor).
+     *     DUAL PIPELINE; la captura hi-res va por takePhoto al sensor) y
+     *     persiste la elección para el próximo arranque rápido.
      *  Devuelve el stream de la principal o null (→ cascade/sintética). */
     const openMainCamera = async (): Promise<MediaStream | null> => {
+      /** FIX v5 (5.3): post-procesado común a cualquier apertura exitosa —
+       *  corrección de zoom (vía zoom < 1 → 1) y telemetría de QA. */
+      const polishStream = async (
+        stream: MediaStream,
+        info: { label: string; torch: boolean; focusModes: string[] } | null,
+        probes: CameraProbeResult[],
+        cacheHit: boolean
+      ): Promise<MediaStream> => {
+        // Vía zoom: si el track abrió con zoom < 1 (equivalente 0.5× del
+        // MISMO track), súbelo a 1 para el FOV de la principal.
+        try {
+          const track = stream.getVideoTracks()[0];
+          const zcaps = track?.getCapabilities?.() as
+            | { zoom?: { min?: number; max?: number } }
+            | undefined;
+          const zst = track?.getSettings?.() as { zoom?: number } | undefined;
+          if (
+            zcaps?.zoom &&
+            typeof zcaps.zoom.min === "number" &&
+            zcaps.zoom.min < 1 &&
+            typeof zst?.zoom === "number" &&
+            zst.zoom < 1
+          ) {
+            await track
+              ?.applyConstraints({
+                advanced: [{ zoom: 1 }],
+              } as MediaTrackConstraints & { advanced: unknown[] })
+              .catch(() => undefined);
+          }
+        } catch {
+          /* sin soporte de zoom */
+        }
+        // Telemetría de QA (window.__cameraChoice): qué lente quedó abierta
+        // y qué se midió en las sondas — útil para depurar remotamente.
+        try {
+          const track = stream.getVideoTracks()[0];
+          const st = track?.getSettings?.() as {
+            width?: number;
+            height?: number;
+          } | undefined;
+          (window as unknown as { __cameraChoice?: unknown }).__cameraChoice = {
+            elegida: info?.label ?? track?.label ?? "",
+            torch: info?.torch ?? false,
+            focusModes: info?.focusModes ?? [],
+            width: st?.width ?? 0,
+            height: st?.height ?? 0,
+            cache: cacheHit,
+            sondas: probes.map((p) => ({
+              label: p.label,
+              torch: p.torch,
+              af: p.focusModes,
+              max: `${p.maxWidth}x${p.maxHeight}`,
+            })),
+          };
+        } catch {
+          /* solo telemetría */
+        }
+        return stream;
+      };
+
+      // 0) FIX v5 (5.3) — vía rápida: abrir la deviceId cacheada con las
+      //    MISMAS constraints de preview ideal del camino completo.
+      const cached = readMainCameraCache();
+      if (cached) {
+        try {
+          const stream = await media.getUserMedia({
+            video: {
+              deviceId: { exact: cached.deviceId },
+              width: { ideal: IDEAL_PREVIEW_WIDTH },
+              height: { ideal: IDEAL_PREVIEW_HEIGHT },
+              frameRate: { ideal: IDEAL_PREVIEW_FPS },
+            },
+            audio: false,
+          });
+          return await polishStream(
+            stream,
+            { label: cached.label, torch: cached.torch, focusModes: cached.focusModes },
+            [],
+            true
+          );
+        } catch (err) {
+          // Invalidación SOLO por fallo (sin TTL): NotFound/NotReadable/
+          // permiso revocado → borrar y sondear completo como antes.
+          clearMainCameraCache();
+          if (isPermError(err)) permissionDenied = true;
+        }
+      }
       // 1) Desbloqueo de etiquetas (F1-a de codigo-test): sin permiso previo
       //    los labels/deviceIds llegan vacíos en enumerateDevices.
       try {
@@ -1289,6 +1636,7 @@ export default function CameraView() {
         /* sin permiso: los probes fallarán y se cae al cascade */
       }
       // 2) Sondeo secuencial: cada cámara se ABRE, se MIDE y se CIERRA.
+      //    FIX v5 (5.3): plazo de 2 s por sonda.
       let devices: MediaDeviceInfo[] = [];
       try {
         devices = (await media.enumerateDevices()).filter(
@@ -1299,7 +1647,7 @@ export default function CameraView() {
       }
       const probes: CameraProbeResult[] = [];
       for (const d of devices) {
-        const p = await probeCamera(media, d.deviceId, d.label);
+        const p = await probeCamera(media, d.deviceId, d.label, PROBE_TIMEOUT_MS);
         if (p) probes.push(p);
       }
       // 3) Elección de la principal (D3: AF real → mayor resolución).
@@ -1322,58 +1670,14 @@ export default function CameraView() {
           ]
         : [];
       attempts.push({ video: true, audio: false }); // último recurso
-      for (const c of attempts) {
+      for (let ai = 0; ai < attempts.length; ai += 1) {
         try {
-          const stream = await media.getUserMedia(c);
-          // Vía zoom: si el track abrió con zoom < 1 (equivalente 0.5× del
-          // MISMO track), súbelo a 1 para el FOV de la principal.
-          try {
-            const track = stream.getVideoTracks()[0];
-            const zcaps = track?.getCapabilities?.() as
-              | { zoom?: { min?: number; max?: number } }
-              | undefined;
-            const zst = track?.getSettings?.() as { zoom?: number } | undefined;
-            if (
-              zcaps?.zoom &&
-              typeof zcaps.zoom.min === "number" &&
-              zcaps.zoom.min < 1 &&
-              typeof zst?.zoom === "number" &&
-              zst.zoom < 1
-            ) {
-              await track
-                ?.applyConstraints({
-                  advanced: [{ zoom: 1 }],
-                } as MediaTrackConstraints & { advanced: unknown[] })
-                .catch(() => undefined);
-            }
-          } catch {
-            /* sin soporte de zoom */
-          }
-          // Telemetría de QA (window.__cameraChoice): qué lente quedó abierta
-          // y qué se midió en las sondas — útil para depurar remotamente.
-          try {
-            const track = stream.getVideoTracks()[0];
-            const st = track?.getSettings?.() as {
-              width?: number;
-              height?: number;
-            } | undefined;
-            (window as unknown as { __cameraChoice?: unknown }).__cameraChoice = {
-              elegida: main?.label ?? track?.label ?? "",
-              torch: main?.torch ?? false,
-              focusModes: main?.focusModes ?? [],
-              width: st?.width ?? 0,
-              height: st?.height ?? 0,
-              sondas: probes.map((p) => ({
-                label: p.label,
-                torch: p.torch,
-                af: p.focusModes,
-                max: `${p.maxWidth}x${p.maxHeight}`,
-              })),
-            };
-          } catch {
-            /* solo telemetría */
-          }
-          return stream;
+          const stream = await media.getUserMedia(attempts[ai]!);
+          // FIX v5 (5.3): persistir la elección SOLO si el stream abrió con
+          // la deviceId de la ganadora (los 2 primeros intentos la fijan;
+          // el "último recurso" {video:true} puede abrir OTRA cámara).
+          if (main && ai <= 1) writeMainCameraCache(main);
+          return await polishStream(stream, main, probes, false);
         } catch (err) {
           if (isPermError(err)) permissionDenied = true;
           /* siguiente nivel */
@@ -1566,6 +1870,11 @@ export default function CameraView() {
     if (!video) return;
     const loop = new CameraFrameLoop();
     loopRef.current = loop;
+    // FIX v5 (5.4): cada sesión de loop arranca ACTIVA (sin espera heredada
+    // de un stream anterior).
+    standbyRef.current = false;
+    setStandby(false);
+    searchingSinceRef.current = null;
     loop.start(video, {
       onFrame: (t) => {
         window.__cameraTelemetry = t;
@@ -1575,12 +1884,14 @@ export default function CameraView() {
         const now = performance.now();
         if (now - lastTelemetryAt.current < 100) return; // throttle UI ~10 Hz
         lastTelemetryAt.current = now;
-        setLive({
+        const next: LiveUi = {
           corners: t.corners,
           score: t.score ? t.score.total : null,
           fps: t.fps,
           searching: t.corners === null,
-        });
+        };
+        liveRef.current = next; // FIX v5 (5.2): fresco para el instante del disparo
+        setLive(next);
       },
       onTrigger: () => {
         if (!autoRef.current) return;
@@ -1605,6 +1916,48 @@ export default function CameraView() {
       bestShotRingRef.current = [];
     };
   }, [precisionLive, feedRingFromVideo]);
+
+  /* ── FIX v5 (5.4) — MODO ESPERA (nivel 1) ────────────────────────────
+   *  Entrada: sin corners (live.searching) de forma continua durante 30 s
+   *  Y sin interacción del usuario → loop.setIdle(true) (análisis a 2 fps,
+   *  stream intacto) + pill persistente.
+   *  Salida: corners detectados de nuevo (efecto de abajo — el análisis a
+   *  2 fps sigue evaluando y reacciona en <1 s), toque en el visor
+   *  (onPointerDownCapture de la raíz) o captura (runCaptureFlow).
+   *  ⛔ Convivencia con el watchdog v4 4.3: la espera NO toca el video —
+   *  isStreamDead vigila readyState/muted del TRACK y el track sigue
+   *  "live" con frames → el watchdog nunca confunde espera con muerte. */
+  useEffect(() => {
+    if (!precisionLive) return;
+    if (live.searching) {
+      if (searchingSinceRef.current === null) {
+        searchingSinceRef.current = Date.now();
+      }
+    } else {
+      // Documento a la vista: corta la racha y reactiva si estaba dormido.
+      searchingSinceRef.current = null;
+      exitStandby();
+    }
+  }, [live.searching, precisionLive, exitStandby]);
+
+  useEffect(() => {
+    if (!precisionLive) return;
+    const iv = window.setInterval(() => {
+      if (standbyRef.current) return;
+      const since = searchingSinceRef.current;
+      const now = Date.now();
+      if (
+        since !== null &&
+        now - since >= STANDBY_AFTER_MS &&
+        now - lastInteractionRef.current >= STANDBY_AFTER_MS
+      ) {
+        standbyRef.current = true;
+        setStandby(true);
+        loopRef.current?.setIdle(true);
+      }
+    }, 1000);
+    return () => window.clearInterval(iv);
+  }, [precisionLive]);
 
   // Linterna — F-FLASH v3: botón SIEMPRE activo con cámara real; la verdad
   // se descubre al pulsar (aplicar + verificar getSettings.torch). El deseo
@@ -1724,7 +2077,17 @@ export default function CameraView() {
   const scorePct = live.score !== null ? Math.round(live.score * 100) : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col bg-black">
+    <div
+      className="relative flex h-full w-full flex-col bg-black"
+      /* FIX v5 (5.4): cualquier toque en la cámara cuenta como interacción
+       *  (reset de la ventana de espera) Y despierta el análisis si estaba
+       *  en modo espera — captura de fase: llega desde botones, visor y
+       *  overlays por igual. */
+      onPointerDownCapture={() => {
+        lastInteractionRef.current = Date.now();
+        exitStandby();
+      }}
+    >
       {/* Inputs de captura ocultos (método PRIMARIO: cámara nativa en móvil) */}
       <input
         ref={captureInputRef}
@@ -1776,6 +2139,59 @@ export default function CameraView() {
             confundía con el símbolo del flash. La linterna baja a la
             toolbar inferior, junto al disparador. */}
         <div className="flex shrink-0 items-center gap-0.5">
+          {/* FIX v5 (5.5) — Flash de captura (preferencia): cicla
+              Apagado → Auto → Encendido. Mismo estilo del selector de
+              captura automática; la «A» distingue Auto de Encendido
+              (rayo relleno). Persistido en Ajustes › Procesamiento. */}
+          <button
+            type="button"
+            aria-label={`Flash de captura: ${
+              settings.flashMode === "off"
+                ? "Apagado"
+                : settings.flashMode === "auto"
+                  ? "Auto"
+                  : "Encendido"
+            }`}
+            title="Flash de captura (Apagado · Auto · Encendido)"
+            onClick={() => {
+              const order = ["off", "auto", "on"] as const;
+              const cur = useScannerStore.getState().settings.flashMode;
+              const next = order[(order.indexOf(cur) + 1) % order.length]!;
+              updateSettings({ flashMode: next });
+              toast(
+                next === "off"
+                  ? "Flash: Apagado"
+                  : next === "auto"
+                    ? "Flash: Auto · solo en escenas oscuras"
+                    : "Flash: Encendido",
+                { icon: "⚡", duration: 1400 }
+              );
+            }}
+            className={cn(
+              "relative flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
+              settings.flashMode !== "off"
+                ? "bg-[#ffd60a]/18 ring-1 ring-[#ffd60a]/60"
+                : "bg-black/30"
+            )}
+          >
+            <Zap
+              className={cn(
+                "h-5 w-5",
+                settings.flashMode !== "off" ? "text-[#ffd60a]" : "text-white/70"
+              )}
+              strokeWidth={2.2}
+              fill={settings.flashMode === "on" ? "currentColor" : "none"}
+              aria-hidden="true"
+            />
+            {settings.flashMode === "auto" && (
+              <span
+                className="absolute -right-0.5 -top-0.5 flex h-[13px] w-[13px] items-center justify-center rounded-[4px] bg-[#ffd60a] text-[8px] font-bold leading-none text-black"
+                aria-hidden="true"
+              >
+                A
+              </span>
+            )}
+          </button>
           <button
             type="button"
             aria-label={`Captura automática: ${autoCapture ? "activada" : "desactivada"}`}
@@ -1939,9 +2355,10 @@ export default function CameraView() {
           </div>
         )}
 
-        {/* IA calentando / buscando documento */}
+        {/* IA calentando / buscando documento — FIX v5 (5.4): oculta durante
+            el modo espera (la pill de espera ocupa su sitio) */}
         <AnimatePresence>
-          {precisionLive && live.searching && !processing && (
+          {precisionLive && live.searching && !processing && !standby && (
             <motion.div
               key="searching-pill"
               initial={{ opacity: 0, y: 8 }}
@@ -1955,6 +2372,31 @@ export default function CameraView() {
                 <p className="text-[12px] font-medium text-white/85">Buscando documento…</p>
               </div>
             </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* FIX v5 (5.4) — pill del MODO ESPERA: análisis a 2 fps (ahorro de
+            batería/CPU con el visor abierto sin documento). Tocarla (o
+            cualquier parte de la cámara) reactiva; acercar un documento
+            también (el análisis a 2 fps lo ve en <1 s). */}
+        <AnimatePresence>
+          {standby && (
+            <motion.button
+              key="standby-pill"
+              type="button"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.2 }}
+              onClick={exitStandby}
+              aria-label="Salir del modo espera y reactivar la detección"
+              className="absolute inset-x-0 top-5 z-30 mx-auto flex w-fit items-center gap-2 rounded-full bg-black/60 px-3.5 py-1.5 backdrop-blur-sm transition-transform active:scale-95"
+            >
+              <Moon className="h-3.5 w-3.5 text-[#ffd60a]" aria-hidden="true" />
+              <span className="text-[12px] font-medium text-white/85">
+                Modo espera — toca para reactivar
+              </span>
+            </motion.button>
           )}
         </AnimatePresence>
 
