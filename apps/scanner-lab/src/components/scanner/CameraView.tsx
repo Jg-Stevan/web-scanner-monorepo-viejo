@@ -664,8 +664,6 @@ export default function CameraView() {
    *  (resolución nativa vía getPhotoCapabilities + tope técnico único
    *  4032 px — fix v3: sin tope por gama). null = aún sin sondear. */
   const sensorProfileRef = useRef<SensorProfile | null>(null);
-  /** Toast único por sesión de aviso calidad en iPhone (auto-captura = frames). */
-  const iosQualityToastShownRef = useRef(false);
 
   /** F-SENSOR-PROFILER: sondea el sensor del stream REAL una vez por
    *  apertura (getPhotoCapabilities → nativa + tope por gama). Falla en
@@ -1494,12 +1492,6 @@ export default function CameraView() {
       // F-SENSOR-PROFILER (PASO 2): mide la nativa de FOTO del sensor y
       // fija el tope técnico único (4032 px) para takePhotoBlob.
       profileActiveSensor(stream);
-      if (!canTakePhotoRef.current && autoRef.current && !iosQualityToastShownRef.current) {
-        iosQualityToastShownRef.current = true;
-        toast("En iPhone: para máxima calidad dispara manualmente (foto nativa)", {
-          duration: 6000,
-        });
-      }
       // Linterna — F-FLASH v3: cámara real → el botón se habilita SIEMPRE
       // (la verdad del torch se verifica al pulsar, aplicando y leyendo
       // getSettings); si el usuario dejó el flash ON, se re-aplica con
