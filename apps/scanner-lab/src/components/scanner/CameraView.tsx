@@ -144,6 +144,10 @@ const IDEAL_PREVIEW_FPS = 30;
  *  presión hacía que WebKit matara la capa de video (visor negro en
  *  iPhones modestos). Presupuesto resultante: ≤ 8 × (1280×960×4) ≈ 37 MB. */
 const RING_MAX_LONG_SIDE = 1280;
+/** 7.3 — fracción de nitidez exigida a un candidato más grande para ganar
+ *  al de mayor lapVar: un 4K con ≥85 % de la nitidez del mejor 1280 gana
+ *  (los píxeles mandan); por debajo, gana el nítido (anti tap-shock). */
+const SHARPNESS_KEEP_RATIO = 0.85;
 // 2. LA CAPTURA EN EXCELENTE RESOLUCIÓN (3840px / 12–48 MP) la hace
 //    ImageCapture.takePhoto(), que NO DEPENDE de la resolución del
 //    <video>: dispara directo al sensor físico a la máxima resolución
@@ -1200,10 +1204,27 @@ export default function CameraView() {
         return;
       }
       const measured = frames.filter((f) => f.m !== null);
-      const winner =
-        measured.length === 0
-          ? frames[0]! // sin telemetría → orden de llegada (§5.4)
-          : measured.reduce((a, b) => (b.m!.lapVar > a.m!.lapVar ? b : a));
+      let winner: BurstFrame;
+      if (measured.length === 0) {
+        winner = frames[0]!; // sin telemetría → orden de llegada (§5.4)
+      } else {
+        // FIX v7 (7.3) — antes el lapVar PURO hacía que un frame del ring
+        // (1280 px, capado por RAM) le ganara al snapshot full-res del
+        // stream: la auto-captura entregaba SIEMPRE 1280 px aunque el stream
+        // subiera de resolución (7.2). Puerta de nitidez → gana resolución.
+        const bestLap = Math.max(...measured.map((f) => f.m!.lapVar));
+        const pool = measured.filter(
+          (f) => f.m!.lapVar >= SHARPNESS_KEEP_RATIO * bestLap,
+        );
+        // Entre los suficientemente nítidos gana el de MAYOR resolución
+        // (área); desempate por lapVar (paridad exacta).
+        winner = pool.reduce((a, b) => {
+          const areaA = a.canvas.width * a.canvas.height;
+          const areaB = b.canvas.width * b.canvas.height;
+          if (areaB !== areaA) return areaB > areaA ? b : a;
+          return b.m!.lapVar > a.m!.lapVar ? b : a;
+        });
+      }
       const url = await canvasToDataUrl(winner.canvas);
       for (const f of frames) releaseFrame(f);
       if (url) {
