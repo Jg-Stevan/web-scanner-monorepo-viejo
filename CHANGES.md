@@ -76,6 +76,20 @@
 
 ---
 
+## 0-quinquies. FIX v7 — Auto-captura iOS: cero mensajes + máxima calidad del stream (rama `fix/ios-auto-quality-v7`)
+
+**Base:** `main` en `d20737e` (v6 fusionado vía PR #15). Documentación completa (plan, decisiones, evidencia E2E): `apps/scanner-lab/docs/fix-auto-quality-v7.md`. 3 puntos, un commit por punto. Reporte: iPhone 17 Pro + usuarios con Chrome en iPhone (mismo motor WebKit — la detección positiva de Android de v6 ya los clasifica en el régimen iOS; cero browser-sniffing nuevo).
+
+**Cambios (todos en `CameraView.tsx`):**
+
+- **7.1 Toast iOS eliminado** — decisión de producto: el usuario NO quiere mensajes. Fuera el bloque «En iPhone: para máxima calidad dispara manualmente (foto nativa)» y su ref (`rg` → 0). Shutter manual → cámara nativa 12 MP (v6 6.1) y flujo de auto-captura intactos.
+- **7.3 Ranking del burst consciente de resolución** — FLAW crítico: el ganador por lapVar PURO dejaba a un frame del ring (1280 px, capado por RAM) ganarle al snapshot full-res del stream. Ahora `SHARPNESS_KEEP_RATIO=0.85`: puerta de nitidez (≥85 % del mejor lapVar) → entre los suficientemente nítidos gana el de MAYOR área; desempate por lapVar. Prerrequisito de 7.2 (sin esto, subir el stream no servía de nada). `F-RES-PRIORITY` intacto (takePhoto despacha sin competir); ring sigue a 1280.
+- **7.2 Stream al máximo para auto-captura** — límite físico WebKit: sin takePhoto y sin cámara nativa automática, la calidad de la auto-captura = resolución del stream. Subida progresiva SILENCIOSA vía `applyConstraints({width:{ideal:4032},height:{ideal:3024}})` (E3: jamás exact/min) 2 s tras abrir (`applyStream` con guard `cancelled`; `retryRealCamera` con guard de stream reemplazado) y DIRECTO al activar la auto-captura a mitad de sesión (toolbar + menú). Guards: solo no-Android, solo auto ON, solo track live, skip si ≥3000 px, catch silencioso. Telemetría QA `window.__streamUpgrade`. Android byte a byte igual.
+
+**Verificado:** `tsc` core + app, `eslint` (0), E2E headless (dev efímero :3005, emulación iPhone 14/Pixel 7, `applyConstraints` instrumentado): UA iPhone pide **1920×1440** → a los ~2 s exactamente **1 llamada** `ideal 4032×3024` y `__streamUpgrade.before={1920,1440}`; UA Pixel 7 pide **960×540** con **0 llamadas** a applyConstraints; ranking 8/8 casos sintéticos (1280/100 vs 3840/90 → 4K; vs 3840/80 → 1280; paridad → lapVar); auto-captura E2E con UA iPhone: dispara sola → editor → página creada con **0 toasts** y preview **1050×1145** (= recorte de un frame 1920×1440 — el ranking eligió el full-res, no el ring de 1280). **0 errores de consola.** `apps/digitalizador-e14`: 0 archivos. Pendiente QA físico: checklist en el doc.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
