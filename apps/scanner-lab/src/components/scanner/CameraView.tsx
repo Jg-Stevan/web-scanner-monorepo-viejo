@@ -109,23 +109,30 @@ const STANDBY_AFTER_MS = 30_000;
 //    vista en vivo a 4K y congelaba gama baja (el <video> continuo a 4K
 //    derrocha GPU: el loop de detección solo procesa a 400 px).
 // ✅ AHORA — ARQUITECTURA DUAL PIPELINE (fix v3: resolución consciente de
-//    plataforma):
-// 1. PREVIEW ligero SOLO donde existe ImageCapture (Chrome/Android):
+//    plataforma; fix v6 6.1: detección POSITIVA de Android):
+// 1. PREVIEW ligero SOLO donde takePhoto() es FIABLE (Chrome/Android):
 //    960×540 + 30 FPS. El loop de detección remuestrea SIEMPRE a 400 px
 //    (createImageBitmap resize) → el análisis ve lo mismo desde 540p, y la
 //    foto real sale del sensor vía takePhoto() (pilar 2, abajo) → ~44%
 //    menos píxeles por frame, menos calor, más fluido en gama baja.
-// 2. iOS/Safari (SIN ImageCapture): el ORIGINAL de la AUTO-CAPTURA sale
-//    del <video> (ring ZSL / snapshot) — con 540p nacían originales de
-//    0.5 MP (foto «de muy baja calidad» en iPhone). El hardware de iPhone
-//    aguanta 1920×1440 sin coste de fluidez apreciable → se pide ALTO.
-//    El disparo MANUAL sigue por cámara nativa (input capture, 12 MP).
-//    Regla E3 intacta: SOLO `ideal`, nunca `exact/min` (no rechaza).
-//    La exclusión es automática: Android gama baja SÍ tiene ImageCapture
-//    → nunca entra en el régimen alto.
-const HAS_IMAGE_CAPTURE = typeof ImageCapture !== "undefined";
-const IDEAL_PREVIEW_WIDTH = HAS_IMAGE_CAPTURE ? 960 : 1920;
-const IDEAL_PREVIEW_HEIGHT = HAS_IMAGE_CAPTURE ? 540 : 1440;
+// 2. iOS/Safari: el ORIGINAL de la AUTO-CAPTURA sale del <video> (ring ZSL /
+//    snapshot) — con 540p nacían originales de 0.5 MP (foto «de muy baja
+//    calidad» en iPhone). El hardware de iPhone aguanta 1920×1440 sin
+//    coste de fluidez apreciable → se pide ALTO. El disparo MANUAL sigue
+//    por cámara nativa (input capture, 12 MP). Regla E3 intacta: SOLO
+//    `ideal`, nunca `exact/min` (no rechaza).
+//    FIX v6 (6.1): Safari MODERNO (iOS 17+/26) TAMBIÉN expone ImageCapture
+//    (con un takePhoto() que se cuelga) — el reparto de regímenes ya NO
+//    puede decidirse por «typeof ImageCapture»: se decide por UA Android
+//    (la única plataforma donde takePhoto funciona de verdad). La
+//    exclusión de iOS vuelve a ser automática y Android queda igual.
+const IS_ANDROID =
+  typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+/** takePhoto() fiable SOLO en Android (Chrome). Safari moderno expone
+ *  ImageCapture pero takePhoto() se cuelga → NO usar en iOS. */
+const CAN_TAKEPHOTO = IS_ANDROID && typeof ImageCapture !== "undefined";
+const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
+const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
  *  ofrecen 60, solo evita negociar 60 cuando el hardware lo permite. */
 const IDEAL_PREVIEW_FPS = 30;
@@ -634,10 +641,19 @@ export default function CameraView() {
   const [boxSize, setBoxSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
-  /** §5.2 — true solo si el navegador implementa ImageCapture (Chrome/
-   *  Android). En Safari/iOS es false SIEMPRE → el shutter manual abre la
-   *  cámara NATIVA (input capture=environment) — HQ-iOS, error #5. */
+  /** §5.2 — true SOLO en Android/Chrome (takePhoto fiable — FIX v6 6.1:
+   *  detección POSITIVA de Android; Safari moderno expone ImageCapture
+   *  pero su takePhoto se cuelga). En iOS es false SIEMPRE → el shutter
+   *  manual abre la cámara NATIVA (input capture=environment) — HQ-iOS,
+   *  error #5 — y la auto-captura usa frames del stream ALTO (1920×1440). */
   const canTakePhotoRef = useRef(false);
+  /** FIX v6 (6.2) — LATIDO de frames del <video>: timestamp del ÚLTIMO
+   *  frame decodificado. Un video CONGELADO sin estar muted (lo que Safari
+   *  deja tras un takePhoto colgado) PASA isStreamDead() (readyState/muted
+   *  sanos) pero no produce frames nuevos → el watchdog de v4 no se
+   *  disparaba → negro para siempre. Lo alimentan: el bucle rVFC (primario,
+   *  Safari 15.4+ y Chrome) y onFrame del loop (fallback). */
+  const lastFrameAtRef = useRef(performance.now());
   /** FIX v4 4.1 — lista negra TEMPORAL de takePhoto: true tras un intento
    *  que expiró por timeout (sensor colgado: cada disparo volvería a
    *  congelar el visor 5 s). Mientras esté marcado, captureSmart va directo
@@ -654,8 +670,12 @@ export default function CameraView() {
   /** F-SENSOR-PROFILER: sondea el sensor del stream REAL una vez por
    *  apertura (getPhotoCapabilities → nativa + tope por gama). Falla en
    *  silencio (Safari) → takePhoto dispara a secas y el clamp post-decode
-   *  protege la RAM. La Sonda de QA expone el perfil en __sensorProfile. */
+   *  protege la RAM. La Sonda de QA expone el perfil en __sensorProfile.
+   *  FIX v6 (6.1): SOLO corre con CAN_TAKEPHOTO — getPhotoCapabilities en
+   *  Safari es inútil (expone un ImageCapture roto) y el perfil solo
+   *  sirve para dimensionar takePhoto. */
   const profileActiveSensor = useCallback((stream: MediaStream): void => {
+    if (!CAN_TAKEPHOTO) return; // iOS/Safari: nada que sondear
     const track = stream.getVideoTracks()[0];
     if (!track) return;
     void profileSensor(track).then((p) => {
@@ -948,8 +968,12 @@ export default function CameraView() {
    *  cada disparo. Devuelve el blob y el flag timedOut (el llamador evalúa
    *  la salud del stream tras un timeout — fix 4.3). */
   const takePhotoBlob = useCallback(async (): Promise<{ blob: Blob | null; timedOut: boolean }> => {
+    // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
+    // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
+    // disparo). Fuera de Android/Chrome ni se intenta.
+    if (!CAN_TAKEPHOTO) return { blob: null, timedOut: false };
     const track = streamRef.current?.getVideoTracks()[0];
-    if (!track || typeof ImageCapture === "undefined") return { blob: null, timedOut: false };
+    if (!track) return { blob: null, timedOut: false };
     try {
       const capture = new ImageCapture(track);
       // Dispara a resolución completa del hardware (4000×3000 / 3840×2160):
@@ -1228,7 +1252,13 @@ export default function CameraView() {
       // el track muted/en silencio (readyState "live", sin frames). Si el
       // stream murió, recuperar YA — no disparamos el burst contra un video
       // muerto (el editor abriría sin imagen o nada).
-      if (shot?.timedOut && isStreamDead()) {
+      // FIX v6 (6.2): MISMA comprobación de FRESCURA — un takePhoto colgado
+      // puede dejar el video CONGELADO sin mutearlo (isStreamDead pasa):
+      // si el latido está viejo, el stream está igual de muerto.
+      if (
+        shot?.timedOut &&
+        (isStreamDead() || performance.now() - lastFrameAtRef.current > 4000)
+      ) {
         recoverStream();
         return;
       }
@@ -1452,10 +1482,12 @@ export default function CameraView() {
           setCamRestartNonce((n) => n + 1);
         };
       }
-      // §5.2 — Safari/iOS NO implementa ImageCapture en NINGUNA versión:
-      // el shutter manual abrirá la cámara nativa y la auto-captura usará
-      // frames de video (≤ 1080p). Toast único por sesión (§5.2).
-      canTakePhotoRef.current = typeof ImageCapture !== "undefined";
+      // §5.2 + FIX v6 (6.1) — régimen por PLATAFORMA, no por API: Safari
+      // moderno (iOS 17+/26) expone ImageCapture con un takePhoto() que se
+      // cuelga → canTakePhotoRef SOLO es true en Android/Chrome. En iOS el
+      // shutter manual abre la cámara nativa y la auto-captura usa frames
+      // del stream ALTO (1920×1440, fix v3). Toast único por sesión (§5.2).
+      canTakePhotoRef.current = CAN_TAKEPHOTO;
       // FIX v4 4.1 — stream nuevo = nueva oportunidad para takePhoto: la
       // lista negra temporal era del stream anterior (sensor colgado).
       takePhotoBrokenRef.current = false;
@@ -1746,7 +1778,37 @@ export default function CameraView() {
       if (flashRef.current && !torchOnRef.current) applySavedTorchWithRetry();
     };
     video.addEventListener("playing", onPlaying);
-    return () => video.removeEventListener("playing", onPlaying);
+    // FIX v6 (6.2) — LATIDO de frames: bucle rVFC que actualiza
+    // lastFrameAtRef en CADA frame decodificado (Safari 15.4+ y Chrome;
+    // si rVFC no existiera, el fallback es el onFrame del loop). El
+    // watchdog (abajo) usa este latido para detectar video congelado
+    // SIN estar muted — el hueco que v4 4.3 dejaba abierto.
+    lastFrameAtRef.current = performance.now(); // stream nuevo = latido fresco
+    let vfcHandle = 0;
+    const beat = () => {
+      lastFrameAtRef.current = performance.now();
+      vfcHandle = video.requestVideoFrameCallback(beat);
+    };
+    if (typeof video.requestVideoFrameCallback === "function") {
+      vfcHandle = video.requestVideoFrameCallback(beat);
+    }
+    // Al volver de background iOS reanuda el video (pausado = sin frames
+    // es NORMAL, no una muerte): reset del latido (gracia) + play() para
+    // que el watchdog no dispare una recuperación espuria.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        lastFrameAtRef.current = performance.now();
+        if (video.paused) void video.play().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      video.removeEventListener("playing", onPlaying);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (vfcHandle && video.cancelVideoFrameCallback) {
+        video.cancelVideoFrameCallback(vfcHandle);
+      }
+    };
   }, [hasStream, status, applySavedTorchWithRetry]);
 
   // FIX v4 4.3 — WATCHDOG de salud del stream: mientras está "live", vigila
@@ -1758,6 +1820,14 @@ export default function CameraView() {
   // (el video tarda en empezar a reproducir) y sin contar strikes durante
   // un disparo (el sensor puede pausar el preview al hacer la foto) ni
   // mientras corre una recuperación.
+  // FIX v6 (6.2) — FRESCURA de frames: la condición pasa a ser
+  // isStreamDead() || latido viejo (>4 s). Un video congelado SIN estar
+  // muted (lo que Safari deja tras un takePhoto colgado) pasa los checks
+  // de v4 pero no entrega frames → el latido lo delata. Solo se evalúa
+  // con la app EN PRIMER PLANO (en background iOS pausa el video → sin
+  // frames es lo esperado). Interacción con 5.4 (modo espera): el latido
+  // es de VIDEO — el stream sigue reproduciéndose aunque el análisis
+  // baje a 2 fps → NO hay falso positivo.
   useEffect(() => {
     if (status !== "live") return;
     const startedAt = Date.now();
@@ -1768,7 +1838,10 @@ export default function CameraView() {
         return;
       }
       if (Date.now() - startedAt < 8000) return; // gracia de arranque
-      strikes = isStreamDead() ? strikes + 1 : 0;
+      const inForeground =
+        typeof document === "undefined" || document.visibilityState === "visible";
+      const stale = inForeground && performance.now() - lastFrameAtRef.current > 4000;
+      strikes = isStreamDead() || stale ? strikes + 1 : 0;
       if (strikes >= 2) {
         strikes = 0;
         recoverStream();
@@ -1803,7 +1876,7 @@ export default function CameraView() {
       streamRef.current = stream;
       setCamNotice(null);
       setStatus("live");
-      canTakePhotoRef.current = typeof ImageCapture !== "undefined";
+      canTakePhotoRef.current = CAN_TAKEPHOTO; // FIX v6 (6.1): solo Android
       takePhotoBrokenRef.current = false; // FIX v4 4.1: stream nuevo, takePhoto rehabilitado
       profileActiveSensor(stream); // F-SENSOR-PROFILER: tope 4032/3200 px
       setTorchAvailable(true);
@@ -1877,6 +1950,11 @@ export default function CameraView() {
     searchingSinceRef.current = null;
     loop.start(video, {
       onFrame: (t) => {
+        // FIX v6 (6.2) — fallback del LATIDO: actualiza lastFrameAtRef en
+        // cada frame procesado (cubriría navegadores sin rVFC). Con el
+        // análisis en modo espera (2 fps) el intervalo (~500 ms) queda MUY
+        // por debajo del umbral del watchdog (4 s) → sin falsos positivos.
+        lastFrameAtRef.current = performance.now();
         window.__cameraTelemetry = t;
         // F-ZSL: alimenta el buffer Best-Shot (~5 Hz) — cubre la ventana
         // pre-tap de 80–450 ms para la captura manual sin tap shock.

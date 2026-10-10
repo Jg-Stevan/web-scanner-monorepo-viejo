@@ -20,6 +20,14 @@ import { ChevronLeft, ChevronRight, Eye, X } from "lucide-react";
 
 import type { ScanPage } from "@jg-stevan/scanner-core/types";
 
+/** FIX v6 (6.4) — página de presentación con marcador de placeholder.
+ *  displayPending=true mientras el src es el THUMBNAIL provisional
+ *  (~160 px) esperando la copia de display que EditorView genera en
+ *  background (apertura progresiva). Runtime-only: no se persiste. */
+export type PresentationPage = ScanPage & {
+  displayPending?: boolean;
+};
+
 const IOS_EASE = [0.32, 0.72, 0, 1] as const;
 
 /** Límites del zoom. */
@@ -48,7 +56,7 @@ export function PresentationView({
   onClose,
   onIndexChange,
 }: {
-  pages: ScanPage[];
+  pages: PresentationPage[];
   title: string;
   initialIndex: number;
   onClose: () => void;
@@ -432,8 +440,22 @@ export function PresentationView({
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-     
+
   }, [zoomAt, scale]);
+
+  // FIX v6 (6.3) — cinturón y tirantes: WebKit solo respeta el
+  // touch-action del ELEMENTO donde nace el toque (Chrome evalúa la
+  // cadena de ancestros). El touch-none va en el <img> y en el wrapper
+  // del pan (arriba), y ESTE listener no pasivo mata cualquier
+  // rubber-band residual de Safari dentro del stage. La lógica de
+  // pointer events NO se toca (verificada correcta en Chromium táctil).
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onTouchMove = (e: TouchEvent) => e.preventDefault();
+    stage.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => stage.removeEventListener("touchmove", onTouchMove);
+  }, []);
 
   // Limpieza defensiva al desmontar (pointers y temporizadores no sobreviven).
   useEffect(
@@ -505,14 +527,35 @@ export function PresentationView({
             <motion.div
               ref={imgWrapRef}
               style={{ scale, x, y, willChange: zoomPct > 100 ? "transform" : "auto" }}
-              className="relative flex h-full w-full items-center justify-center"
+              /* FIX v6 (6.3): touch-none también en el WRAPPER del pan — el
+               * toque nace aquí cuando el dedo cae en el padding alrededor
+               * de la foto; WebKit no mira el touch-action del stage
+               * (ancestro) para decidir la cancelación. */
+              className="relative flex h-full w-full touch-none items-center justify-center"
             >
               <img
                 ref={imgRef}
                 src={page.processed}
                 alt={`Página ${index + 1} de ${totalPages} de ${title}`}
                 draggable={false}
-                className="max-h-full max-w-full rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                /* FIX v6 (6.3): WebKit solo respeta touch-action del
+                 * elemento donde NACE el toque — sin esto Safari dispara
+                 * pointercancel al iniciar el arrastre sobre la foto y el
+                 * paneo muere (el doble-toque sí funcionaba por no haber
+                 * movimiento). El código de eventos está VERIFICADO
+                 * correcto; era SOLO el touch-action. */
+                className="max-h-full max-w-full touch-none rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                /* FIX v6 (6.4): placeholder estilo iOS mientras llega la
+                 * copia de display que se genera en background — el
+                 * thumbnail de ~160 px se escala por CSS con blur(8px)
+                 * (y un 3 % más de escala para que el difuminado no
+                 * descubra bordes transparentes). Al aterrizar la copia,
+                 * el swap es suave (transición del filtro). */
+                style={{
+                  filter: page.displayPending ? "blur(8px)" : "blur(0px)",
+                  transform: page.displayPending ? "scale(1.03)" : "scale(1)",
+                  transition: "filter 240ms ease, transform 240ms ease",
+                }}
               />
               {/* Overlay ORIGINAL (comparación antes/después) */}
               <AnimatePresence>
@@ -530,7 +573,9 @@ export function PresentationView({
                       src={page.original}
                       alt=""
                       draggable={false}
-                      className="max-h-full max-w-full rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                      /* FIX v6 (6.3): mismo touch-none — al comparar, ESTE
+                       * img cubre al principal y el toque nace en él. */
+                      className="max-h-full max-w-full touch-none rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
                     />
                     <span className="absolute -top-1 left-1/2 inline-flex -translate-x-1/2 -translate-y-full items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#1c1c1e] shadow-[0_2px_10px_rgba(0,0,0,0.35)] backdrop-blur-md">
                       <Eye className="size-3.5" strokeWidth={2.4} />

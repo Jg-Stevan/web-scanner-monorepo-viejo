@@ -75,14 +75,14 @@ import {
   capturePageKey,
   defaultQuad,
 } from "@jg-stevan/scanner-core/types";
-import type { CapturePage, PageFilter, Point, Quad, ScanPage } from "@jg-stevan/scanner-core/types";
+import type { CapturePage, PageFilter, Point, Quad } from "@jg-stevan/scanner-core/types";
 import { ocrTextIsValid, requestOcr } from "@jg-stevan/scanner-core/ocr";
 import { buildDocPdf, downloadBlob, sanitizeFileName } from "@jg-stevan/scanner-core/pdf-export";
 import { ocrTextOfPages } from "@jg-stevan/scanner-core/text-export";
 import { formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
-import { PresentationView } from "@/components/scanner/PresentationView";
+import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
 /** Aproximación CSS de cada filtro para las previews en vivo (§8.4 del
  *  SPEC-MAESTRO: solo cosmética — el procesado real ocurre al confirmar). */
@@ -1730,34 +1730,83 @@ export default function EditorView() {
    * para páginas nunca visitadas caía a p.processed ?? p.original → la
    *  presentación mostraba la foto ORIGINAL SIN RECORTAR (parecía otra
    *  imagen / "mal recortada"). */
-  const [presentationPages, setPresentationPages] = useState<ScanPage[]>([]);
+  const [presentationPages, setPresentationPages] = useState<PresentationPage[]>([]);
   const openPresentation = useCallback(() => {
-    const pages = useScannerStore.getState().capturePages.map((p) => {
+    const state = useScannerStore.getState();
+    if (state.capturePages.length === 0) return;
+    const built = state.capturePages.map((p) => {
       // FIX v5 (5.1): la presentación también consume la copia de DISPLAY
       // (JPEG ≤2560) cuando existe en la caché — mismo problema de
       // decodificación del PNG gigante en el <img> a pantalla completa.
+      // FIX v6 (6.4): si NO existe, ya NO se decodifica el PNG de 4032 px
+      // (o el JPEG original de 12 MP) dentro de la transición de apertura:
+      // se pinta YA el THUMBNAIL (~160 px, placeholder con blur estilo iOS
+      // en PresentationView) y la copia de display se genera en background
+      // (cola de concurrencia 2, abajo) — al aterrizar, swap suave.
       const entry = previewCache.current.get(capturePageKey(p));
-      const url = entry?.displayUrl ?? entry?.url;
+      const ready = entry?.displayUrl ?? null;
       return {
-        id: p.id,
-        original: p.original,
-        processed: url ?? p.processed ?? p.original, // lectura FRESCA de la caché
-        // C3: miniatura REAL (~160 px, coherente con la procesada) — pasar el
-        // original hacía decodificar N fotos completas para pintar pies de 40×52.
-        thumbnail: p.thumbnail ?? p.original,
-        filter: p.filter,
-        quad: p.quad,
-        quadManual: p.quadManual,
-        rotation: p.rotation,
-        quality: p.quality,
-        ocrText: p.ocrText,
-        ocrDone: p.ocrDone === true,
-        createdAt: 0,
-      } as ScanPage;
+        page: {
+          id: p.id,
+          original: p.original,
+          processed: ready ?? p.thumbnail ?? p.original, // placeholder si no hay display
+          // C3: miniatura REAL (~160 px, coherente con la procesada) — pasar el
+          // original hacía decodificar N fotos completas para pintar pies de 40×52.
+          thumbnail: p.thumbnail ?? p.original,
+          filter: p.filter,
+          quad: p.quad,
+          quadManual: p.quadManual,
+          rotation: p.rotation,
+          quality: p.quality,
+          ocrText: p.ocrText,
+          ocrDone: p.ocrDone === true,
+          createdAt: 0,
+          displayPending: !ready,
+        } as PresentationPage,
+        key: capturePageKey(p),
+        // Fuente para la copia de display en background: el DATO procesado
+        // de la caché si existe; si la página nunca fue previsualizada, el
+        // original (mismo fallback que v5, pero SIN bloquear la apertura).
+        source: entry?.url ?? p.original,
+      };
     });
-    if (pages.length === 0) return;
-    setPresentationPages(pages);
+    setPresentationPages(built.map((b) => b.page));
     setPresentationOpen(true);
+    // FIX v6 (6.4) — apertura progresiva: copias de display de las páginas
+    // que aún no la tienen, generadas en BACKGROUND con concurrencia 2
+    // (cola simple — decodificar N gigantes a la vez en iOS son picos de
+    // memoria). Al aterrizar cada una: la presentación se actualiza (la
+    // imagen hace swap suave) y la caché de previews queda sembrada → la
+    // PRÓXIMA apertura de la presentación es instantánea para esa página.
+    const pending = built.filter((b) => b.page.displayPending);
+    let cursor = 0;
+    const runNext = (): void => {
+      if (cursor >= pending.length) return;
+      const item = pending[cursor++];
+      if (!item) return;
+      void (async () => {
+        try {
+          const display = await makeDisplayUrl(item.source);
+          const entry = previewCache.current.get(item.key);
+          if (entry && !entry.displayUrl) {
+            previewCache.current.set(item.key, { ...entry, displayUrl: display });
+          }
+          setPresentationPages((prev) =>
+            prev.map((pg) =>
+              pg.id === item.page.id
+                ? { ...pg, processed: display, displayPending: false }
+                : pg
+            )
+          );
+        } catch {
+          /* sin copia de display: la página conserva el placeholder */
+        } finally {
+          runNext();
+        }
+      })();
+    };
+    runNext();
+    runNext(); // concurrencia 2
   }, []);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
@@ -1902,14 +1951,24 @@ export default function EditorView() {
                 <motion.div
                   ref={zoomWrapRef}
                   style={{ scale: zoomScale, x: zoomX, y: zoomY, willChange: zoomed ? "transform" : "auto" }}
-                  className="flex h-full w-full items-center justify-center"
+                  /* FIX v6 (6.3): touch-none también en el WRAPPER del pan —
+                   * WebKit solo respeta el touch-action del elemento donde
+                   * NACE el toque, no el de los ancestros (el stage ya lo
+                   * tiene, pero no basta en Safari). */
+                  className="flex h-full w-full touch-none items-center justify-center"
                 >
                   <img
                     ref={zoomImgRef}
                     src={preview.displayUrl ?? preview.url}
                     alt={`Página ${activeIdx + 1} escaneada y recortada`}
                     draggable={false}
-                    className="max-h-full max-w-full select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+                    /* FIX v6 (6.3): el toque nace en el <img> — sin su
+                     * touch-none, Safari dispara pointercancel al iniciar el
+                     * arrastre y el paneo con zoom no responde al dedo (el
+                     * doble-toque funciona por no haber movimiento). La
+                     * lógica de eventos está VERIFICADA correcta en
+                     * Chromium táctil; era SOLO el touch-action. */
+                    className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
                   />
                   {/* Comparación antes/después: el ORIGINAL mientras se mantiene pulsado */}
                   <AnimatePresence>
@@ -1927,7 +1986,9 @@ export default function EditorView() {
                           src={page.original}
                           alt=""
                           draggable={false}
-                          className="max-h-full max-w-full select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+                          /* FIX v6 (6.3): mismo touch-none — al comparar, ESTE
+                           * img cubre al del preview y el toque nace en él. */
+                          className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
                         />
                         <span className="absolute left-1/2 top-3 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#1c1c1e] shadow-[0_2px_10px_rgba(0,0,0,0.35)] backdrop-blur-md">
                           <Eye className="size-3.5" strokeWidth={2.4} />

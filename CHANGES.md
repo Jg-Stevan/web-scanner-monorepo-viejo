@@ -61,6 +61,21 @@
 
 ---
 
+## 0-quater. FIX v6 — iPhone real: cámara, pantalla negra y paneo táctil (rama `fix/ios-safari-v6`)
+
+**Base:** `main` en `cef735c` (v4+v5 fusionados, PR #12 y #14). Documentación completa (plan, decisiones, evidencia E2E): `apps/scanner-lab/docs/fix-ios-safari-v6.md`. 4 puntos, un commit por punto. Reportado en iPhone 17 Pro (iOS 26).
+
+**Cambios:**
+
+- **6.1 ⚠️ Detección POSITIVA de Android (`CAN_TAKEPHOTO`)** — Safari moderno (iOS 17+/26) TAMBIÉN expone `ImageCapture` pero su `takePhoto()` se cuelga: la vieja detección por `typeof ImageCapture` metía a iPhone en el régimen ANDROID (preview 960×540 → auto-captura 0.5 MP, toast «alta resolución no respondió», track congelado → negro). Ahora `IS_ANDROID` (UA) + `CAN_TAKEPHOTO` gobiernan: `IDEAL_PREVIEW_*` 960×540 solo Android / **1920×1440 en iOS** (régimen v3 de vuelta), `canTakePhotoRef` en sus 2 sitios, guard primera-línea en `takePhotoBlob`, `profileActiveSensor` solo con CAN_TAKEPHOTO. Regla E3 intacta; Android exactamente igual.
+- **6.2 Watchdog de FRESCURA de frames** — hueco de v4 4.3: un video congelado SIN mutear (post-takePhoto colgado de Safari) pasa `isStreamDead()` pero no entrega frames → negro eterno. Nuevo `lastFrameAtRef` alimentado por bucle **rVFC** (Safari 15.4+/Chrome; fallback `onFrame` del loop) — el watchdog pasa a `isStreamDead() || latido > 4 s`, solo en primer plano (`visibilitychange` resetea el latido y relanza `play()` al volver → sin espurias en background). Misma comprobación en la evaluación post-timeout del disparo.
+- **6.3 Paneo táctil iOS** — WebKit solo respeta `touch-action` del ELEMENTO donde nace el toque (Chrome evalúa ancestros): el toque nacía en el `<img>` sin touch-action → `pointercancel` → paneo muerto. `touch-none` en el `<img>` + wrapper del pan de PresentationView y del stage de zoom de EditorView (+ overlays de comparación) y listener nativo `touchmove` no pasivo en el stage de la presentación. Lógica de pointer events INTACTA (verificada correcta).
+- **6.4 Presentación progresiva** — `openPresentation` ya no decodifica PNG 4032/JPEG 12 MP dentro de la transición: página sin `displayUrl` pinta YA el thumbnail (placeholder iOS `blur(8px)`+escala, swap suave por transición) y genera la copia en background con **concurrencia 2** (cola simple), sembrando la caché (próxima apertura instantánea). Nuevo tipo runtime `PresentationPage`. Pipeline de guardado intacto.
+
+**Verificado:** `tsc` core + app, `eslint` (0), E2E headless con `getUserMedia`/`enumerateDevices` parcheados (canvas-stream con redibujo ~8 fps → camino REAL de apertura y watchdog ejercitables): UA escritorio pide **1920×1440** y salta el profiler; UA Pixel 7 pide **960×540** con profiler + captura por obturador → editor; congelamiento (clearInterval del redibujo) → «Reiniciando cámara…» a **7,76 s** (≤8 s por construcción) + auto-recuperación + 0 espurias en 12 s; `touch-action:none` computado en img/wrapper/stage; doble-toque 2× + arrastre 60 px sobre la imagen = `translateX(60px)` exacto; placeholder `blur(8px)` capturado (49 muestras, ~1,9 s con toBlob retardado) con swap a display. **0 errores de consola/página.** `apps/digitalizador-e14`: 0 archivos en el diff. Pendiente QA físico: checklist en el doc.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
