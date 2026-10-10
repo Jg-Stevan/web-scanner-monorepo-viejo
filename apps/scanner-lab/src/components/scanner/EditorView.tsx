@@ -1902,14 +1902,24 @@ export default function EditorView() {
                 <motion.div
                   ref={zoomWrapRef}
                   style={{ scale: zoomScale, x: zoomX, y: zoomY, willChange: zoomed ? "transform" : "auto" }}
-                  className="flex h-full w-full items-center justify-center"
+                  /* FIX v6 (6.3): touch-none también en el WRAPPER del pan —
+                   * WebKit solo respeta el touch-action del elemento donde
+                   * NACE el toque, no el de los ancestros (el stage ya lo
+                   * tiene, pero no basta en Safari). */
+                  className="flex h-full w-full touch-none items-center justify-center"
                 >
                   <img
                     ref={zoomImgRef}
                     src={preview.displayUrl ?? preview.url}
                     alt={`Página ${activeIdx + 1} escaneada y recortada`}
                     draggable={false}
-                    className="max-h-full max-w-full select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+                    /* FIX v6 (6.3): el toque nace en el <img> — sin su
+                     * touch-none, Safari dispara pointercancel al iniciar el
+                     * arrastre y el paneo con zoom no responde al dedo (el
+                     * doble-toque funciona por no haber movimiento). La
+                     * lógica de eventos está VERIFICADA correcta en
+                     * Chromium táctil; era SOLO el touch-action. */
+                    className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
                   />
                   {/* Comparación antes/después: el ORIGINAL mientras se mantiene pulsado */}
                   <AnimatePresence>
@@ -1927,7 +1937,9 @@ export default function EditorView() {
                           src={page.original}
                           alt=""
                           draggable={false}
-                          className="max-h-full max-w-full select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+                          /* FIX v6 (6.3): mismo touch-none — al comparar, ESTE
+                           * img cubre al del preview y el toque nace en él. */
+                          className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
                         />
                         <span className="absolute left-1/2 top-3 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#1c1c1e] shadow-[0_2px_10px_rgba(0,0,0,0.35)] backdrop-blur-md">
                           <Eye className="size-3.5" strokeWidth={2.4} />

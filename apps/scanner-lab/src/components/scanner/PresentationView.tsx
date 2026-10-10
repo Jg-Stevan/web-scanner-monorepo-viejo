@@ -432,8 +432,22 @@ export function PresentationView({
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-     
+
   }, [zoomAt, scale]);
+
+  // FIX v6 (6.3) — cinturón y tirantes: WebKit solo respeta el
+  // touch-action del ELEMENTO donde nace el toque (Chrome evalúa la
+  // cadena de ancestros). El touch-none va en el <img> y en el wrapper
+  // del pan (arriba), y ESTE listener no pasivo mata cualquier
+  // rubber-band residual de Safari dentro del stage. La lógica de
+  // pointer events NO se toca (verificada correcta en Chromium táctil).
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onTouchMove = (e: TouchEvent) => e.preventDefault();
+    stage.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => stage.removeEventListener("touchmove", onTouchMove);
+  }, []);
 
   // Limpieza defensiva al desmontar (pointers y temporizadores no sobreviven).
   useEffect(
@@ -505,14 +519,24 @@ export function PresentationView({
             <motion.div
               ref={imgWrapRef}
               style={{ scale, x, y, willChange: zoomPct > 100 ? "transform" : "auto" }}
-              className="relative flex h-full w-full items-center justify-center"
+              /* FIX v6 (6.3): touch-none también en el WRAPPER del pan — el
+               * toque nace aquí cuando el dedo cae en el padding alrededor
+               * de la foto; WebKit no mira el touch-action del stage
+               * (ancestro) para decidir la cancelación. */
+              className="relative flex h-full w-full touch-none items-center justify-center"
             >
               <img
                 ref={imgRef}
                 src={page.processed}
                 alt={`Página ${index + 1} de ${totalPages} de ${title}`}
                 draggable={false}
-                className="max-h-full max-w-full rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                /* FIX v6 (6.3): WebKit solo respeta touch-action del
+                 * elemento donde NACE el toque — sin esto Safari dispara
+                 * pointercancel al iniciar el arrastre sobre la foto y el
+                 * paneo muere (el doble-toque sí funcionaba por no haber
+                 * movimiento). El código de eventos está VERIFICADO
+                 * correcto; era SOLO el touch-action. */
+                className="max-h-full max-w-full touch-none rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
               />
               {/* Overlay ORIGINAL (comparación antes/después) */}
               <AnimatePresence>
@@ -530,7 +554,9 @@ export function PresentationView({
                       src={page.original}
                       alt=""
                       draggable={false}
-                      className="max-h-full max-w-full rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
+                      /* FIX v6 (6.3): mismo touch-none — al comparar, ESTE
+                       * img cubre al principal y el toque nace en él. */
+                      className="max-h-full max-w-full touch-none rounded-sm object-contain shadow-[0_8px_40px_rgba(0,0,0,0.6)]"
                     />
                     <span className="absolute -top-1 left-1/2 inline-flex -translate-x-1/2 -translate-y-full items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#1c1c1e] shadow-[0_2px_10px_rgba(0,0,0,0.35)] backdrop-blur-md">
                       <Eye className="size-3.5" strokeWidth={2.4} />
