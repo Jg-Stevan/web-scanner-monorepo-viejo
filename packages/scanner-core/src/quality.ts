@@ -52,15 +52,17 @@ export const STABILITY_WINDOW_MS = 600;
 /** Trigger de disparo: score compuesto por encima de 0.8. */
 export const SHUTTER_SCORE = 0.8;
 
-/** F2-c: K buenas requeridas de las últimas N muestras dentro de SPAN. */
-export const SHUTTER_K = 4;
-export const SHUTTER_N = 6;
+/** Ventana TEMPORAL pura del disparo (ms): se usan TODAS las muestras
+ * dentro de la ventana, no un slice fijo — la decisión es invariante al
+ * FPS de análisis del dispositivo (FIX v9). */
 export const SHUTTER_SPAN_MS = 1200;
 
-/** F-STAB — ventana sostenida mínima entre la primera y la última muestra del
- *  conjunto k-de-n: si las muestras llegaron más rápido, el teléfono aún se
- *  está acomodando (falso positivo por alta velocidad) y NO se dispara. */
-export const SHUTTER_SUSTAIN_MS = 260;
+/** F-STAB v9 — tramo continuo bueno mínimo (ms) hacia atrás desde la
+ * última muestra. FIX v9: 260 → 400. Un barrido rápido en el que el score
+ * solo sea bueno ~200 ms sigue sin disparar; 400 ms es alcanzable en
+ * cualquier dispositivo con fps efectivo ≥ 2 (a 2 fps basta UNA muestra
+ * buena si el hueco anterior cae dentro de la tolerancia dinámica). */
+export const SHUTTER_SUSTAIN_MS = 400;
 
 /** Sin detección >8s → escape a captura manual. */
 export const NO_DETECT_TIMEOUT_MS = 8000;
@@ -230,32 +232,140 @@ export function computeTotalScore(
   };
 }
 
-/**
- * Disparo k-de-n (F2-c): true si entre las últimas N muestras dentro de
- * SPAN hay al menos K con score > SHUTTER_SCORE Y la última también es
- * buena. Tolera caídas puntuales del autofocus/exposición.
- */
-export function shouldTriggerShutter(history: ScoreSample[]): boolean {
-  if (history.length < SHUTTER_K) return false;
-  const sorted = [...history].sort((a, b) => a.t - b.t);
-  const now = sorted[sorted.length - 1]!.t;
-  const last = sorted[sorted.length - 1]!;
-  if (last.score <= SHUTTER_SCORE) return false;
-  const inSpan = sorted.filter((s) => s.t >= now - SHUTTER_SPAN_MS);
-  const lastN = inSpan.slice(-SHUTTER_N);
-  if (lastN.length < SHUTTER_K) return false;
+/** Salud de la decisión de disparo (FIX v9) — invariante al FPS: la
+ * velocidad a la que llegan las muestras depende del FPS de análisis del
+ * dispositivo (el throttle adaptativo F-PERF SUBE los fps en equipos
+ * rápidos), NO de la velocidad del usuario. La decisión se expresa en
+ * TIEMPO puro + proporción de muestras buenas, no en conteos fijos. */
+export interface ShutterHealth {
+  /** fps efectivo de análisis: 1000 / mediana(intervalos), clamp 1.5–60. */
+  fpsEff: number;
+  /** Muestras dentro de la ventana temporal (SHUTTER_SPAN_MS). */
+  windowSamples: number;
+  /** K dinámico exigido: max(2, ceil(windowSamples × 0.7)). */
+  kRequired: number;
+  /** Cuántas buenas (score > SHUTTER_SCORE) hay en la ventana. */
+  goodInWindow: number;
+  /** Tramo continuo bueno hacia atrás desde la última muestra (ms). */
+  sustainedGoodMs: number;
+  triggered: boolean;
+  /** 'ok' | 'last-bad' | 'few-samples' | 'sustain' | 'not-enough-good'. */
+  reason: string;
+}
 
-  // F-STAB: Compuerta de tiempo sostenido para evitar falsos positivos por
-  // alta velocidad (la mano aún acomodando el teléfono).
-  const firstSampleTime = lastN[0]!.t;
-  const windowDurationMs = now - firstSampleTime;
-  if (windowDurationMs < SHUTTER_SUSTAIN_MS) {
-    return false; // La muestra fue demasiado rápida; el usuario aún está acomodando
+/**
+ * FIX v9 — decisión de disparo invariante al FPS del dispositivo.
+ *
+ * Bug reportado: en dispositivos con video muy fluido (30 fps de análisis)
+ * la compuerta F-STAB vieja (duración de las últimas 6 muestras ≥ 260 ms)
+ * estaba SIEMPRE bloqueada (6 muestras a 30 fps = 200 ms < 260) — la
+ * mecánica mezclaba «número de muestras» con «tiempo» y el disparo quedaba
+ * cautivo del FPS del equipo. Reglas (en orden):
+ *
+ * 1. Última muestra buena (score > SHUTTER_SCORE) — sin cambios.
+ * 2. Ventana de TIEMPO pura: TODAS las muestras de SHUTTER_SPAN_MS.
+ * 3. Mínimo de datos: ≥ 2 muestras en historial y en ventana.
+ * 4. K dinámico por proporción: ≥ 70 % de la ventana debe ser buena
+ *    (mismo rigor relativo a 30 fps y a 3 fps).
+ * 5. FPS efectivo: mediana de intervalos → clamp 1.5–60 (solo métrica).
+ * 6. F-STAB v9: tramo CONTINUO bueno hacia atrás desde la última muestra,
+ *    tolerando huecos ≤ max(1.6 × intervaloMedio, 350) ms (fps bajos).
+ * 7. Sostenimiento: el tramo continuo debe cubrir ≥ SHUTTER_SUSTAIN_MS.
+ *
+ * El orden de los gates de rechazo sigue la tabla de verificación U1–U8
+ * del fix (U5 «barrido rápido» reporta `sustain`, la regresión crítica:
+ * el fix NO debe facilitar capturas en barridos rápidos).
+ */
+export function computeShutterDecision(history: ScoreSample[]): ShutterHealth {
+  const sorted = [...history].sort((a, b) => a.t - b.t);
+  const n = sorted.length;
+  if (n === 0) {
+    return {
+      fpsEff: 0, windowSamples: 0, kRequired: 0, goodInWindow: 0,
+      sustainedGoodMs: 0, triggered: false, reason: "few-samples",
+    };
+  }
+  const now = sorted[n - 1]!.t;
+  const last = sorted[n - 1]!;
+
+  // FPS efectivo: mediana de los intervalos entre muestras consecutivas.
+  let fpsEff = 0;
+  let medianGapMs = 0;
+  if (n >= 2) {
+    const gaps: number[] = [];
+    for (let i = 1; i < n; i++) gaps.push(sorted[i]!.t - sorted[i - 1]!.t);
+    gaps.sort((a, b) => a - b);
+    medianGapMs = gaps[Math.floor(gaps.length / 2)]!;
+    fpsEff = Math.min(60, Math.max(1.5, 1000 / Math.max(medianGapMs, 1)));
   }
 
-  let good = 0;
-  for (const s of lastN) if (s.score > SHUTTER_SCORE) good++;
-  return good >= SHUTTER_K;
+  // Ventana de TIEMPO pura (todas las muestras del span, sin slice fijo).
+  const inSpan = sorted.filter((s) => s.t >= now - SHUTTER_SPAN_MS);
+  const windowSamples = inSpan.length;
+
+  // 1. La última muestra debe ser buena.
+  if (last.score <= SHUTTER_SCORE) {
+    return {
+      fpsEff, windowSamples, kRequired: 0, goodInWindow: 0,
+      sustainedGoodMs: 0, triggered: false, reason: "last-bad",
+    };
+  }
+  // 3. Mínimo de datos.
+  if (n < 2 || windowSamples < 2) {
+    return {
+      fpsEff, windowSamples, kRequired: 0, goodInWindow: 0,
+      sustainedGoodMs: 0, triggered: false, reason: "few-samples",
+    };
+  }
+
+  // F-STAB v9 — tramo continuo bueno hacia atrás desde la última muestra:
+  // avanza mientras la muestra anterior sea buena Y el hueco con ella caiga
+  // dentro de la tolerancia dinámica (1.6 × intervalo mediano, mínimo
+  // 350 ms — a 3 fps el hueco normal es ~333 ms y debe pasar el corte).
+  const gapTolerance = Math.max(1.6 * medianGapMs, 350);
+  let stretchStart = n - 1;
+  while (stretchStart > 0) {
+    const prev = sorted[stretchStart - 1]!;
+    const gap = sorted[stretchStart]!.t - prev.t;
+    if (prev.score > SHUTTER_SCORE && gap <= gapTolerance) stretchStart--;
+    else break;
+  }
+  const sustainedGoodMs = now - sorted[stretchStart]!.t;
+
+  // 7. Exigencia de sostenimiento (regresión crítica U5: barrido rápido).
+  if (sustainedGoodMs < SHUTTER_SUSTAIN_MS) {
+    const kRequired = Math.max(2, Math.ceil(windowSamples * 0.7));
+    let goodInWindow = 0;
+    for (const s of inSpan) if (s.score > SHUTTER_SCORE) goodInWindow++;
+    return {
+      fpsEff, windowSamples, kRequired, goodInWindow,
+      sustainedGoodMs, triggered: false, reason: "sustain",
+    };
+  }
+
+  // 4. K dinámico por proporción: mismo rigor relativo en cualquier FPS.
+  const kRequired = Math.max(2, Math.ceil(windowSamples * 0.7));
+  let goodInWindow = 0;
+  for (const s of inSpan) if (s.score > SHUTTER_SCORE) goodInWindow++;
+  if (goodInWindow < kRequired) {
+    return {
+      fpsEff, windowSamples, kRequired, goodInWindow,
+      sustainedGoodMs, triggered: false, reason: "not-enough-good",
+    };
+  }
+
+  return {
+    fpsEff, windowSamples, kRequired, goodInWindow,
+    sustainedGoodMs, triggered: true, reason: "ok",
+  };
+}
+
+/**
+ * Disparo (wrapper booleano de computeShutterDecision, FIX v9) — misma
+ * firma que siempre para no romper a los consumidores existentes.
+ */
+export function shouldTriggerShutter(history: ScoreSample[]): boolean {
+  return computeShutterDecision(history).triggered;
 }
 
 /** Escape a manual: true si pasó más de NO_DETECT_TIMEOUT_MS desde el primer intento. */
