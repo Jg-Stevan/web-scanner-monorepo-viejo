@@ -136,6 +136,14 @@ const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
  *  ofrecen 60, solo evita negociar 60 cuando el hardware lo permite. */
 const IDEAL_PREVIEW_FPS = 30;
+/** 7.2 — objetivo de resolución para la AUTO-CAPTURA en no-Android:
+ *  se aplica PROGRESIVAMENTE vía applyConstraints tras abrir (ideal,
+ *  E3-compliant — nunca rechaza; el SO entrega su máximo). Android NO:
+ *  su foto real va por takePhoto full-sensor y el preview 540p es
+ *  intencional (fluidez). */
+const AUTO_CAPTURE_IDEAL_WIDTH = 4032;
+const AUTO_CAPTURE_IDEAL_HEIGHT = 3024;
+const STREAM_UPGRADE_DELAY_MS = 2000;
 
 /** FIX v4 4.5 — tope de lado mayor de las copias del ring ZSL. El ring es
  *  SOLO el fallback de la auto-captura (anti tap-shock): no necesita
@@ -144,6 +152,10 @@ const IDEAL_PREVIEW_FPS = 30;
  *  presión hacía que WebKit matara la capa de video (visor negro en
  *  iPhones modestos). Presupuesto resultante: ≤ 8 × (1280×960×4) ≈ 37 MB. */
 const RING_MAX_LONG_SIDE = 1280;
+/** 7.3 — fracción de nitidez exigida a un candidato más grande para ganar
+ *  al de mayor lapVar: un 4K con ≥85 % de la nitidez del mejor 1280 gana
+ *  (los píxeles mandan); por debajo, gana el nítido (anti tap-shock). */
+const SHARPNESS_KEEP_RATIO = 0.85;
 // 2. LA CAPTURA EN EXCELENTE RESOLUCIÓN (3840px / 12–48 MP) la hace
 //    ImageCapture.takePhoto(), que NO DEPENDE de la resolución del
 //    <video>: dispara directo al sensor físico a la máxima resolución
@@ -664,8 +676,6 @@ export default function CameraView() {
    *  (resolución nativa vía getPhotoCapabilities + tope técnico único
    *  4032 px — fix v3: sin tope por gama). null = aún sin sondear. */
   const sensorProfileRef = useRef<SensorProfile | null>(null);
-  /** Toast único por sesión de aviso calidad en iPhone (auto-captura = frames). */
-  const iosQualityToastShownRef = useRef(false);
 
   /** F-SENSOR-PROFILER: sondea el sensor del stream REAL una vez por
    *  apertura (getPhotoCapabilities → nativa + tope por gama). Falla en
@@ -682,6 +692,41 @@ export default function CameraView() {
       sensorProfileRef.current = p;
     });
   }, []);
+
+  /** FIX v7 (7.2) — subida progresiva de resolución para la auto-captura:
+   *  pide el máximo ideal al track YA ABIERTO (no retrasa el arranque).
+   *  Guards: solo no-Android (iOS Safari/Chrome + escritorio), solo
+   *  auto-captura ON, solo track vivo, solo si la API existe y el track
+   *  aún no está en alto. try/catch silencioso — NUNCA un mensaje. */
+  const upgradeStreamResolution = useCallback(
+    (track: MediaStreamTrack | null | undefined): void => {
+      if (!track) return;
+      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview 540p intencional
+      if (!autoRef.current) return;
+      if (typeof track.applyConstraints !== "function") return;
+      if (track.readyState !== "live") return;
+      const before =
+        typeof track.getSettings === "function" ? track.getSettings() : null;
+      if (before?.width && before.width >= 3000) return; // ya está alto
+      void track
+        .applyConstraints({
+          width: { ideal: AUTO_CAPTURE_IDEAL_WIDTH },
+          height: { ideal: AUTO_CAPTURE_IDEAL_HEIGHT },
+        })
+        .then(() => {
+          const after =
+            typeof track.getSettings === "function" ? track.getSettings() : null;
+          // Telemetría QA (misma idea que __sensorProfile) — sin toasts.
+          (window as unknown as Record<string, unknown>).__streamUpgrade = {
+            before: { w: before?.width, h: before?.height },
+            after: { w: after?.width, h: after?.height },
+            at: Date.now(),
+          };
+        })
+        .catch(() => undefined); // el dispositivo no quiso/ pudo — queda como está
+    },
+    [],
+  );
 
   autoRef.current = autoCapture;
   flashRef.current = flashOn;
@@ -1202,10 +1247,27 @@ export default function CameraView() {
         return;
       }
       const measured = frames.filter((f) => f.m !== null);
-      const winner =
-        measured.length === 0
-          ? frames[0]! // sin telemetría → orden de llegada (§5.4)
-          : measured.reduce((a, b) => (b.m!.lapVar > a.m!.lapVar ? b : a));
+      let winner: BurstFrame;
+      if (measured.length === 0) {
+        winner = frames[0]!; // sin telemetría → orden de llegada (§5.4)
+      } else {
+        // FIX v7 (7.3) — antes el lapVar PURO hacía que un frame del ring
+        // (1280 px, capado por RAM) le ganara al snapshot full-res del
+        // stream: la auto-captura entregaba SIEMPRE 1280 px aunque el stream
+        // subiera de resolución (7.2). Puerta de nitidez → gana resolución.
+        const bestLap = Math.max(...measured.map((f) => f.m!.lapVar));
+        const pool = measured.filter(
+          (f) => f.m!.lapVar >= SHARPNESS_KEEP_RATIO * bestLap,
+        );
+        // Entre los suficientemente nítidos gana el de MAYOR resolución
+        // (área); desempate por lapVar (paridad exacta).
+        winner = pool.reduce((a, b) => {
+          const areaA = a.canvas.width * a.canvas.height;
+          const areaB = b.canvas.width * b.canvas.height;
+          if (areaB !== areaA) return areaB > areaA ? b : a;
+          return b.m!.lapVar > a.m!.lapVar ? b : a;
+        });
+      }
       const url = await canvasToDataUrl(winner.canvas);
       for (const f of frames) releaseFrame(f);
       if (url) {
@@ -1494,18 +1556,19 @@ export default function CameraView() {
       // F-SENSOR-PROFILER (PASO 2): mide la nativa de FOTO del sensor y
       // fija el tope técnico único (4032 px) para takePhotoBlob.
       profileActiveSensor(stream);
-      if (!canTakePhotoRef.current && autoRef.current && !iosQualityToastShownRef.current) {
-        iosQualityToastShownRef.current = true;
-        toast("En iPhone: para máxima calidad dispara manualmente (foto nativa)", {
-          duration: 6000,
-        });
-      }
       // Linterna — F-FLASH v3: cámara real → el botón se habilita SIEMPRE
       // (la verdad del torch se verifica al pulsar, aplicando y leyendo
       // getSettings); si el usuario dejó el flash ON, se re-aplica con
       // reintentos hasta que el track lo acepte.
       setTorchAvailable(true);
       if (flashRef.current) applySavedTorchWithRetry();
+      // FIX v7 (7.2) — subida progresiva: 2 s tras abrir para no tocar el
+      // arranque rápido (5.3). El guard `cancelled` del cierre evita tocar
+      // un track ya liberado.
+      window.setTimeout(() => {
+        if (cancelled) return;
+        upgradeStreamResolution(stream.getVideoTracks()[0]);
+      }, STREAM_UPGRADE_DELAY_MS);
     };
 
     /** B2: ¿el error es de PERMISO denegado (a diferencia de “no hay
@@ -1761,7 +1824,7 @@ export default function CameraView() {
       syntheticRef.current?.stop();
       syntheticRef.current = null;
     };
-  }, [applySavedTorchWithRetry, camRestartNonce]);
+  }, [applySavedTorchWithRetry, camRestartNonce, upgradeStreamResolution]);
 
   // Asigna el stream al <video> (real o sintético)
   useEffect(() => {
@@ -1881,6 +1944,13 @@ export default function CameraView() {
       profileActiveSensor(stream); // F-SENSOR-PROFILER: tope 4032/3200 px
       setTorchAvailable(true);
       if (flashRef.current) applySavedTorchWithRetry();
+      // FIX v7 (7.2) — subida progresiva también al recuperar la cámara:
+      // mismo delay para no entrometerse con la re-adopción del stream.
+      // Guard local: si en esos 2 s el stream fue reemplazado, no tocar.
+      window.setTimeout(() => {
+        if (streamRef.current !== stream) return;
+        upgradeStreamResolution(stream.getVideoTracks()[0]);
+      }, STREAM_UPGRADE_DELAY_MS);
     } catch {
       toast.error("Sigue sin permiso", {
         description:
@@ -1888,7 +1958,7 @@ export default function CameraView() {
         duration: 9000,
       });
     }
-  }, [applySavedTorchWithRetry]);
+  }, [applySavedTorchWithRetry, upgradeStreamResolution]);
 
   // Dimensiones del video (para el mapeo object-cover del overlay)
   const onVideoMeta = useCallback(() => {
@@ -2275,7 +2345,14 @@ export default function CameraView() {
             aria-label={`Captura automática: ${autoCapture ? "activada" : "desactivada"}`}
             aria-pressed={autoCapture}
             title="Captura automática (recorte y disparo al detectar el documento)"
-            onClick={() => setAutoCapture((v) => !v)}
+            onClick={() => {
+              setAutoCapture((v) => !v);
+              // FIX v7 (7.2) — auto-captura recién activada: subir YA (el
+              // stream lleva abierto — sin delay, no es arranque).
+              if (!autoCapture) {
+                upgradeStreamResolution(streamRef.current?.getVideoTracks()[0]);
+              }
+            }}
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
               autoCapture
@@ -2791,7 +2868,13 @@ export default function CameraView() {
                 icon={Scan}
                 label="Auto-captura"
                 value={autoCapture ? "Sí" : "No"}
-                onClick={() => setAutoCapture((v) => !v)}
+                onClick={() => {
+                  setAutoCapture((v) => !v);
+                  // FIX v7 (7.2) — activada a mitad de sesión: subir YA.
+                  if (!autoCapture) {
+                    upgradeStreamResolution(streamRef.current?.getVideoTracks()[0]);
+                  }
+                }}
               />
               {/* Linterna con botón propio en la toolbar inferior (F-SWAP). */}
               <MenuRow
