@@ -1051,8 +1051,8 @@ export default function LibraryView() {
       {!trashOpen && (
       <>
       <div className="shrink-0 px-4 pb-3">
-        <div className="flex h-11 items-center gap-2 rounded-xl border border-transparent bg-white dark:bg-[#1c1c1e] px-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-[box-shadow,border-color] duration-200 focus-within:border-[#007aff]/30 focus-within:shadow-[0_0_0_3px_rgba(0,122,255,0.14),0_1px_3px_rgba(0,0,0,0.05)]">
-          <Search className="h-[18px] w-[18px] shrink-0 text-[#8e8e93]" strokeWidth={2} aria-hidden="true" />
+        <div className="group flex h-11 items-center gap-2 rounded-xl border border-transparent bg-white dark:bg-[#1c1c1e] px-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-[box-shadow,border-color] duration-200 focus-within:border-[#007aff]/30 focus-within:shadow-[0_0_0_3px_rgba(0,122,255,0.14),0_1px_3px_rgba(0,0,0,0.05)]">
+          <Search className="h-[18px] w-[18px] shrink-0 text-[#8e8e93] transition-colors duration-200 group-focus-within:text-[#007aff]" strokeWidth={2} aria-hidden="true" />
           <input
             ref={searchRef}
             type="text"
