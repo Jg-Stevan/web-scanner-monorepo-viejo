@@ -712,8 +712,30 @@ export function PresentationView({
                 <span className="truncate text-[14px] font-semibold text-white">
                   {title}
                 </span>
-                <span className="text-[11px] tabular-nums text-white/60">
-                  {index + 1} de {totalPages}
+                {/* v13-post-20 — Número animado + aria-live (mismo patrón que
+                    la pill «Página X de Y» del editor, v13-post-11): el
+                    saliente se posiciona solo (popLayout) y no empuja al
+                    entrante; los lectores de pantalla anuncian el cambio de
+                    página (antes el contador era mudo). MotionConfig apaga la
+                    animación con «Reducir movimiento». */}
+                <span
+                  className="text-[11px] tabular-nums text-white/60"
+                  aria-live="polite"
+                >
+                  <AnimatePresence initial={false} mode="popLayout">
+                    <motion.span
+                      key={index}
+                      initial={{ opacity: 0, y: 9 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -9 }}
+                      transition={{ duration: 0.16, ease: IOS_EASE }}
+                      className="inline-block"
+                    >
+                      {index + 1}
+                    </motion.span>
+                  </AnimatePresence>
+                  {" de "}
+                  {totalPages}
                 </span>
               </div>
               {/* v13-post-19 — Presentación automática: play/pausa con anillo
