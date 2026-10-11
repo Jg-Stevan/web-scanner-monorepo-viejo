@@ -278,6 +278,8 @@
 
 **Post-QA (M19-1/M19-1-bis, navegador sobre build local 390×844/360×740):** AC2-AC12 ALL PASS (computed styles token por token + comparación visual 1:1 contra el mock con VLM + 0 errores de consola + escalación manual/auto E2E + contingencia del 4º rechazo intacta). Defecto menor AC11 corregido en `dea7b02`: el espaciador DEV-6 pasa de fijo 64px a CONDICIONAL 76px (banner repetir-primero de 2 líneas, 69px) / 64px (contingencia, 54px) — re-verificado con bounding boxes y elementFromPoint: holgura 8-11px, 0 solape en ambos estados EN_RH. Ajuste de precisión: grid del nav h-[73px] → barra computada 78px exactos (§9).
 
+**Post-Merge (M20):** PR #30 mergeado con autorización del dueño («Mergea con confianza») — sha candado `a732465` + `merge_method=merge` → commit de fusión `e32410f`; el PR #28 (chrome-3-estados, apilado) quedó cubierto y GitHub lo auto-cerró como mergeado. Gates re-ejecutados 3/3 sobre `a732465` justo antes de fusionar. CI «Deploy to GitHub Pages» en `e32410f`: completed/success. Producción verificada por fingerprint de bundle: `/` 200 · `/lab/` 200 · `manifest.webmanifest` 404→200 (`standalone`, `#060A0D`) · chunk nuevo de la app `2-cbxog0vc8w-.js` con `glow-cta`×4, «ACTA RECHAZADA», «barra-rechazo» · CSS nuevo `38-slc8n25d2z.css` con los 6 tokens hex medidos (`#060a0d`×4, `#0e1319`, `#0bf282`×21, `#03df73`, `#0b1116`, `#11251c`) + 3 clases glow · inversión confirmada: chunk viejo `3rpo1-odiwwpp.js` 404 y CSS viejo `1sy_xatcppy4h.css` 404 · «SHA-256: » display 0 · «SEGUIR»+«ESCANEANDO», «REPETIR FOTO»×5, «REVISIÓN HUMANA»×4 presentes. Rollback: revert de `e32410f` (~2-3 min).
+
 ---
 
 ## Resumen de commits
