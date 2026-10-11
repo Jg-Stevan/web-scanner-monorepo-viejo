@@ -22,6 +22,8 @@ import { countWords } from "@jg-stevan/scanner-core/text-export";
 import { getScannerWorker } from "@jg-stevan/scanner-core/image-processor";
 import { PROCESSED_MAX_LONG_SIDE } from "@jg-stevan/scanner-core/image-processor";
 import { storageAvailable } from "@jg-stevan/scanner-core/page-store";
+// FIX v13-post — diagnóstico del dispositivo (solo lectura) para Ajustes.
+import { getDeviceProfile, type DeviceProfileRecord } from "@/lib/device-profile";
 import {
   getPwaInstallState,
   promptInstall,
@@ -403,6 +405,11 @@ export default function SettingsView() {
           </SettingsRow>
         </SettingsGroup>
 
+        {/* FIX v13-post — Diagnóstico del dispositivo (solo lectura): hace
+            visible el perfil 13.1 en el QA físico sin consola remota.
+            ⛔ No altera captura ni análisis (invariante de la spec v13). */}
+        <DeviceSection />
+
         <SettingsGroup label="Acerca de" delay={0.2}>
           <SettingsRow title="Versión">
             <span className="shrink-0 text-[15px] text-[#8e8e93]">2.0.0</span>
@@ -684,6 +691,107 @@ function SettingsRow({
     );
   }
   return <div className={className}>{content}</div>;
+}
+
+/** FIX v13-post — Sección de diagnóstico del dispositivo (SOLO LECTURA).
+ *  Muestra el perfil 13.1 (tier, plataforma, hardware, benchmark) en
+ *  Ajustes para que el QA físico no requiera consola remota. Se relee a
+ *  los 4,5 s para capturar el micro-benchmark idle (timeout 3 s). El tier
+ *  es diagnóstico puro: NUNCA cambia captura ni análisis (4032 px siempre). */
+function DeviceSection() {
+  const [profile, setProfile] = useState<DeviceProfileRecord | null>(null);
+
+  useEffect(() => {
+    setProfile(getDeviceProfile());
+    // El micro-benchmark corre en idle (requestIdleCallback timeout 3 s);
+    // una segunda lectura a los 4,5 s lo captura si aún no había terminado.
+    const t = window.setTimeout(() => setProfile(getDeviceProfile()), 4500);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  const tier = profile?.tier;
+  const platformLabel =
+    profile?.platform === "ios"
+      ? `iOS${profile.osMajor ? " " + profile.osMajor : ""}`
+      : profile?.platform === "android"
+        ? `Android${profile.osMajor ? " " + profile.osMajor : ""}`
+        : "Otro";
+
+  return (
+    <SettingsGroup label="Dispositivo" delay={0.2}>
+      <SettingsRow
+        title="Rendimiento detectado"
+        subtitle={`Diagnóstico v13 · no altera la captura (siempre ${PROCESSED_MAX_LONG_SIDE} px)`}
+      >
+        {tier ? (
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold",
+              tier === "alto"
+                ? "bg-[#34c759]/12 text-[#248a3d] dark:bg-[#30d158]/15 dark:text-[#30d158]"
+                : tier === "medio"
+                  ? "bg-[#ff9500]/12 text-[#b25000] dark:bg-[#ff9f0a]/15 dark:text-[#ff9f0a]"
+                  : "bg-[#ff3b30]/12 text-[#d70015] dark:bg-[#ff453a]/15 dark:text-[#ff453a]"
+            )}
+            role="status"
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                tier === "alto" ? "bg-[#34c759]" : tier === "medio" ? "bg-[#ff9500]" : "bg-[#ff3b30]"
+              )}
+              aria-hidden="true"
+            />
+            {tier === "alto" ? "Alto" : tier === "medio" ? "Medio" : "Bajo"}
+          </span>
+        ) : (
+          <span className="shrink-0 text-[15px] text-[#8e8e93]">…</span>
+        )}
+      </SettingsRow>
+      <SettingsRow title="Plataforma">
+        <span className="shrink-0 text-[15px] font-medium text-[#3c3c43] dark:text-white/85">
+          {profile ? platformLabel : "…"}
+        </span>
+      </SettingsRow>
+      <SettingsRow title="Procesador" subtitle="Núcleos lógicos expuestos por el navegador">
+        <span className="shrink-0 text-[15px] font-medium tabular-nums text-[#3c3c43] dark:text-white/85">
+          {profile ? (profile.cores !== null ? `${profile.cores} núcleos` : "No expuesto") : "…"}
+        </span>
+      </SettingsRow>
+      <SettingsRow title="Memoria" subtitle="iOS no la expone (el benchmark la deduce)">
+        <span className="shrink-0 text-[15px] font-medium tabular-nums text-[#3c3c43] dark:text-white/85">
+          {profile ? (profile.memoryGB !== null ? `${profile.memoryGB} GB` : "No expuesta") : "…"}
+        </span>
+      </SettingsRow>
+      <SettingsRow title="Decodificación (prueba)" subtitle="Decode+draw de un canvas 256 px, medido en reposo">
+        <span className="shrink-0 text-[15px] font-medium tabular-nums text-[#3c3c43] dark:text-white/85">
+          {profile ? (profile.benchMs !== null ? `${profile.benchMs} ms` : "Midiendo…") : "…"}
+        </span>
+      </SettingsRow>
+      <SettingsRow title="Pantalla" subtitle="Densidad de píxeles del dispositivo">
+        <span className="shrink-0 text-[15px] font-medium tabular-nums text-[#3c3c43] dark:text-white/85">
+          {profile ? `${profile.dpr}×` : "…"}
+        </span>
+      </SettingsRow>
+      <SettingsRow title="Conexión" subtitle="La cámara web exige contexto seguro">
+        <span
+          className={cn(
+            "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold",
+            profile?.secure
+              ? "bg-[#34c759]/12 text-[#248a3d] dark:bg-[#30d158]/15 dark:text-[#30d158]"
+              : "bg-[#ff3b30]/12 text-[#d70015] dark:bg-[#ff453a]/15 dark:text-[#ff453a]"
+          )}
+          role="status"
+        >
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", profile?.secure ? "bg-[#34c759]" : "bg-[#ff3b30]")}
+            aria-hidden="true"
+          />
+          {profile ? (profile.secure ? "HTTPS" : "Sin HTTPS") : "…"}
+        </span>
+      </SettingsRow>
+    </SettingsGroup>
+  );
 }
 
 /** F-PWA — Sección de instalación en el móvil. Android/Chrome: botón que

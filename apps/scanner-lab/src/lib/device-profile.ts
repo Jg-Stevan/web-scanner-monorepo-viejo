@@ -44,8 +44,8 @@ type HardwareSignals = {
   coarsePointer: boolean;
 };
 
-/** Registro interno completo (el del caché localStorage). */
-type DeviceProfileRecord = HardwareSignals & {
+/** Registro interno completo (el del caché localStorage). FIX v13-post: exportado para el diagnóstico de Ajustes. */
+export type DeviceProfileRecord = HardwareSignals & {
   tier: DeviceTier;
   /** ms del micro-benchmark (null = aún no corrido o falló). */
   benchMs: number | null;
