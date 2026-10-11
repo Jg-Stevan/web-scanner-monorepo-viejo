@@ -1368,6 +1368,48 @@ export default function EditorView() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [mode, handleCancelCrop]);
 
+  /** FIX v13-post-4 — Atajos ←/→ de escritorio en review: navegan páginas.
+   *  «Acerca de › Atajos» ya los anunciaba, pero solo existían por swipe
+   *  (F-SWIPE) y en presentación: en escritorio no hacían nada. Mismas
+   *  reglas que el swipe: solo a zoom 1×. Guardas: sin modificadores, nada
+   *  abierto encima (presentación/OCR/filtros) y foco fuera de campos de
+   *  texto (los select nativos y el sheet OCR usan flechas propias). */
+  useEffect(() => {
+    if (mode !== "review") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (presentationOpen || ocrOpen || filtersOpen) return;
+      if (zoomScale.get() > 1.01) return;
+      const el = document.activeElement;
+      if (
+        el instanceof HTMLElement &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable)
+      ) {
+        return;
+      }
+      const nav = e.key === "ArrowRight" ? 1 : -1;
+      const next = activeIdx + nav;
+      if (next < 0 || next >= capturePages.length) return;
+      e.preventDefault();
+      goToPage(next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    mode,
+    presentationOpen,
+    ocrOpen,
+    filtersOpen,
+    zoomScale,
+    activeIdx,
+    capturePages.length,
+    goToPage,
+  ]);
+
   const handleDetect = useCallback(async () => {
     if (!page || detecting) return;
     setDetecting(true);
