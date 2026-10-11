@@ -376,6 +376,10 @@ export default function EditorView() {
   const updateCapturePage = useScannerStore((s) => s.updateCapturePage);
   const removeCapturePage = useScannerStore((s) => s.removeCapturePage);
   const setView = useScannerStore((s) => s.setView);
+  /** FIX v12b (12.5f) — disparo en vuelo: con v12b se navega al editor EN
+   *  el disparo; mientras la página de la HAL no aterriza, esta vista es
+   *  una PANTALLA DE CARGA (la cámara sigue montada y oculta detrás). */
+  const capturePending = useScannerStore((s) => s.capturePending);
   const documentsCount = useScannerStore(
     (s) => s.documents.filter((d) => d.deletedAt === undefined).length
   );
@@ -453,6 +457,18 @@ export default function EditorView() {
   useEffect(() => {
     const t = window.setTimeout(() => setZoomHintVisible(false), 6000);
     return () => window.clearTimeout(t);
+  }, []);
+
+  // FIX v12b (12.5g) — telemetría QA «editor visible»: al montar, si hay un
+  // disparo en vuelo (window.__captureT0 espejado por el trigger), el editor
+  // YA está en pantalla → __captureToEditor = disparo→editor VISIBLE. Con la
+  // navegación temprana de 12.5b esto da ≈0–100 ms (antes: ≈ la HAL). No
+  // consume el t0: el aterrizaje de la página lo usa para __captureToPage.
+  useEffect(() => {
+    const w = window as unknown as { __captureT0?: number; __captureToEditor?: number };
+    if (typeof w.__captureT0 === "number" && w.__captureT0 > 0) {
+      w.__captureToEditor = Math.round(performance.now() - w.__captureT0);
+    }
   }, []);
 
   // ── Presentación a pantalla completa (desde el header) ───────────────────
@@ -2751,6 +2767,32 @@ export default function EditorView() {
           />
         )}
       </AnimatePresence>
+
+      {/* ── FIX v12b (12.5f) — PANTALLA DE CARGA del disparo ──────────────
+          «Editor inmediato»: al disparar se navega AQUÍ antes de que la
+          foto de la HAL esté lista (capturePending). Cubre TODA la escena
+          (header, visor, toolbar) y bloquea la interacción — sin página no
+          hay nada que pan/pinchar. Mismo copy y estilo de la pill 12.3
+          (Loader2 + «Abriendo editor…»); capa opaca negra SIN animación:
+          debe existir desde el PRIMER paint del editor (sin flash de la
+          escena vacía ni de la página previa). Cuando la página aterriza
+          (12.5d) el pending limpia y el flujo normal del editor sigue. */}
+      {capturePending && (
+        <div
+          data-capture-loading="true"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black"
+        >
+          <div className="flex items-center gap-2 rounded-full bg-[#1c1c1e]/92 px-4 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.35)] ring-1 ring-inset ring-white/10 backdrop-blur-xl">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007aff]" />
+            <span className="text-[12.5px] font-medium text-white/85">
+              Abriendo editor…
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

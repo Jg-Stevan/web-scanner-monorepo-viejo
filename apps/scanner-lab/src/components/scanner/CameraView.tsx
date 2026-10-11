@@ -578,9 +578,17 @@ declare global {
      *  (invariante al FPS) — {fpsEff, windowSamples, kRequired,
      *  goodInWindow, sustainedGoodMs, triggered, reason}. */
     __lastShutter?: ShutterHealth | null;
-    /** FIX v12 (12.4) QA: ms entre el disparo (onShutter/onTrigger) y
-     *  setView("editor") — el objetivo del fix es que ≈ el de la HAL. */
+    /** FIX v12 (12.4) + v12b (12.5g) QA: ms entre el disparo
+     *  (onShutter/onTrigger) y el editor VISIBLE — lo mide el propio
+     *  EditorView al montar (con v12b navega EN el disparo → ≈0–100 ms). */
     __captureToEditor?: number;
+    /** FIX v12b (12.5g) QA: ms entre el disparo y addCapturePage — el
+     *  trabajo REAL del disparo (HAL de la cámara + probe). */
+    __captureToPage?: number;
+    /** FIX v12b (12.5g) QA: t0 espejo del disparo (lo lee EditorView al
+     *  montar para medir __captureToEditor; lo limpian el aterrizaje y
+     *  las salidas por fallo — nunca sobrevive a un disparo muerto). */
+    __captureT0?: number;
   }
 }
 
@@ -607,11 +615,15 @@ export default function CameraView() {
   const loopRef = useRef<CameraFrameLoop | null>(null);
   const processingRef = useRef(false);
 
-  /** FIX v12 (12.4) — t0 del tramo disparo→editor (telemetría QA
-   *  window.__captureToEditor): se marca en el handler del trigger
-   *  (onShutter manual / onTrigger auto) y se consume en el setView
-   *  tras el editor. La importación por galería NO dispara captura → sin
-   *  t0 → la telemetría no se sobrescribe con rutas ajenas. */
+  /** FIX v12 (12.4) + v12b (12.5g) — t0 del tramo disparo→editor
+   *  (telemetría QA): se marca en el handler del trigger (onShutter
+   *  manual / onTrigger auto) y se consume (a) por el propio EditorView
+   *  al montar → window.__captureToEditor (= disparo→editor VISIBLE,
+   *  que con v12b es ≈0–100 ms) vía el espejo window.__captureT0, y (b)
+   *  en el aterrizaje de la página → window.__captureToPage (= disparo→
+   *  addCapturePage, el trabajo real: HAL + probe). La importación por
+   *  galería NO dispara captura → sin t0 → la telemetría no se
+   *  sobrescribe con rutas ajenas. */
   const captureT0Ref = useRef(0);
   /** FIX v12b (12.5e) — guard anti-carrera de la limpieza del pending:
    *  cada disparo (auto u obturador con stream) incrementa la época y las
@@ -1039,6 +1051,8 @@ export default function CameraView() {
       const myEpoch = captureEpochRef.current;
       const abortPending = () => {
         if (captureEpochRef.current !== myEpoch) return;
+        captureT0Ref.current = 0; // FIX v12b (12.5g): el disparo murió sin página
+        window.__captureT0 = 0;
         setCapturePending(false);
         setView("camera");
       };
@@ -1116,10 +1130,19 @@ export default function CameraView() {
             quality,
           };
           addCapturePage(page);
-          // FIX v12b (12.5d) — aterrizaje (camino probe): la página YA está
-          // en el store → el editor deja de esperar. El setView("editor") de
-          // abajo SE QUEDA (idempotente aquí; es el que navega galería/demo).
+          // FIX v12b (12.5d + 12.5g) — aterrizaje (camino probe): la página
+          // YA está en el store → el editor deja de esperar. El setView
+          // ("editor") de abajo SE QUEDA (idempotente aquí; es el que navega
+          // galería/demo). Telemetría: __captureToPage = el trabajo real
+          // (HAL + probe); __captureToEditor lo midió el EditorView al montar.
           setCapturePending(false);
+          if (captureT0Ref.current > 0) {
+            window.__captureToPage = Math.round(
+              performance.now() - captureT0Ref.current
+            );
+            captureT0Ref.current = 0;
+            window.__captureT0 = 0;
+          }
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
           // FIX v12 (12.1c): el decode completo vuela en background. El
@@ -1206,9 +1229,17 @@ export default function CameraView() {
             quality,
           };
           addCapturePage(page);
-          // FIX v12b (12.5d) — aterrizaje (fallback sin probe): igual que el
-          // camino probe — la página aterrizó, el editor deja de esperar.
+          // FIX v12b (12.5d + 12.5g) — aterrizaje (fallback sin probe): igual
+          // que el camino probe — la página aterrizó, el editor deja de
+          // esperar + telemetría __captureToPage del trabajo real.
           setCapturePending(false);
+          if (captureT0Ref.current > 0) {
+            window.__captureToPage = Math.round(
+              performance.now() - captureT0Ref.current
+            );
+            captureT0Ref.current = 0;
+            window.__captureT0 = 0;
+          }
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
           // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
@@ -1454,6 +1485,8 @@ export default function CameraView() {
     const myEpoch = captureEpochRef.current;
     const abortPending = () => {
       if (captureEpochRef.current !== myEpoch) return;
+      captureT0Ref.current = 0; // FIX v12b (12.5g): el disparo murió sin página
+      window.__captureT0 = 0;
       setCapturePending(false);
       setView("camera");
     };
@@ -1748,6 +1781,9 @@ export default function CameraView() {
       // desde el DISPARO (manual) hasta setView("editor") — cubre el tramo
       // silencioso de la HAL.
       captureT0Ref.current = performance.now();
+      // FIX v12b (12.5g) — espejo para que el EDITOR mida su propia apertura
+      // (__captureToEditor) al montar, sin acoplar los dos componentes.
+      window.__captureT0 = captureT0Ref.current;
       if (canTakePhotoRef.current || status !== "live") {
         setOpeningEditor(true);
         // FIX v12b (12.5b) — «editor inmediato»: la cámara DESAPARECE en el
@@ -1786,6 +1822,11 @@ export default function CameraView() {
       // sin esto quedaba clavada hasta su tope duro de 12 s.
       if (!file) {
         setOpeningEditor(false);
+        // FIX v12b (12.5g) — el disparo nativo se canceló: el t0 muere aquí
+        // (sin esto, la PRÓXIMA navegación al editor mediría contra este t0
+        // huérfano y ensuciaría __captureToEditor con una edad falsa).
+        captureT0Ref.current = 0;
+        window.__captureT0 = 0;
         return;
       }
       const looksImage = file.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp|bmp|gif|avif)$/i.test(file.name);
@@ -2386,6 +2427,8 @@ export default function CameraView() {
         // FIX v12 (12.3 + 12.4): el tramo disparo→editor arranca AQUÍ
         // (auto-captura): pill + t0 de la telemetría __captureToEditor.
         captureT0Ref.current = performance.now();
+        // FIX v12b (12.5g) — espejo para el EditorView (ver onShutter).
+        window.__captureT0 = captureT0Ref.current;
         setOpeningEditor(true);
         // FIX v12b (12.5b) — «editor inmediato» (auto): misma navegación EN
         // el disparo que el obturador manual — el gate v9 ya decidió DISPARAR
