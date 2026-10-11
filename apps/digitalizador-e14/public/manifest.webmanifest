@@ -1,0 +1,9 @@
+{
+  "name": "Digitalizador E-14",
+  "short_name": "E-14",
+  "description": "Digitalizador de actas E-14: escaneo con score de calidad, control de mesas y transmisión verificada.",
+  "display": "standalone",
+  "background_color": "#060A0D",
+  "theme_color": "#060A0D",
+  "start_url": "./"
+}

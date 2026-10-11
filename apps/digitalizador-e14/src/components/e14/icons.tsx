@@ -5,9 +5,10 @@
 
 type IconProps = { className?: string };
 
+/** Flecha «←» (TopBar — SPEC-e14-cyber-neon §3.3: peso más grueso, strokeWidth 2.5). */
 export const ArrowLeftIcon = ({ className = "w-6 h-6" }: IconProps) => (
   <svg
-    className={`${className} stroke-current stroke-2 fill-none`}
+    className={`${className} stroke-current stroke-[2.5] fill-none`}
     strokeLinecap="round"
     strokeLinejoin="round"
     viewBox="0 0 24 24"
@@ -42,15 +43,38 @@ export const CameraNavIcon = ({ className = "w-4 h-4" }: IconProps) => (
   </svg>
 );
 
+/** ACTAS del nav — SPEC-e14-cyber-neon §9: documento OUTLINE strokeWidth 1.8
+ *  (trazo claro #C7CEDA, bien visible — no apagado). */
 export const DocumentNavIcon = ({ className = "w-4 h-4" }: IconProps) => (
-  <svg className={`${className} fill-current`} viewBox="0 0 24 24" aria-hidden>
-    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
+  <svg
+    className={`${className} stroke-current stroke-[1.8] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+    <path d="M14 2v6h6" />
+    <path d="M9 13h6" />
+    <path d="M9 17h4" />
   </svg>
 );
 
 export const GridNavIcon = ({ className = "w-4 h-4" }: IconProps) => (
   <svg className={`${className} fill-current`} viewBox="0 0 24 24" aria-hidden>
     <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
+  </svg>
+);
+
+/** RESUMEN del nav — SPEC-e14-cyber-neon §9: icono NUEVO «GridIcon» =
+ *  cuadrícula 2×2 de 4 cuadritos redondeados (7×7, rx 2, gap 3px),
+ *  viewBox exacto 17×17. */
+export const GridIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg className={`${className} fill-current`} viewBox="0 0 17 17" aria-hidden>
+    <rect x="0" y="0" width="7" height="7" rx="2" />
+    <rect x="10" y="0" width="7" height="7" rx="2" />
+    <rect x="0" y="10" width="7" height="7" rx="2" />
+    <rect x="10" y="10" width="7" height="7" rx="2" />
   </svg>
 );
 
@@ -162,9 +186,13 @@ export const SensorsIcon = ({ className = "w-3 h-3" }: IconProps) => (
   </svg>
 );
 
-export const CheckIcon = ({ className = "w-3.5 h-3.5" }: IconProps) => (
+export const CheckIcon = ({
+  className = "w-3.5 h-3.5",
+  strokeWidth = 2,
+}: IconProps & { strokeWidth?: number }) => (
   <svg
-    className={`${className} stroke-current stroke-2 fill-none`}
+    className={`${className} stroke-current fill-none`}
+    style={{ strokeWidth }}
     strokeLinecap="round"
     strokeLinejoin="round"
     viewBox="0 0 24 24"
@@ -322,5 +350,70 @@ export const MapPinIcon = ({ className = "w-4 h-4" }: IconProps) => (
   >
     <path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" />
     <circle cx="12" cy="10" r="3" />
+  </svg>
+);
+
+/** PlusCircle (D6 SPEC-rediseno-chrome-3-estados — CTA «SEGUIR ESCANEANDO»
+ *  de ENVIADA: el icono ⊕ del mock «score alto»; trazo calca el
+ *  `circle-plus` de lucide, mismo patrón SVG inline del archivo). */
+export const PlusCircleIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-2 fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M8 12h8" />
+    <path d="M12 8v8" />
+  </svg>
+);
+
+/** Plus (SPEC-e14-cyber-neon §8 — «+» del CTA «SEGUIR ESCANEANDO»:
+ *  círculo negro a la izquierda del bloque de texto, trazo grueso 3). */
+export const PlusIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-[3] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+/** X (SPEC-e14-cyber-neon §10 — ✕ de la barra de rechazo: círculo crit
+ *  sólido con X negra strokeWidth 3, espejo del check de envío). */
+export const XIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-[3] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M18 6L6 18M6 6l12 12" />
+  </svg>
+);
+
+/** UserKey (D6-bis SPEC-rediseno-chrome-3-estados Rev. 3 — botón «REVISIÓN
+ *  HUMANA»: glifo persona + llave de la imagen QR de referencia del dueño;
+ *  busto a la izquierda (cabeza circular + hombros) y llave vertical a la
+ *  derecha (anillo redondo, tallo y un diente), mismo patrón SVG inline). */
+export const UserKeyIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-2 fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <circle cx="8" cy="7.5" r="3.5" />
+    <path d="M2.5 20.5a5.5 5.5 0 0 1 11 0" />
+    <circle cx="17.5" cy="7.5" r="3" />
+    <path d="M17.5 10.5v10" />
+    <path d="M17.5 16.5h3.5" />
   </svg>
 );

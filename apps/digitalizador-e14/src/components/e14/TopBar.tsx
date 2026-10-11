@@ -1,23 +1,31 @@
 "use client";
 
 /**
- * TopBar — solo en REVISIÓN (SPEC §8): ← + título + pill de
+ * TopBar — solo en REVISIÓN (SPEC §8): ← + pill de estado + pill de
  * conexión (clic alterna EN LÍNEA/OFFLINE con toast). En ACTAS/RESUMEN el
  * título vive dentro de la propia pantalla.
  *
  * D1 (SPEC-rediseno-revision §1, heredada de SPEC-rediseno-enviada Rev. 2):
- * título DINÁMICO por estado del acta — `[● ⚠ 7.8/10 ADVERTENCIA · TÍTULO]`
- * con score real, palabra por estado y título truncado; fallback
- * «REVISIÓN DE ACTA» cuando no hay acta. Pill de conexión INTACTA.
- * ENMIENDA (SPEC-rediseno-revision): la palabra de ADVERTENCIA es
- * «ADVERTENCIA» (el mock manda sobre el «MODERADA» de Rev. 1 de la spec
- * ENVIADA) — tono warn/ámbar (coherencia semántica con breadcrumb y banner).
+ * estado dinámico por acta con score y palabra REALES (palabras aprobadas:
+ * ÓPTIMA/ENVIADA CON ADVERTENCIA/ADVERTENCIA/REVISIÓN HUMANA/RECHAZADA — el
+ * acento de «ÓPTIMA» se conserva, el mock lo omite por estilización);
+ * fallback «REVISIÓN DE ACTA» cuando no hay acta. Pill de conexión INTACTA.
+ * D1 Rev. 3 (SPEC-rediseno-chrome-3-estados): el título del acta BAJA al
+ * banner de ubicación (D2 en ReviewView) — la TopBar porta SOLO la pill
+ * BORDEADA de estado del mock.
+ * CYBER-NEÓN (SPEC-e14-cyber-neon §3): cápsula 34px bg surface-1 con anillo
+ * verde (borde 35% + glow-sm por tono de estado, §10); punto SÓLIDO 12px
+ * SIN animar (fuera animate-pulse-sync y el ▲ de warn — la estructura del
+ * mock es punto + score + palabra); score verde neón y palabra BLANCA en
+ * dos spans (13px bold tracking 0.08em, mono); botón derecho = cápsula con
+ * anillo verde + nube 18px + punto 1.5px (la función de alternar conexión
+ * queda INTACTA). Flecha «←» neón con strokeWidth 2.5 (§3.3).
  */
 import { useE14Store } from "@/lib/e14/store";
 import type { Acta, ActaStatus } from "@/lib/e14/types";
 import { ArrowLeftIcon, CloudCheckIcon, CloudOffIcon } from "./icons";
 
-/** D1: estilo por estado — icono + palabra + tono + dot (mock vinculante). */
+/** D1: estilo por estado — palabra + tono + dot + borde + glow (mock vinculante). */
 function estiloTopBar(status: ActaStatus, score: number) {
   switch (status) {
     case "ENVIADA":
@@ -25,38 +33,59 @@ function estiloTopBar(status: ActaStatus, score: number) {
       // Misma regla del consumidor canónico (ReviewView ENVIADA): ≥8 ÓPTIMA,
       // <8 ENVIADA CON ADVERTENCIA (envío observado).
       return {
-        icono: "✓",
         palabra: score >= 8 ? "ÓPTIMA" : "ENVIADA CON ADVERTENCIA",
         tono: "text-ok-tint",
         dot: "bg-ok-tint",
+        tonoBorde: "border-ok-tint/35",
+        glow: "glow-sm",
       };
     case "ADVERTENCIA":
-      // Enmienda de esta spec: «ADVERTENCIA», tono ámbar.
-      return { icono: "⚠", palabra: "ADVERTENCIA", tono: "text-warn", dot: "bg-warn" };
+      // Enmienda de la spec de revisión: «ADVERTENCIA», tono ámbar.
+      return {
+        palabra: "ADVERTENCIA",
+        tono: "text-warn",
+        dot: "bg-warn",
+        tonoBorde: "border-warn/35",
+        glow: "glow-sm-warn",
+      };
     case "RECHAZADA":
-      return { icono: "✕", palabra: "RECHAZADA", tono: "text-crit", dot: "bg-crit" };
+      return {
+        palabra: "RECHAZADA",
+        tono: "text-crit",
+        dot: "bg-crit",
+        tonoBorde: "border-crit/35",
+        glow: "glow-sm-crit",
+      };
     case "EN_REVISION_HUMANA":
-      return { icono: "⚠", palabra: "REVISIÓN HUMANA", tono: "text-warn", dot: "bg-warn" };
+      return {
+        palabra: "REVISIÓN HUMANA",
+        tono: "text-warn",
+        dot: "bg-warn",
+        tonoBorde: "border-warn/35",
+        glow: "glow-sm-warn",
+      };
   }
 }
 
-/** D1: título dinámico `[● ⚠ 7.8/10 ADVERTENCIA · ROMA CONSULADO]`. */
-function TituloDinamico({ acta }: { acta: Acta }) {
+// D1 (SPEC-rediseno-chrome-3-estados): el título del acta BAJA al banner
+// (D2 en ReviewView); la TopBar solo porta la pill de ESTADO del mock.
+/** D1 Rev. 3: pill bordeada redondeada — CYBER-NEÓN §3.1: cápsula 34px
+ *  bg surface-1, punto sólido 12px sin animar, score neón + palabra blanca. */
+function PillEstado({ acta }: { acta: Acta }) {
   const est = estiloTopBar(acta.status, acta.score);
   return (
-    <h1
-      className={`text-sm font-extrabold tracking-wider uppercase text-center flex items-center gap-1.5 min-w-0 max-w-[230px] ${est.tono}`}
+    <div
+      className={`flex items-center gap-1.5 h-[34px] px-3.5 rounded-full bg-surface-1 border font-data ${est.tonoBorde} ${est.glow}`}
+      role="status"
     >
-      <span className={`w-2 h-2 rounded-full shrink-0 animate-pulse-sync ${est.dot}`} aria-hidden />
-      <span className="shrink-0 font-mono">
-        {est.icono} {acta.score.toFixed(1)}/10
+      <span className={`w-3 h-3 rounded-full shrink-0 ${est.dot}`} aria-hidden />
+      <span className={`text-[13px] font-bold tracking-[0.08em] shrink-0 ${est.tono}`}>
+        {acta.score.toFixed(1)}/10
       </span>
-      <span className="shrink-0">{est.palabra}</span>
-      <span className="text-ink-faint shrink-0" aria-hidden>
-        ·
+      <span className="text-[13px] font-bold tracking-[0.08em] text-white shrink-0">
+        {est.palabra}
       </span>
-      <span className="truncate min-w-0">{acta.titulo}</span>
-    </h1>
+    </div>
   );
 }
 
@@ -67,7 +96,7 @@ export function TopBar() {
   const acta = useE14Store((s) => s.actaActual);
 
   return (
-    <header className="relative z-40 bg-bg/95 backdrop-blur-md border-b border-line pt-safe shrink-0">
+    <header className="relative z-40 bg-bg pt-safe shrink-0">
       <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
         <button
           aria-label="Volver al menú de escaneo"
@@ -77,24 +106,28 @@ export function TopBar() {
         >
           <ArrowLeftIcon />
         </button>
-        <div className="flex flex-col items-center min-w-0">
-          {acta ? (
-            <TituloDinamico acta={acta} />
-          ) : (
-            <h1 className="text-base font-extrabold tracking-wider text-ok-tint uppercase text-center flex items-center gap-1.5">
-              REVISIÓN DE ACTA
-            </h1>
-          )}
-          <span className="text-[10px] text-ink-faint uppercase tracking-widest font-mono">
-            E-14&nbsp;
-          </span>
-        </div>
+        {acta ? (
+          <PillEstado acta={acta} />
+        ) : (
+          <h1 className="font-data text-[13px] font-bold tracking-[0.08em] text-ok-tint uppercase text-center">
+            REVISIÓN DE ACTA
+          </h1>
+        )}
         <div className="w-11 h-11 -mr-2 flex items-center justify-center">
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-ok-ink/60 border border-ok-tint/40">
+          <div
+            className={`flex items-center gap-1.5 h-[34px] px-3 rounded-full bg-surface-1 border ${
+              online ? "border-ok-tint/40 glow-sm" : "border-warn/40 glow-sm-warn"
+            }`}
+          >
+            {online ? (
+              <CloudCheckIcon className="w-[18px] text-ok-tint" />
+            ) : (
+              <CloudOffIcon className="w-[18px] text-warn" />
+            )}
             <span
-              className={`w-2 h-2 rounded-full animate-pulse-sync ${online ? "bg-ok-tint" : "bg-warn"}`}
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${online ? "bg-ok-tint" : "bg-warn"}`}
+              aria-hidden
             />
-            {online ? <CloudCheckIcon className="w-3.5 h-3.5 text-ok-tint" /> : <CloudOffIcon className="w-3.5 h-3.5 text-warn" />}
           </div>
         </div>
       </div>

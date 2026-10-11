@@ -1,34 +1,58 @@
 "use client";
 
 /**
- * BottomNav — 3 ítems label-caps con el estilo activo v2 (C6):
- *  · modo "dark" (REVISIÓN/ESCANEAR): contenedor suave verde (bg-ok-tint/15
- *    + borde) con icono verde — pie negro translúcido + slot de CTA encima.
- *  · modo "app" (ACTAS/RESUMEN): bloque verde sólido con icono oscuro y
- *    borde superior verde — pie surface-container-lowest (como el zip).
- * D8 (SPEC-rediseno-revision §8): badge rojo (bg-crit) en ACTAS con las
- * contingencias del turno (historial REVISION_HUMANA) — oculto en 0.
+ * BottomNav — CYBER-NEÓN (SPEC-e14-cyber-neon §9): barra tipo app nativa.
+ *  · Barra `bg-nav-bg` (#0E1319) con `border-t white/5`, alto total 78px
+ *    (ítems 70px + home-indicator 130×4 white/20) y safe-area respetada
+ *    (`pb-safe`).
+ *  · Ítem ACTIVO (ESCANEAR): icono de cámara 22px dentro de ELIPSE
+ *    46×40 `rounded-[50%]` con `border-2` neón + glow-sm; label 10px
+ *    bold tracking 0.14em neón. Los demás ítems usan el MISMO contenedor
+ *    (borde transparente) para alinear los labels.
+ *  · ACTAS: documento OUTLINE (strokeWidth 1.8) + conteo real «(N)» bajo
+ *    el label (9px ink-dim) — SUSTITUYE el badge rojo puntual (el número
+ *    sigue data-driven del store: `actasSesion`); las contingencias siguen
+ *    visibles en ACTAS/RESUMEN.
+ *  · RESUMEN: `GridIcon` NUEVO = cuadrícula 2×2 de 4 cuadritos redondeados.
+ *  · Iconos inactivos: trazo claro #C7CEDA (bien visible, no apagado).
+ *  · El mock (estado ENVIADA = vista «revision») anilla ESCANEAR: la
+ *    revisión ES el flujo del escáner → `revision` cuenta como activo de
+ *    ESCANEAR (solo presentación, `navegar` intacto).
+ *  · El slot `children` (CTAs de ReviewCtas sobre el nav, modo dark) se
+ *    conserva; el modo «app» (ACTAS/RESUMEN) comparte la MISMA barra —
+ *    la capa visual es global (§2: toda la app hereda los tokens).
+ * D8 (SPEC-rediseno-revision §8, heredada): el conteo de contingencias ya
+ * NO vive aquí (sustituido por «(N)»); ResumenView/ActasView lo listan.
  */
 import type { ReactNode } from "react";
 import { useE14Store, type Vista } from "@/lib/e14/store";
-import { CameraNavIcon, DocumentNavIcon, GridNavIcon } from "./icons";
+import { CameraNavIcon, DocumentNavIcon, GridIcon } from "./icons";
 
 const ITEMS: { vista: Vista; label: string; Icon: typeof CameraNavIcon }[] = [
   { vista: "escanear", label: "ESCANEAR", Icon: CameraNavIcon },
   { vista: "actas", label: "ACTAS", Icon: DocumentNavIcon },
-  { vista: "resumen", label: "RESUMEN", Icon: GridNavIcon },
+  { vista: "resumen", label: "RESUMEN", Icon: GridIcon },
 ];
 
-/** D8: pill roja de contingencias pendientes del turno (oculta en 0). */
-function BadgeContingencias({ n }: { n: number }) {
-  if (n <= 0) return null;
+/** Contenedor de icono: MISMA caja 46×40 en todos los ítems — el activo
+ *  enciende el anillo elíptico neón, el inactivo queda transparente. */
+function IconoNav({
+  activo,
+  children,
+}: {
+  activo: boolean;
+  children: ReactNode;
+}) {
   return (
-    <span
-      aria-label="Contingencias pendientes"
-      className="absolute -top-1 -right-2 h-4 min-w-4 px-1 rounded-full bg-crit text-[9px] font-bold text-white flex items-center justify-center"
+    <div
+      className={`w-[46px] h-[40px] rounded-[50%] flex items-center justify-center ${
+        activo
+          ? "border-2 border-ok-tint glow-sm text-ok-tint"
+          : "border-2 border-transparent text-[#C7CEDA]"
+      }`}
     >
-      {n}
-    </span>
+      {children}
+    </div>
   );
 }
 
@@ -36,78 +60,49 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
   const vista = useE14Store((s) => s.vista);
   const navegar = useE14Store((s) => s.navegar);
   const actasSesion = useE14Store((s) => s.actasSesion);
-  const contingencias = useE14Store(
-    (s) => s.historial.filter((f) => f.estado === "REVISION_HUMANA").length,
-  );
-
-  if (mode === "dark") {
-    return (
-      <footer className="relative z-40 bg-bg/95 backdrop-blur-xl border-t border-line pb-safe shrink-0">
-        <div className="max-w-md mx-auto px-4 pt-3 pb-2 flex flex-col gap-2.5">
-          {children}
-          <nav className="grid grid-cols-3 pt-1 text-center border-t border-line/60" aria-label="Navegación principal">
-            {ITEMS.map(({ vista: v, label, Icon }) => {
-              const activo = vista === v;
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => navegar(v)}
-                  aria-current={activo ? "page" : undefined}
-                  className="relative flex flex-col items-center py-1 group"
-                >
-                  <div
-                    className={`w-10 h-7 rounded-lg flex items-center justify-center mb-0.5 transition-colors ${
-                      activo
-                        ? "bg-ok-tint/20 border border-ok-tint/40 text-ok-tint"
-                        : "text-ink-faint border border-transparent"
-                    }`}
-                  >
-                    <Icon />
-                  </div>
-                  <span
-                    className={`text-[10px] tracking-wider uppercase ${
-                      activo ? "text-ok-tint font-semibold" : "text-ink-faint font-medium"
-                    }`}
-                  >
-                    {v === "actas" ? `Actas (${actasSesion})` : label}
-                  </span>
-                  {v === "actas" && <BadgeContingencias n={contingencias} />}
-                </button>
-              );
-            })}
-          </nav>
-          <div className="w-32 h-1 bg-white/30 rounded-full mx-auto mt-1 mb-0.5" aria-hidden />
-        </div>
-      </footer>
-    );
-  }
 
   return (
-    <footer className="relative z-40 bg-surface-1 border-t-2 border-outline-dim pb-safe shrink-0">
-      <nav className="max-w-md mx-auto flex justify-around items-center h-16" aria-label="Navegación principal">
-        {ITEMS.map(({ vista: v, label, Icon }) => {
-          const activo = vista === v;
-          return (
-            <button
-              key={v}
-              type="button"
-              onClick={() => navegar(v)}
-              aria-current={activo ? "page" : undefined}
-              className={`relative flex flex-col items-center justify-center h-full w-full transition-colors duration-100 ${
-                activo
-                  ? "bg-ok-tint text-ok-ink border-t-2 border-ok-tint -mt-[2px]"
-                  : "text-ink-dim hover:bg-surface-5"
-              }`}
-            >
-              <Icon className="w-5 h-5" />
-              <span className="label-caps mt-1">
-                {v === "actas" ? `ACTAS (${actasSesion})` : label}
-              </span>
-              {v === "actas" && <BadgeContingencias n={contingencias} />}
-            </button>
-          );
-        })}
+    <footer className="relative z-40 shrink-0 pb-safe">
+      {/* Slot de CTAs (modo dark/REVISIÓN): sobre la barra, sobre el fondo
+          de página — la barra inferior es una franja propia (#0E1319). */}
+      {children && <div className="max-w-md mx-auto px-4 pt-1 pb-2">{children}</div>}
+      <nav
+        className="bg-nav-bg border-t border-white/5"
+        aria-label="Navegación principal"
+        data-mode={mode}
+      >
+        <div className="max-w-md mx-auto grid grid-cols-3 h-[73px]">
+          {ITEMS.map(({ vista: v, label, Icon }) => {
+            // §9: en REVISIÓN (mock ENVIADA) el anillo vive en ESCANEAR.
+            const activo = vista === v || (vista === "revision" && v === "escanear");
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => navegar(v)}
+                aria-current={activo ? "page" : undefined}
+                className="flex flex-col items-center justify-center gap-0.5"
+              >
+                <IconoNav activo={activo}>
+                  <Icon className={v === "escanear" ? "w-[22px] h-[22px]" : "w-[19px] h-[19px]"} />
+                </IconoNav>
+                <span
+                  className={`font-data text-[10px] font-bold tracking-[0.14em] uppercase ${
+                    activo ? "text-ok-tint" : "text-ink-dim"
+                  }`}
+                >
+                  {label}
+                </span>
+                {/* §9 ACTAS: conteo real «(N)» bajo el label (data-driven). */}
+                {v === "actas" && (
+                  <span className="font-data text-[9px] text-ink-dim leading-none">({actasSesion})</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {/* Home indicator (barra 78px total: 70 ítems + 4 indicador + margen). */}
+        <div className="w-[130px] h-[4px] rounded-full bg-white/20 mx-auto mb-1" aria-hidden />
       </nav>
     </footer>
   );
