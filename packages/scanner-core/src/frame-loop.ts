@@ -409,6 +409,15 @@ export class CameraFrameLoop {
       this.scoreHistory = this.scoreHistory.slice(-MAX_HISTORY);
     }
 
+    // FIX v9 — salud del disparo del frame ACTUAL: se computa ANTES de
+    // emit para que la telemetría (window.__lastShutter vía onFrame)
+    // refleje el frame que dispara y no el anterior; y se CONGELA durante
+    // el rearm post-captura para conservar la decisión que DISPARÓ (los
+    // frames residuales llegan con el historial ya vacío → few-samples).
+    if (!this.rearmNeeded) {
+      this.lastShutterHealth = computeShutterDecision(this.scoreHistory);
+    }
+
     this.emit(corners, score);
 
     // Re-encuadre: el score cayó bajo el umbral → el usuario movió/cambió
@@ -418,10 +427,6 @@ export class CameraFrameLoop {
     }
 
     // Disparo k-de-n (con cooldown post-captura del usuario: 1500 ms).
-    // FIX v9: además de la llamada booleana clásica, se expone la salud
-    // completa de la decisión (fpsEff / K dinámico / tramo continuo) para
-    // telemetría QA — invariante al FPS del dispositivo.
-    this.lastShutterHealth = computeShutterDecision(this.scoreHistory);
     if (
       !this.rearmNeeded &&
       this.scoreHistory.length > 0 &&
