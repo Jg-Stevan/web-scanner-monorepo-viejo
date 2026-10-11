@@ -1270,6 +1270,10 @@ export default function EditorView() {
 
   /** En vuelo: rotación rápida (evita doble tap concurrente). */
   const rotatingRef = useRef(false);
+  /* v13-post-23: bandera de giro animado — la arma handleRotate ANTES de
+   * mutar el estado para que el mount del nuevo key la lea (initial={false}
+   * en cualquier otro remount: cambio de página, apertura de sesión…). */
+  const rotateAnimRef = useRef(false);
   const [exportingImg, setExportingImg] = useState(false);
 
   /** Resuelve el PREVIEW actual de la página (cache de sesión o procesada
@@ -1309,6 +1313,14 @@ export default function EditorView() {
     const p = page;
     if (!p || rotatingRef.current) return;
     const newRotation = (p.rotation + 90) % 360;
+    /* v13-post-23: tick háptico del giro (patrón v13-post-11/16, no-op en
+     * escritorio/iOS) + bandera para que el remount del key anime el giro. */
+    try {
+      navigator.vibrate?.(8);
+    } catch {
+      /* sin Vibration API: silencio */
+    }
+    rotateAnimRef.current = true;
     const base = currentPreviewEntry(p);
     if (!base || !base.url) {
       // Sin base procesable → camino histórico (cambia rotation y el efecto
@@ -2156,23 +2168,46 @@ export default function EditorView() {
                    * tiene, pero no basta en Safari). */
                   className="flex h-full w-full touch-none items-center justify-center"
                 >
-                  <img
-                    ref={zoomImgRef}
-                    /* EXPERIMENTO v11: fuente única — el <img> del editor
-                     * consume preview.url (el DATO completo, PNG ≤4032),
-                     * sin copia de display. El resto del zoom/pan (ref,
-                     * touch-none, gestos, doble-tap del PR #21) intacto. */
-                    src={preview.url}
-                    alt={`Página ${activeIdx + 1} escaneada y recortada`}
-                    draggable={false}
-                    /* FIX v6 (6.3): el toque nace en el <img> — sin su
-                     * touch-none, Safari dispara pointercancel al iniciar el
-                     * arrastre y el paneo con zoom no responde al dedo (el
-                     * doble-toque funciona por no haber movimiento). La
-                     * lógica de eventos está VERIFICADA correcta en
-                     * Chromium táctil; era SOLO el touch-action. */
-                    className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
-                  />
+                  {/* v13-post-23 — Giro animado de la rotación: el wrapper se
+                   * remonta por key id:rotación SOLO cuando handleRotate arma
+                   * la bandera (initial={false} en cambio de página/apertura)
+                   * y la página «cae» girando desde -90° como en los escáneres
+                   * nativos. El overflow del stage recorta las esquinas durante
+                   * el vuelo; MotionConfig deja el giro seco (solo el fade de
+                   * opacidad) con «Reducir movimiento». Anidado DENTRO de la
+                   * capa de zoom: el giro compone con scale/x/y del pinch. */}
+                  <motion.div
+                    key={`${page?.id ?? "page"}:${page?.rotation ?? 0}`}
+                    initial={
+                      rotateAnimRef.current
+                        ? { rotate: -90, opacity: 0.45, scale: 0.92 }
+                        : false
+                    }
+                    animate={{ rotate: 0, opacity: 1, scale: 1 }}
+                    transition={{ type: "spring", stiffness: 260, damping: 26 }}
+                    onAnimationComplete={() => {
+                      rotateAnimRef.current = false;
+                    }}
+                    className="flex h-full w-full items-center justify-center"
+                  >
+                    <img
+                      ref={zoomImgRef}
+                      /* EXPERIMENTO v11: fuente única — el <img> del editor
+                       * consume preview.url (el DATO completo, PNG ≤4032),
+                       * sin copia de display. El resto del zoom/pan (ref,
+                       * touch-none, gestos, doble-tap del PR #21) intacto. */
+                      src={preview.url}
+                      alt={`Página ${activeIdx + 1} escaneada y recortada`}
+                      draggable={false}
+                      /* FIX v6 (6.3): el toque nace en el <img> — sin su
+                       * touch-none, Safari dispara pointercancel al iniciar el
+                       * arrastre y el paneo con zoom no responde al dedo (el
+                       * doble-toque funciona por no haber movimiento). La
+                       * lógica de eventos está VERIFICADA correcta en
+                       * Chromium táctil; era SOLO el touch-action. */
+                      className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+                    />
+                  </motion.div>
                   {/* Comparación antes/después: el ORIGINAL mientras se mantiene pulsado */}
                   <AnimatePresence>
                     {comparing && page && (
