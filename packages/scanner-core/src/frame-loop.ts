@@ -34,6 +34,7 @@ import {
   computeSharpnessScore,
   computeStabilityScore,
   computeTotalScore,
+  computeShutterDecision,
   detectionTimedOut,
   lumaHistogram,
   shouldTriggerShutter,
@@ -44,6 +45,7 @@ import {
   type QuadSample,
   type QualityScore,
   type ScoreSample,
+  type ShutterHealth,
 } from "./quality";
 
 export interface FrameLoopTelemetry {
@@ -70,8 +72,11 @@ export interface FrameLoopCallbacks {
   onNoDetectTimeout: () => void;
 }
 
-/** Historial acotado (evita crecimiento ilimitado en sesiones largas). */
-const MAX_HISTORY = 24;
+/** Historial acotado (evita crecimiento ilimitado en sesiones largas).
+ *  FIX v9: 24 → 36 — a 30 fps de análisis el tramo continuo bueno del
+ *  F-STAB v9 (400 ms) quedaba recortado con solo 24 entradas (0.8 s);
+ *  36 ≈ 1.2 s de margen. Costo de memoria trivial. */
+const MAX_HISTORY = 36;
 
 /** FIX v5 (5.4) — intervalo de análisis en MODO ESPERA (ms): 2 fps.
  *  El documento no está a la vista; el análisis sigue (reacciona en <1 s
@@ -85,6 +90,11 @@ export class CameraFrameLoop {
   private running = false;
   private vfcHandle = 0;
   private rafHandle = 0;
+
+  /** FIX v9 — última decisión de disparo (telemetría QA): la computeShutter
+   *  invariante al FPS deja esta salud visible para auditoría externa
+   *  (window.__lastShutter en la cámara). Nula hasta el primer frame. */
+  lastShutterHealth: ShutterHealth | null = null;
 
   // F-STAB — estabilizador de inercia (DeviceMotion) + compuerta de quietud:
   // bloquea la auto-captura mientras la mano se acomoda o tiembla (4–8 Hz).
@@ -408,6 +418,10 @@ export class CameraFrameLoop {
     }
 
     // Disparo k-de-n (con cooldown post-captura del usuario: 1500 ms).
+    // FIX v9: además de la llamada booleana clásica, se expone la salud
+    // completa de la decisión (fpsEff / K dinámico / tramo continuo) para
+    // telemetría QA — invariante al FPS del dispositivo.
+    this.lastShutterHealth = computeShutterDecision(this.scoreHistory);
     if (
       !this.rearmNeeded &&
       this.scoreHistory.length > 0 &&
