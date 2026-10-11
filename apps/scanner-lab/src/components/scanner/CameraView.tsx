@@ -578,6 +578,9 @@ declare global {
      *  (invariante al FPS) — {fpsEff, windowSamples, kRequired,
      *  goodInWindow, sustainedGoodMs, triggered, reason}. */
     __lastShutter?: ShutterHealth | null;
+    /** FIX v12 (12.4) QA: ms entre el disparo (onShutter/onTrigger) y
+     *  setView("editor") — el objetivo del fix es que ≈ el de la HAL. */
+    __captureToEditor?: number;
   }
 }
 
@@ -599,6 +602,13 @@ export default function CameraView() {
   const syntheticRef = useRef<SyntheticCamera | null>(null);
   const loopRef = useRef<CameraFrameLoop | null>(null);
   const processingRef = useRef(false);
+
+  /** FIX v12 (12.4) — t0 del tramo disparo→editor (telemetría QA
+   *  window.__captureToEditor): se marca en el handler del trigger
+   *  (onShutter manual / onTrigger auto) y se consume en el setView
+   *  tras el editor. La importación por galería NO dispara captura → sin
+   *  t0 → la telemetría no se sobrescribe con rutas ajenas. */
+  const captureT0Ref = useRef(0);
   /** FIX v4 4.2 — UN solo flujo de captura a la vez: cierra la ventana de
    *  los hasta 5 s del disparo en la que el obturador seguía activo y N
    *  toques encolaban N takePhoto() simultáneos (cascada de
@@ -1087,6 +1097,13 @@ export default function CameraView() {
           addCapturePage(page);
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
+          // FIX v12 (12.4) — telemetría QA: ms disparo→editor (camino probe).
+          if (captureT0Ref.current > 0) {
+            window.__captureToEditor = Math.round(
+              performance.now() - captureT0Ref.current
+            );
+            captureT0Ref.current = 0;
+          }
           // FIX v12 (12.1c): el decode completo vuela en background. El
           // canvas del burst (≤1920 px) jamás excede 4032 → si además hubo
           // quad nato, NI el decode diferido corre (ahorro total).
@@ -1173,6 +1190,13 @@ export default function CameraView() {
           addCapturePage(page);
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
+          // FIX v12 (12.4) — telemetría QA: ms disparo→editor (fallback).
+          if (captureT0Ref.current > 0) {
+            window.__captureToEditor = Math.round(
+              performance.now() - captureT0Ref.current
+            );
+            captureT0Ref.current = 0;
+          }
           // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
           // 2ª detección que cambiaba el recorte). Sin detección viva confiable
           // (o aspect distinto): la detección vuela en background como antes;
@@ -1687,8 +1711,10 @@ export default function CameraView() {
     // para no encolar nada mientras dura un disparo en curso.
     if (capturingRef.current || processingRef.current) return;
     if (hasStream && videoRef.current && videoRef.current.readyState >= 2) {
-      // FIX v12 (12.3): pill «Abriendo editor…» desde el DISPARO (manual)
-      // hasta setView("editor") — cubre el tramo silencioso de la HAL.
+      // FIX v12 (12.3 + 12.4): pill «Abriendo editor…» + t0 de la telemetría
+      // desde el DISPARO (manual) hasta setView("editor") — cubre el tramo
+      // silencioso de la HAL.
+      captureT0Ref.current = performance.now();
       if (canTakePhotoRef.current || status !== "live") {
         setOpeningEditor(true);
         void captureSmart();
@@ -2310,7 +2336,9 @@ export default function CameraView() {
         if (!autoRef.current) return;
         if (processingRef.current) return;
         if (cooldownRef.current > Date.now()) return;
-        // FIX v12 (12.3): el tramo disparo→editor arranca AQUÍ (auto-captura).
+        // FIX v12 (12.3 + 12.4): el tramo disparo→editor arranca AQUÍ
+        // (auto-captura): pill + t0 de la telemetría __captureToEditor.
+        captureT0Ref.current = performance.now();
         setOpeningEditor(true);
         void captureSmartRef.current();
       },
