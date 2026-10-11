@@ -622,6 +622,14 @@ export default function EditorView() {
      
   }, [mode, cacheKey, page?.original, cachePreviewEntry]);
 
+  // EXPERIMENTO v11 — telemetría QA: fuente única en el editor. El <img>
+  // del preview consume preview.url (el DATO completo) — sin copia de
+  // display. Debe leer "preview-url" durante el QA físico.
+  useEffect(() => {
+    if (mode !== "review" || !preview) return;
+    (window as unknown as { __editorSource?: string }).__editorSource = "preview-url";
+  }, [mode, preview]);
+
   // ── Comparación antes/después (mantener pulsado el preview a 1×) ──────────
   const startCompareTimer = useCallback(() => {
     if (compareTimer.current !== null) window.clearTimeout(compareTimer.current);
@@ -1756,17 +1764,15 @@ export default function EditorView() {
     const state = useScannerStore.getState();
     if (state.capturePages.length === 0) return;
     const built = state.capturePages.map((p) => {
-      // FIX v5 (5.1): la presentación también consume la copia de DISPLAY
-      // (JPEG ≤ DISPLAY_MAX_LONG_SIDE, adaptativo v10-A) cuando existe
-      // en la caché — mismo problema de
-      // decodificación del PNG gigante en el <img> a pantalla completa.
-      // FIX v6 (6.4): si NO existe, ya NO se decodifica el PNG de 4032 px
-      // (o el JPEG original de 12 MP) dentro de la transición de apertura:
-      // se pinta YA el THUMBNAIL (~160 px, placeholder con blur estilo iOS
-      // en PresentationView) y la copia de display se genera en background
-      // (cola de concurrencia 2, abajo) — al aterrizar, swap suave.
+      // EXPERIMENTO v11: la presentación consume el DATO completo — si la
+      // entry existe en la caché de previews, se arranca YA con su url
+      // (PNG ≤4032), la MISMA fuente que el editor (imposible que se vean
+      // distintas). FIX v6 (6.4): si NO existe, se pinta YA el THUMBNAIL
+      // (~160 px, placeholder con blur estilo iOS en PresentationView) y
+      // el dato completo se intercambia en background (cola de concurrencia
+      // 2, abajo — ahora SIN re-encode) — al aterrizar, swap suave.
       const entry = previewCache.current.get(capturePageKey(p));
-      const ready = entry?.displayUrl ?? null;
+      const ready = entry?.url ?? null;
       return {
         page: {
           id: p.id,
@@ -1786,9 +1792,10 @@ export default function EditorView() {
           displayPending: !ready,
         } as PresentationPage,
         key: capturePageKey(p),
-        // Fuente para la copia de display en background: el DATO procesado
-        // de la caché si existe; si la página nunca fue previsualizada, el
-        // original (mismo fallback que v5, pero SIN bloquear la apertura).
+        // Fuente para el swap en background (EXPERIMENTO v11: SIN
+        // re-encode): el DATO procesado de la caché si existe; si la
+        // página nunca fue previsualizada, el original (mismo fallback
+        // que v5/v6, pero sin bloquear la apertura).
         source: entry?.url ?? p.original,
       };
     });
@@ -1984,7 +1991,11 @@ export default function EditorView() {
                 >
                   <img
                     ref={zoomImgRef}
-                    src={preview.displayUrl ?? preview.url}
+                    /* EXPERIMENTO v11: fuente única — el <img> del editor
+                     * consume preview.url (el DATO completo, PNG ≤4032),
+                     * sin copia de display. El resto del zoom/pan (ref,
+                     * touch-none, gestos, doble-tap del PR #21) intacto. */
+                    src={preview.url}
                     alt={`Página ${activeIdx + 1} escaneada y recortada`}
                     draggable={false}
                     /* FIX v6 (6.3): el toque nace en el <img> — sin su
