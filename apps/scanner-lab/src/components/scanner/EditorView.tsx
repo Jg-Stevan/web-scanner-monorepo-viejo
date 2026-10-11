@@ -119,7 +119,8 @@ const COMPARE_HOLD_MS = 350;
 /** Preview procesado de la página en edición (modo review).
  *  FIX v5 (5.1): `url` es el DATO completo (PNG hasta 4032 px — fuente de
  *  verdad para rotación/export/guardado). `displayUrl` es la copia de
- *  PANTALLA (JPEG ≤2560) que consumen todos los <img> del editor: en
+ *  PANTALLA (JPEG ≤ DISPLAY_MAX_LONG_SIDE — adaptativo v10-A) que
+ *  consumen todos los <img> del editor: en
  *  dispositivos con poca RAM, decodificar un data URL PNG de 5–20 MB
  *  through una superficie de baja resolución → preview borroso aunque el
  *  dato esté intacto. Opcional: si falta, el <img> cae a `url`. */
@@ -239,12 +240,46 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return blob;
 }
 
-/** FIX v5 (5.1) — lado mayor máximo de la copia de DISPLAY del editor. */
-const DISPLAY_MAX_LONG_SIDE = 2560;
+/** FIX v10-A — tope de DISPLAY adaptativo por capacidad del dispositivo.
+ *  El dato de guardado sigue siendo el PNG completo (≤4032); esto solo
+ *  escala la copia de pantalla que consumen los <img> del editor.
+ *
+ *  v5 fijaba 2560 para ahorrar RAM (evitar decodificar PNG de 5–20 MB en
+ *  gama baja): correcto entonces, pero el editor quedaba más BLANDO que
+ *  la presentación al hacer zoom (2560/2.5 ≈ 1024 px efectivos vs 2016
+ *  de la presentación que usa el dato completo). Con deviceMemory se
+ *  sube el tope donde la RAM lo permite — primer paso del plan de
+ *  compatibilidad v8.
+ *
+ *  Memoria esperada por imagen activa decodificada: 2560→~19 MB ·
+ *  3200→~33 MB · 4032→~49 MB (el editor decodifica 1 activa a la vez;
+ *  los dataURL JPEG en caché pesan ~1–3 MB por página). */
+function computeDisplayMaxLongSide(): number {
+  try {
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    if (typeof nav.deviceMemory === "number" && nav.deviceMemory > 0) {
+      if (nav.deviceMemory >= 6) return 4032; // flagship/desktop: nitidez total
+      if (nav.deviceMemory >= 3) return 3200; // gama media
+      return 2560; // gama baja: protección RAM v5 intacta
+    }
+  } catch {
+    /* entorno sin navigator */
+  }
+  return 3200; // iOS/Safari no expone deviceMemory → equilibrio nitidez/RAM
+}
+
+/** FIX v10-A — tope de DISPLAY adaptativo (computado al cargar el módulo). */
+const DISPLAY_MAX_LONG_SIDE = computeDisplayMaxLongSide();
+
+// Telemetría QA (patrón existente, solo dev/QA): tope efectivo en window.
+if (typeof window !== "undefined") {
+  (window as unknown as { __displayMax?: number }).__displayMax = DISPLAY_MAX_LONG_SIDE;
+}
+
 /** FIX v5 (5.1) — calidad JPEG de la copia de display (solo pantalla). */
 const DISPLAY_JPEG_QUALITY = 0.92;
 
-/** FIX v5 (5.1) — makeDisplayUrl: re-encode JPEG ≤2560 px para PANTALLA.
+/** FIX v5 (5.1) / v10-A — makeDisplayUrl: re-encode JPEG ≤ DISPLAY_MAX_LONG_SIDE px para PANTALLA.
  *
  *  El editor mostraba el data URL PNG completo del worker (4032 px →
  *  5–20 MB de cadena): en dispositivos con poca RAM el navegador lo
@@ -253,7 +288,7 @@ const DISPLAY_JPEG_QUALITY = 0.92;
  *  store reprocesa desde page.original).
  *
  *  Esta copia es SOLO de display: ligera, SIEMPRE JPEG (un PNG de 2560
- *  seguiría pesando) y re-encodeada incluso si la fuente ya es ≤2560.
+ *  seguiría pesando) y re-encodeada incluso si la fuente ya es ≤ tope.
  *  El DATO no cambia → WYSIWYG conservado por construcción (el guardado
  *  re-procesa desde page.original con PROCESSED_MAX_LONG_SIDE=4032).
  *  Ante cualquier fallo se devuelve la url original (mejor borrosa que
@@ -519,7 +554,7 @@ export default function EditorView() {
    *  mismo presupuesto TOTAL de memoria que antes, mitades entradas → sin
    *  riesgo de jetsam en iOS con sesiones largas (runOcrAll incluido).
    *  FIX v5 (5.1): cada entrada lleva ADEMÁS su copia de display JPEG
-   *  ≤2560 (~0,3-1 MB) — +5-10 % por entrada, dentro del presupuesto. */
+   *  ≤ DISPLAY_MAX_LONG_SIDE (~0,3-3 MB) — +5-10 % por entrada, dentro del presupuesto. */
   const cachePreviewEntry = useCallback((key: string, entry: PreviewEntry) => {
     previewCache.current.set(key, entry);
     if (previewCache.current.size > 6) {
@@ -591,7 +626,7 @@ export default function EditorView() {
         });
         if (cancelled) return;
         // FIX v5 (5.1): el DATO (res.processed) se guarda intacto como
-        // fuente de verdad; la copia de DISPLAY (JPEG ≤2560) se genera
+        // fuente de verdad; la copia de DISPLAY (JPEG ≤ tope adaptativo v10-A) se genera
         // aquí — los <img> del editor nunca decodifican el PNG gigante.
         const display = await makeDisplayUrl(res.processed);
         if (cancelled) return;
@@ -1751,7 +1786,8 @@ export default function EditorView() {
     if (state.capturePages.length === 0) return;
     const built = state.capturePages.map((p) => {
       // FIX v5 (5.1): la presentación también consume la copia de DISPLAY
-      // (JPEG ≤2560) cuando existe en la caché — mismo problema de
+      // (JPEG ≤ DISPLAY_MAX_LONG_SIDE, adaptativo v10-A) cuando existe
+      // en la caché — mismo problema de
       // decodificación del PNG gigante en el <img> a pantalla completa.
       // FIX v6 (6.4): si NO existe, ya NO se decodifica el PNG de 4032 px
       // (o el JPEG original de 12 MP) dentro de la transición de apertura:
