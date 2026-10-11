@@ -1300,34 +1300,65 @@ export default function LibraryView() {
             }
           />
         ) : viewMode === "grid" ? (
-          <div key={`grid-${sort}`} className="grid grid-cols-2 gap-3 px-4 pt-1">
+          /* v13-post-34 — Grid CON secciones: las mismas bandas sticky de la
+           *  vista de lista (v13-post-25, patrón Contactos de iOS) ahora
+           *  también en cuadrícula — A-Z y Hoy·Semana·Mes agrupan las
+           *  tarjetas con su contexto FIJO al hacer scroll (antes: llanura
+           *  de tarjetas sin saber dónde empezaba cada tramo; la lista sí
+           *  lo tenía). Con búsqueda/etiqueta activa u orden manual la
+           *  cuadrícula sigue PLANA (buildListSections devuelve una sección
+           *  sin etiqueta — mismo criterio que la lista). El índice del
+           *  stagger es GLOBAL (globalRowIndex) → animación continua entre
+           *  secciones, igual que las filas. */
+          <div key={`grid-${sort}`} className="flex flex-col px-4 pt-1">
             {sort === "manual" && !selecting && (
               <button
                 type="button"
                 onClick={() => setViewMode("list")}
-                className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-white dark:bg-[#1c1c1e] px-3 py-2.5 text-[12px] font-medium text-[#007aff] shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.98]"
+                className="mb-2 flex items-center justify-center gap-1.5 rounded-xl bg-white dark:bg-[#1c1c1e] px-3 py-2.5 text-[12px] font-medium text-[#007aff] shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.98]"
               >
                 <List className="size-3.5 shrink-0" strokeWidth={2.2} aria-hidden="true" />
                 Cambia a la vista de lista para reordenar arrastrando
               </button>
             )}
-            {visible.map((doc, i) => (
-              <GridCard
-                key={doc.id}
-                doc={doc}
-                index={i}
-                ocrMatch={ocrMatches.has(doc.id)}
-                highlight={searchQuery.trim() || undefined}
-                selecting={selecting}
-                selected={selectedIds.has(doc.id)}
-                onOpen={() => openDocSmart(doc)}
-                onRename={() => openRename(doc)}
-                onDelete={() => setDeleting(doc)}
-                onTags={() => setTagDialogIds([doc.id])}
-                onToggleSelect={() => toggleSelect(doc.id)}
-                onStartSelection={() => enterSelection(doc.id)}
-              />
-            ))}
+            {listSections.map(
+              (sec, si) =>
+                sec.docs.length > 0 && (
+                  <section
+                    key={sec.key}
+                    aria-label={sec.label || "Documentos"}
+                    className={si === 0 ? "pt-0" : "pt-4"}
+                  >
+                    {sec.label && (
+                      <h2 className="sticky top-0 z-10 -mx-4 mb-2 bg-[#f2f2f7]/85 px-5 py-1.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6d6d72] backdrop-blur-md dark:bg-black/75 dark:text-[#98989e]">
+                        {sec.label}
+                        <span className="ml-1.5 text-[11px] font-medium normal-case tracking-normal text-[#8e8e93]/70 tabular-nums">
+                          {sec.docs.length}
+                        </span>
+                      </h2>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      {sec.docs.map((doc) => (
+                        <GridCard
+                          key={doc.id}
+                          doc={doc}
+                          index={globalRowIndex(doc.id)}
+                          ocrMatch={ocrMatches.has(doc.id)}
+                          highlight={searchQuery.trim() || undefined}
+                          selecting={selecting}
+                          selected={selectedIds.has(doc.id)}
+                          onOpen={() => openDocSmart(doc)}
+                          onRename={() => openRename(doc)}
+                          onDelete={() => setDeleting(doc)}
+                          onTags={() => setTagDialogIds([doc.id])}
+                          onToggleSelect={() => toggleSelect(doc.id)}
+                          onStartSelection={() => enterSelection(doc.id)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )
+            )}
           </div>
         ) : manualDragEnabled ? (
           /* Vista lista + orden MANUAL: filas reordenables con asa de arrastre
