@@ -138,6 +138,10 @@ interface ScannerState {
 
   addCapturePage: (page: CapturePage) => void;
   removeCapturePage: (id: string) => void;
+  /** Reinserta una página eliminada en su posición original (Deshacer del
+   *  editor): el índice se acota al rango actual y la sesión queda mirando
+   *  la página restaurada (editingIndex = índice). */
+  insertCapturePage: (page: CapturePage, index: number) => void;
   updateCapturePage: (id: string, patch: Partial<CapturePage>) => void;
   setEditingIndex: (i: number) => void;
   clearCaptureSession: () => void;
@@ -269,6 +273,17 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         capturePages: pages,
         editingIndex: Math.min(idx > 0 ? idx - 1 : 0, Math.max(0, pages.length - 1)),
       };
+    }),
+  // Deshacer del editor: reintegra la página (objeto intacto, con su
+  // processed/ocr si los tenía) en el índice original. El índice se acota
+  // (si entretanto se borraron otras páginas, cae al final) y la sesión
+  // queda mirando la página restaurada.
+  insertCapturePage: (page, index) =>
+    set((s) => {
+      const i = Math.max(0, Math.min(index, s.capturePages.length));
+      const pages = [...s.capturePages];
+      pages.splice(i, 0, page);
+      return { capturePages: pages, editingIndex: i };
     }),
   updateCapturePage: (id, patch) =>
     set((s) => ({

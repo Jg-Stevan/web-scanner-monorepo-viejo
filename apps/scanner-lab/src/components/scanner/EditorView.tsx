@@ -375,6 +375,7 @@ export default function EditorView() {
   const setEditingIndex = useScannerStore((s) => s.setEditingIndex);
   const updateCapturePage = useScannerStore((s) => s.updateCapturePage);
   const removeCapturePage = useScannerStore((s) => s.removeCapturePage);
+  const insertCapturePage = useScannerStore((s) => s.insertCapturePage);
   const setView = useScannerStore((s) => s.setView);
   const documentsCount = useScannerStore(
     (s) => s.documents.filter((d) => d.deletedAt === undefined).length
@@ -1478,9 +1479,16 @@ export default function EditorView() {
   /** Eliminar la página actual de la sesión (sin salir del editor).
    *  F-NOVIEW: en modo documento, si era la ÚLTIMA página el documento
    *  desaparece con ella (merge vacío → deleteDocument) y volvemos a la
-   *  biblioteca, como hacía el detalle antiguo. */
+   *  biblioteca, como hacía el detalle antiguo.
+   *  v13-post-14: con más páginas en la sesión el borrado ofrece
+   *  «Deshacer» (paridad con F-TRASH del borrado de documentos): el objeto
+   *  completo —processed/ocr incluidos— se reintegra en su índice original
+   *  vía insertCapturePage. En el caso de última página NO hay deshacer:
+   *  la sesión se desmonta (cámara/biblioteca) y el merge ya corrió. */
   const handleDeletePage = () => {
     if (!page) return;
+    const idx = editingIndex;
+    const snapshot = page; // objeto vivo: sus dataUrls siguen referenciadas
     removeCapturePage(page.id);
     if (capturePages.length <= 1) {
       if (reviewDocId) {
@@ -1496,7 +1504,17 @@ export default function EditorView() {
         toast("Página eliminada", { icon: "🗑️" });
       }
     } else {
-      toast.success("Página eliminada");
+      toast.success("Página eliminada", {
+        description: "Deshacer la devuelve a su posición con todo (texto OCR incluido).",
+        action: {
+          label: "Deshacer",
+          onClick: () => {
+            insertCapturePage(snapshot, idx);
+            toast.success("Página restaurada");
+          },
+        },
+        duration: 6000,
+      });
     }
   };
 
