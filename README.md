@@ -4,7 +4,7 @@
 
 Aplicación web de digitalización de documentos con estética **pixel-perfect de iOS**, construida como reproducción fiel de 4 diseños originales (Cámara, Editor de perspectiva, Digitalización y Biblioteca). Toda la interfaz está en **español**.
 
-![Versión](https://img.shields.io/badge/versión-6.3.0-007AFF)
+![Versión](https://img.shields.io/badge/versión-fix%20v12-007AFF)
 ![Framework](https://img.shields.io/badge/Next.js-16-black)
 ![Licencia](https://img.shields.io/badge/licencia-MIT-34C759)
 
@@ -43,15 +43,31 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 - **Filtro «Texto claro» reconstruido (F-TEXT-CLEAN)**: nuevo pipeline con LUT sigmoidal, afilado solo en bordes de tinta (el papel nunca se toca) y reconstrucción cromática que PRESERVA el color de la tinta (bolígrafos azules y sellos rojos ya no se aplastan a negro) — cero píxeles fosforitos y sin halos de croma en la frontera del papel; worker y fallback comparten la misma matemática exacta
 - **Limpieza**: eliminado artefacto ZIP de 6.5 MB committeado por error (`public/downloads/`)
 
+## 🆕 Serie FIX v4 → v12 — estabilidad, calidad y fluidez (verificada en gama baja)
+
+> Cada versión pasó auditoría independiente (diff + tsc + eslint + E2E) y QA físico del propietario antes de fusionarse.
+
+- **FIX v3 — Calidad WYSIWYG 4032 px**: un único tope técnico para TODAS las gamas — el benchmark de dispositivo fue eliminado y jamás vuelve a degradar la fuente (las imágenes se procesan y guardan siempre al máximo del lente, capadas a 4032 px por compatibilidad de canvas iOS).
+- **FIX v4 — Adiós a la cámara negra**: watchdog de salud del stream (track muerto/congelado → reinicio automático con aviso), lista negra temporal del `takePhoto()` colgado (antes congelaba el visor 5 s) y recuperación honesta con fallback al frame ZSL.
+- **FIX v5 — Editor fiel al overlay**: fin del «doble recorte» (lo que viste en vivo es lo que llega al editor: el quad del overlay nace con la página), análisis en modo espera a 2 fps (batería/CPU con el visor abierto sin documento) y flash más fiable.
+- **FIX v6 — iOS/Safari a la par**: el reparto de regímenes se decide por plataforma real (Android por UA, no por la existencia de `ImageCapture`, que Safari expone pero cuelga), chequeos de frescura del stream y cascada de apertura más robusta.
+- **FIX v7 / v7-b — Auto-captura en iPhone**: subida progresiva del stream a resolución de sensor (ideal 4032, 2 s tras abrir; regla E3 intacta: solo `ideal`) para que la auto-captura por snapshot nazca full-sensor; anillo ZSL con presupuesto de memoria (anti visor-negro en iPhones modestos) y flash verificado aplicando y leyendo el estado real.
+- **PR #21 — Pan del editor**: desplazamiento fluido de la página ampliada (pinza/doble-tap) sin saltos ni límites duros.
+- **FIX v9 — Auto-captura invariante al FPS**: ventana temporal pura (1200 ms) con K dinámico y sustain de 400 ms — dispara igual en un flagship a 15 fps de análisis que en gama baja a 3 fps (adiós a los «nunca dispara» en equipos lentos y a los falsos disparos en equipos fluidos).
+- **FIX v10 — Exportación sin trampas**: chip «Se guardará…» eliminado y migración única de la calidad de exportación a **máxima** para todos los usuarios (ya no existe selector a la baja).
+- **FIX v11 — Fuente única 4032 px (permanente)**: el editor Y la presentación a pantalla completa consumen EL MISMO dato (PNG ≤ 4032 px) — fin de la queja «la pantalla completa se ve mejor que el editor». Validado con experimento de crash en gama baja (crash-reporter de solo observación: banner + registro local) sin un solo crash → la red de seguridad de copias de display queda apagada definitivamente.
+- **FIX v12 — Fluidez de captura en gama baja («editor primero»)**: tras el disparo ya NO se decodifica la foto de 12 MP antes de navegar — un probe de ≤400 px mide calidad y aspecto, la página nace al instante y el editor abre en ~el tiempo de la HAL de la cámara (antes: 2–8 s mirando el visor). El decode completo vuela en background y solo trabaja si hace algo (cap raro >4032 o ajuste de recorte automático). Además: análisis adaptativo 400→320→280 px según la CPU medida (con histéresis, sin tocar NUNCA los datos), OpenCV precalentado en idle y pill «Abriendo editor…» durante el tramo no reducible del disparo. Telemetría QA: `__captureToEditor`, `__analysisW/Ms`, `__prewarm`.
+
 ---
 
 ## ✨ Funcionalidades
 
 ### 📷 Captura (Pantalla 1)
-- Cámara **en vivo** con `getUserMedia` — **Dual Pipeline**: preview ligero 960×540 @ 30 FPS + foto a resolución del sensor vía `ImageCapture.takePhoto()` con tope seguro por gama (Sensor Profiler)
+- Cámara **en vivo** con `getUserMedia` — **Dual Pipeline**: preview ligero 960×540 @ 30 FPS (Android) o alto 1920×1440→4032 (iPhone, fuente de la auto-captura) + foto a resolución del sensor vía `ImageCapture.takePhoto()`, capada al **tope técnico único de 4032 px** (Sensor Profiler + redes de seguridad)
 - Selección automática de la lente trasera con enfoque real y **linterna (torch)** con reintento y verificación (sondas secuenciales compatibles con Android)
 - **Detección de bordes en tiempo real** en un Web Worker (`public/scanner/detection-worker.js`, motor propio Sobel/DFS con motor OpenCV opcional) con **throttling adaptativo** contra la saturación de gama baja
-- Marco azul de detección con handles en las esquinas, indicador de estabilidad y **auto-captura** (k-de-n frames estables + **compuerta de quietud** por sensor inercial)
+- Marco azul de detección con handles en las esquinas, indicador de estabilidad y **auto-captura** (ventana temporal pura k-de-n **invariante al FPS del dispositivo** + **compuerta de quietud** por sensor inercial)
+- **«Editor primero» (v12)**: tras el disparo el editor abre de inmediato — la foto de 12 MP se decodifica en background, el análisis de bordes se adapta a la CPU (400→320→280 px) y la pill «Abriendo editor…» cubre el tramo del obturador
 - **Captura manual con buffer ZSL**: si la foto del sensor no responde, el frame pre-toque más nítido (anti tap-shock) entra como fallback premium
 - Sesión **multi-página** con contador, importación desde galería y página de demo
 
@@ -82,7 +98,7 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 - Exportar **toda la biblioteca** a un único PDF · exportar/compartir el texto OCR de un documento
 
 ### ⚙️ Ajustes
-- Tema claro/oscuro/sistema, mejora automática por captura, OCR automático y calidad PDF
+- Tema claro/oscuro/sistema, mejora automática por captura y OCR automático — la exportación es SIEMPRE en calidad máxima (sin selector, FIX v10)
 - Panel **"Tu biblioteca"** con estadísticas ampliadas (palabras OCR, papelera, páginas/doc), atajos de teclado y gestos documentados
 
 ### 🌓 Otros
@@ -146,33 +162,23 @@ Abre <http://localhost:3000> en el navegador.
 ## 📁 Estructura del proyecto
 
 ```
-├── public/
-│   ├── scanner/detection-worker.js   # Web Worker de OpenCV (detección de bordes)
-│   └── vendor/opencv-4.5.5.js        # Build core-only de OpenCV.js
-├── src/
-│   ├── app/
-│   │   ├── page.tsx                  # Shell con phone-frame (única ruta visible)
-│   │   ├── layout.tsx                # Metadata + PWA (manifest, iconos, safe-areas)
-│   │   └── globals.css               # Sistema de diseño iOS (#007AFF, #F2F2F7…)
-│   ├── components/
-│   │   ├── scanner/                  # Vistas (Camera, Editor, Library, Onboarding, Settings…)
-│   │   └── ui/                       # shadcn/ui
-│   └── lib/scanner/
-│       ├── types.ts                  # Tipos del dominio (ScanPage, Quad, filtros…)
-│       ├── store.ts                  # Store Zustand de la app (+ papelera)
-│       ├── page-store.ts             # Persistencia IndexedDB
-│       ├── image-processor.ts        # Filtros, recorte, rotación, calidad (hasta 4032 px) + importación robusta (HEIC incluido)
-│       ├── detector-client.ts        # Cliente del Web Worker de detección
-│       ├── pwa.ts                    # Registro del Service Worker + prompt de instalación
-│       ├── image-modes.ts            # Filtros por píxel (Texto claro: pipeline F-TEXT-CLEAN)
-│       ├── ocr.ts                    # OCR local (Tesseract) con salvavidas de servidor
-│       ├── text-export.ts            # Exportar/copiar/compartir texto OCR
-│       ├── quality.ts                # Métricas de calidad + compuerta sostenida del disparo
-│       ├── motion-stabilizer.ts      # Compuerta de quietud por DeviceMotion (F-STAB)
-│       ├── sensor-profiler.ts        # Tope seguro de captura por gama (F-SENSOR-PROFILER)
-│       ├── pdf-export.ts             # Exportación PDF (jsPDF)
-│       └── tags.ts / format.ts / mock-data.ts
-├── design-specs.md                   # Especificación de los 4 diseños originales
+├── apps/
+│   ├── scanner-lab/                  # ⭐ El escáner (fuente de verdad)
+│   │   ├── public/                   # worker de detección + OpenCV self-hosted
+│   │   ├── docs/                     # specs de cada FIX (v4…v12)
+│   │   └── src/
+│   │       ├── app/page.tsx          # Shell con phone-frame (única ruta visible)
+│   │       ├── components/scanner/   # Vistas (Camera, Editor, Library, Settings…)
+│   │       └── lib/                  # crash-reporter, db, utils
+│   └── digitalizador-e14/            # Subapp hermana — ⛔ NO TOCAR
+├── packages/
+│   └── scanner-core/src/             # Motor compartido: frame-loop, detector-client,
+│                                     #   image-processor (cap 4032), quality, store,
+│                                     #   page-store (IndexedDB), motion-stabilizer,
+│                                     #   sensor-profiler, ocr, pdf-export, tags…
+├── CHANGES.md                        # Registro cronológico de versiones
+├── AGENTS.md                         # REGLA DE ORO #0 (lab = fuente de verdad)
+└── design-specs.md                   # Especificación de los 4 diseños originales
 ```
 
 ---
