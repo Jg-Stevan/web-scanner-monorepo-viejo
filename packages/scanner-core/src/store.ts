@@ -142,6 +142,10 @@ interface ScannerState {
    *  editor): el índice se acota al rango actual y la sesión queda mirando
    *  la página restaurada (editingIndex = índice). */
   insertCapturePage: (page: CapturePage, index: number) => void;
+  /** Reordena las páginas de la SESIÓN (drag del carrusel de miniaturas /
+   *  Alt+←/→): `order` es la lista completa de ids en el nuevo orden y la
+   *  sesión sigue mirando a LA MISMA página (el índice viaja con su id). */
+  reorderCapturePages: (order: string[]) => void;
   updateCapturePage: (id: string, patch: Partial<CapturePage>) => void;
   setEditingIndex: (i: number) => void;
   clearCaptureSession: () => void;
@@ -284,6 +288,23 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       const pages = [...s.capturePages];
       pages.splice(i, 0, page);
       return { capturePages: pages, editingIndex: i };
+    }),
+  // Reorden del carrusel: las páginas toman el orden de `ids` y la sesión
+  // sigue mirando a la MISMA página (el editingIndex viaja con su id — sin
+  // saltos visuales al reordenar). En modo revisión el nuevo orden se
+  // persiste con el merge al salir (igual que rotar/filtrar); en sesión de
+  // captura, con el guardado.
+  reorderCapturePages: (order) =>
+    set((s) => {
+      const map = new Map(s.capturePages.map((p) => [p.id, p]));
+      const pages = order.map((id) => map.get(id)).filter((p): p is CapturePage => !!p);
+      if (pages.length !== s.capturePages.length) return {}; // lista incompleta: no-op
+      const currentId = s.capturePages[s.editingIndex]?.id;
+      const nextIdx = Math.max(
+        0,
+        pages.findIndex((p) => p.id === currentId)
+      );
+      return { capturePages: pages, editingIndex: nextIdx };
     }),
   updateCapturePage: (id, patch) =>
     set((s) => ({

@@ -36,7 +36,7 @@ import type {
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
 } from "react";
-import { AnimatePresence, animate, motion, useMotionValue } from "framer-motion";
+import { AnimatePresence, animate, motion, useMotionValue, Reorder, useDragControls } from "framer-motion";
 import { Drawer as DrawerPrimitive } from "vaul";
 import {
   Camera,
@@ -376,6 +376,7 @@ export default function EditorView() {
   const updateCapturePage = useScannerStore((s) => s.updateCapturePage);
   const removeCapturePage = useScannerStore((s) => s.removeCapturePage);
   const insertCapturePage = useScannerStore((s) => s.insertCapturePage);
+  const reorderCapturePages = useScannerStore((s) => s.reorderCapturePages);
   const setView = useScannerStore((s) => s.setView);
   const documentsCount = useScannerStore(
     (s) => s.documents.filter((d) => d.deletedAt === undefined).length
@@ -757,6 +758,44 @@ export default function EditorView() {
   );
 
   const totalPages = capturePages.length;
+
+  /* v13-post-17 — Reorden del carrusel (drag de miniaturas / Alt+←/→).
+   *  Orden LOCAL de ids: durante el drag el store NO cambia (framer solo
+   *  reordena lo visual), así que el sync usa IGUALDAD DE CONJUNTO — una
+   *  igualdad de secuencia haría snap-back en cada frame. Al soltar
+   *  (onDragEnd) se confirma con reorderCapturePages: el editingIndex
+   *  VIAJA CON LA PÁGINA ACTIVA (sin saltos). En modo revisión el nuevo
+   *  orden se persiste con el merge al salir (igual que rotar/filtrar). */
+  const [carouselOrder, setCarouselOrder] = useState<string[]>([]);
+  useEffect(() => {
+    setCarouselOrder((prev) => {
+      const next = capturePages.map((p) => p.id);
+      const sameSet =
+        prev.length === next.length && next.every((id) => prev.includes(id));
+      return sameSet ? prev : next;
+    });
+  }, [capturePages]);
+
+  /** Confirma el orden local en el store si difiere (drop del drag). */
+  const commitCarouselOrder = useCallback(
+    (order: string[]) => {
+      const storeOrder = useScannerStore
+        .getState()
+        .capturePages.map((p) => p.id);
+      const changed =
+        order.length === storeOrder.length &&
+        order.some((id, i) => id !== storeOrder[i]);
+      if (changed) {
+        reorderCapturePages(order);
+        try {
+          navigator.vibrate?.(8);
+        } catch {
+          /* sin Vibration API: silencio */
+        }
+      }
+    },
+    [reorderCapturePages]
+  );
 
   /** Coordenadas del puntero relativas al CENTRO del stage (ancla de zoom). */
   const zoomRelToCenter = useCallback((cx: number, cy: number) => {
@@ -1414,7 +1453,7 @@ export default function EditorView() {
     if (mode !== "review") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey) return;
       if (presentationOpen || ocrOpen || filtersOpen) return;
       if (zoomScale.get() > 1.01) return;
       const el = document.activeElement;
@@ -1425,6 +1464,22 @@ export default function EditorView() {
           el.tagName === "SELECT" ||
           el.isContentEditable)
       ) {
+        return;
+      }
+      // v13-post-17 — Alt+←/→: MUEVE la página actual una posición (reorden
+      // accesible por teclado — misma acción que arrastrar la miniatura;
+      // reusa las guardas de arriba: sheets cerrados, zoom 1×, sin foco en
+      // campos de texto).
+      if (e.altKey) {
+        if (capturePages.length < 2) return;
+        const dir = e.key === "ArrowRight" ? 1 : -1;
+        const to = activeIdx + dir;
+        if (to < 0 || to >= capturePages.length) return;
+        e.preventDefault();
+        const order = capturePages.map((p) => p.id);
+        const [moved] = order.splice(activeIdx, 1);
+        order.splice(to, 0, moved);
+        reorderCapturePages(order);
         return;
       }
       const nav = e.key === "ArrowRight" ? 1 : -1;
@@ -1442,7 +1497,8 @@ export default function EditorView() {
     filtersOpen,
     zoomScale,
     activeIdx,
-    capturePages.length,
+    capturePages,
+    reorderCapturePages,
     goToPage,
   ]);
 
@@ -2271,8 +2327,17 @@ export default function EditorView() {
                 transition={{ duration: 0.24, ease: [0.4, 0, 0.2, 1] }}
                 className="shrink-0 overflow-hidden"
               >
-            <div
+            {/* v13-post-17 — Reorden.Group (framer): las miniaturas se
+                reordenan manteniendo pulsada una (320 ms, patrón carrete de
+                fotos de iOS) y arrastrando; tap corto sigue siendo ir a la
+                página y deslizar sigue siendo scroll del carrusel. El sync
+                de orden vive en carouselOrder/commitCarouselOrder. */}
+            <Reorder.Group
+              as="div"
               ref={carouselRef}
+              axis="x"
+              values={carouselOrder}
+              onReorder={setCarouselOrder}
               className="no-scrollbar flex gap-2.5 overflow-x-auto px-5 pb-2 pt-1 transition-[mask-image] duration-300"
               aria-label="Páginas de la sesión"
               style={{
@@ -2280,34 +2345,22 @@ export default function EditorView() {
                 WebkitMaskImage: thumbMask,
               }}
             >
-              {capturePages.map((p, i) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  data-idx={i}
-                  aria-label={`Ir a la página ${i + 1}`}
-                  aria-current={i === activeIdx ? "true" : undefined}
-                  onClick={() => goToPage(i)}
-                  className={cn(
-                    "relative h-16 w-12 shrink-0 overflow-hidden rounded-lg border-2 transition-transform active:scale-95",
-                    i === activeIdx
-                      ? "border-[#007aff] shadow-[0_0_0_3px_rgba(0,122,255,0.25)]"
-                      : "border-white/15 opacity-70"
-                  )}
-                >
-                  <img
-                    src={p.thumbnail ?? p.original}
-                    alt=""
-                    draggable={false}
-                    style={{ filter: CSS_FILTERS[p.filter] ?? "none" }}
-                    className="h-full w-full object-cover"
+              {carouselOrder.map((id) => {
+                const i = capturePages.findIndex((p) => p.id === id);
+                if (i < 0) return null;
+                const p = capturePages[i];
+                return (
+                  <CarouselThumb
+                    key={p.id}
+                    page={p}
+                    i={i}
+                    active={i === activeIdx}
+                    onGo={() => goToPage(i)}
+                    onCommit={() => commitCarouselOrder(carouselOrder)}
                   />
-                  <span className="absolute bottom-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
-                    {i + 1}
-                  </span>
-                </button>
-              ))}
-                </div>
+                );
+              })}
+            </Reorder.Group>
               </motion.div>
             )}
           </AnimatePresence>
@@ -2933,5 +2986,135 @@ function ToolItem({
         {label}
       </span>
     </button>
+  );
+}
+
+/* ── v13-post-17 — Miniatura reordenable del carrusel ─────────────────── */
+
+/** Pulsación larga que LEVANTA la miniatura (ms) — patrón carrete de fotos
+ *  de iOS: tap = ir a la página, mantener = arrastrar para reordenar y
+ *  deslizar = scroll del carrusel (>10 px de movimiento cancela el hold). */
+const THUMB_LIFT_MS = 320;
+
+/** Ancho de la zona de auto-scroll del carrusel al arrastrar (px por lado). */
+const THUMB_AUTOSCROLL_EDGE = 56;
+
+function CarouselThumb({
+  page,
+  i,
+  active,
+  onGo,
+  onCommit,
+}: {
+  page: CapturePage;
+  i: number;
+  active: boolean;
+  onGo: () => void;
+  onCommit: () => void;
+}) {
+  const controls = useDragControls();
+  const itemRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<number | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const liftedRef = useRef(false);
+
+  const clearPress = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    startRef.current = null;
+  }, []);
+
+  return (
+    <Reorder.Item
+      as="div"
+      ref={itemRef}
+      value={page.id}
+      dragListener={false}
+      dragControls={controls}
+      onDragStart={() => {
+        liftedRef.current = true;
+        try {
+          navigator.vibrate?.(10);
+        } catch {
+          /* sin Vibration API: silencio */
+        }
+      }}
+      /* Auto-scroll del carrusel al arrastrar cerca de los bordes: framer
+       * no lo hace solo (onDrag corre a ritmo de pointermove ~60 Hz). */
+      onDrag={(_, info) => {
+        const el = itemRef.current?.parentElement;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        if (info.point.x < r.left + THUMB_AUTOSCROLL_EDGE) el.scrollLeft -= 9;
+        else if (info.point.x > r.right - THUMB_AUTOSCROLL_EDGE) el.scrollLeft += 9;
+      }}
+      onDragEnd={() => {
+        onCommit();
+        // El click sintético tras el drop NO debe navegar: el flag sobrevive
+        // un instante y el onClick se lo traga.
+        window.setTimeout(() => {
+          liftedRef.current = false;
+        }, 90);
+      }}
+      whileDrag={{
+        scale: 1.15,
+        zIndex: 30,
+        boxShadow: "0 10px 28px rgba(0,0,0,0.45)",
+        position: "relative",
+      }}
+      className="shrink-0 list-none"
+    >
+      <button
+        type="button"
+        data-idx={i}
+        aria-label={`Ir a la página ${i + 1}`}
+        aria-current={active ? "true" : undefined}
+        onClick={() => {
+          if (liftedRef.current) return;
+          onGo();
+        }}
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          clearPress();
+          startRef.current = { x: e.clientX, y: e.clientY };
+          // El evento NATIVO (la síntética puede reciclarse): framer monta
+          // su PanSession desde él cuando el hold se confirma.
+          const native = e.nativeEvent;
+          timerRef.current = window.setTimeout(() => {
+            timerRef.current = null;
+            controls.start(native);
+          }, THUMB_LIFT_MS);
+        }}
+        onPointerMove={(e) => {
+          if (!startRef.current || timerRef.current === null) return;
+          const dx = e.clientX - startRef.current.x;
+          const dy = e.clientY - startRef.current.y;
+          // >10 px: el gesto es scroll del carrusel — el hold se cancela.
+          if (dx * dx + dy * dy > 100) clearPress();
+        }}
+        onPointerUp={clearPress}
+        onPointerLeave={clearPress}
+        onPointerCancel={clearPress}
+        className={cn(
+          "relative h-16 w-12 shrink-0 overflow-hidden rounded-lg border-2 transition-transform active:scale-95",
+          active
+            ? "border-[#007aff] shadow-[0_0_0_3px_rgba(0,122,255,0.25)]"
+            : "border-white/15 opacity-70"
+        )}
+      >
+        <img
+          src={page.thumbnail ?? page.original}
+          alt=""
+          draggable={false}
+          style={{ filter: CSS_FILTERS[page.filter] ?? "none" }}
+          className="h-full w-full touch-none object-cover"
+        />
+        <span className="absolute bottom-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
+          {i + 1}
+        </span>
+      </button>
+    </Reorder.Item>
   );
 }

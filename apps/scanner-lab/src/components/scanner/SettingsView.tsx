@@ -61,6 +61,7 @@ const SHORTCUTS: { action: string; keys: string[]; hint?: string }[] = [
   { action: "Salir de la selección múltiple", keys: ["Esc"] },
   { action: "Buscar en la biblioteca", keys: ["/"] },
   { action: "Página anterior · siguiente", keys: ["←", "→"] },
+  { action: "Mover la página actual", keys: ["Alt", "←", "→"], hint: "Reordenar sin arrastre" },
   { action: "Navegar y zoom en presentación", keys: ["←", "→", "+", "−"] },
   { action: "Salir de presentación", keys: ["Esc"] },
   { action: "Buscar en el texto del documento", keys: ["⌘F"], hint: "En el tab OCR" },
