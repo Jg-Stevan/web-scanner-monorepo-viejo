@@ -6,8 +6,10 @@
  * · EN_REVISION_HUMANA.
  * SPEC-rediseno-revision-automatizada (D1–D6 + §7): ADVERTENCIA remodelada
  * al mock — TarjetaRica ELIMINADA (info redistribuida: TopBar D1 + breadcrumb
- * + chips D3 + banner D4), toolbar de 3 (D5, sin Filtros/Texto) y CTAs en
- * PILA «CONFIRMAR Y ENVIAR DE TODOS MODOS» + «REPETIR CAPTURA» (D6). El flujo
+ * + chips D3 + banner D4), toolbar UNIFICADA de 3 en TODOS los estados de
+ * corrección (D5 Rev. 2: ADVERTENCIA/RECHAZADA/EN_REVISION_HUMANA — Filtros
+ * y Texto sobreviven SOLO en OPTIMA-rescate) y CTAs en PILA «CONFIRMAR Y
+ * ENVIAR DE TODOS MODOS» + «REPETIR CAPTURA» (D6). El flujo
  * AUTOMATIZA los rechazos: repetir primero, contingencia SOLO al agotar los
  * 4 intentos (§7 — banner partido por intento, botón manual fuera).
  * UX-REAL F1/F3 (SPEC-ux-real-bn-editor, D35–D37): el visor es ÚNICO y es la
@@ -469,13 +471,23 @@ export function ReviewView() {
 
         {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor,
             shrink-0, alto CONSTANTE, anclada al borde inferior (justo
-            encima de los CTAs/BottomNav que renderiza page.tsx). D5
-            (SPEC-rediseno-revision): ADVERTENCIA pasa a toolbar de 3
-            (Recortar · Rotar 90° · Pantalla completa — Filtros y Texto
-            SALEN del mock; los sheets quedan para RECHAZADA/OPTIMA).
-            RECHAZADA y OPTIMA-real: grid-cols-5 intocado (el recorte es la
-            vía de rescate F4/D37). */}
-        {status === "ADVERTENCIA" && (
+            encima de los CTAs/BottomNav que renderiza page.tsx). D5 Rev. 2
+            (SPEC-rediseno-revision, confirmación del dueño): toolbar
+            UNIFICADA de 3 botones en TODOS los estados de corrección —
+            ADVERTENCIA, RECHAZADA y EN_REVISION_HUMANA (repetir-primero Y
+            contingencia). RECORTAR es la única acción que RE-EVALÚA
+            (aplicarRecorte re-corre pipeline+OCR+clasificación+gate SIN
+            consumir intento, F4/D37) — la cura ante una captura automática
+            o un quad mal detectado por el sistema («por si se tomó
+            automáticamente o se hizo un recorte mal hecho por el sistema,
+            se pueda editar y volver a evaluar»). Guards idénticos a los de
+            siempre — funcionan en EN_REVISION_HUMANA porque el acta trae
+            fotos reales del pipeline (D35: el gate es la foto, no la
+            fuente). Filtros y Texto SALEN de estos tres estados (Rev. 2):
+            los sheets sobreviven SOLO en OPTIMA-rescate. */}
+        {(status === "ADVERTENCIA" ||
+          status === "RECHAZADA" ||
+          status === "EN_REVISION_HUMANA") && (
           <div className="w-full grid grid-cols-3 gap-2 pt-2 shrink-0 z-20">
             <ToolbarBtn
               icon={<CropIcon />}
@@ -494,7 +506,7 @@ export function ReviewView() {
             />
           </div>
         )}
-        {(status === "RECHAZADA" || (status === "OPTIMA" && esReal)) && (
+        {(status === "OPTIMA" && esReal) && (
           <div className="w-full grid grid-cols-5 gap-2 pt-2 shrink-0 z-20">
             <ToolbarBtn
               icon={<CropIcon />}

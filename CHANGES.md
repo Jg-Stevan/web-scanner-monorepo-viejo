@@ -125,6 +125,22 @@
 
 ---
 
+## 0-septimo. E14 — Rediseño REVISIÓN Rev. 2 — toolbar unificada de 3 en todos los estados de corrección (rama `feat/e14-rediseno-revision-r2`)
+
+**Base:** `main` en `bcc52bd` (PR #20 — Rev. 1 del rediseño). SPEC: `SPEC-e14-rediseno-revision-automatizada Rev. 2` (confirmación del dueño). Petición literal: «en los score intermedio y bajo toca agregar los botones del editor (recortar, rotar y pantalla completa) por si tal vez se tomó automáticamente o se hizo un recorte mal hecho por el sistema se pueda editar y volver a evaluar».
+
+**Cambios (1 archivo de código: ReviewView.tsx):**
+
+- **D5 Rev. 2 — toolbar UNIFICADA de 3 botones** en TODOS los estados de corrección: ADVERTENCIA, RECHAZADA y EN_REVISION_HUMANA (repetir-primero Y contingencia) → `grid-cols-3` con Recortar · Rotar 90° · Pantalla completa. **Filtros y Texto salen de estos tres estados** (el dueño enumeró exactamente los 3) — los sheets NO se eliminan del app: sobreviven SOLO en OPTIMA-rescate (grid-cols-5 con los 5, EXACTO como estaba).
+- **El porqué de fondo (documentado en el código):** RECORTAR es la única acción que RE-EVALÚA — `aplicarRecorte` re-corre pipeline+OCR+clasificación+gate SIN consumir intento (F4/D37) — la cura ante una captura automática o un quad mal detectado por el sistema. En EN_REVISION_HUMANA funciona por construcción (D35: el gate es la foto, no la fuente): un recorte que produce AUTO + score ≥ 8 → pantalla OPTIMA de rescate (D20, ENVIAR A TRANSMISIÓN manual) — escapar de contingencia/reintento con un buen recorte ES la automatización buscada; si sigue sin AUTO → el recorte no consume intento y la fase permanece (intento < max → repetir-primero; intento ≥ max → contingencia). En RECHAZADA igual que siempre (AC6 PR #16: SIGUE RECHAZADA).
+- Guards intactos (Recortar: `fotoOriginal`; Rotar/Pantalla: `esReal`/`fotoProcesada`) — idénticos a los que ADVERTENCIA ya tenía.
+
+**Sin cambios (explícito):** gate AUTO (OPTIMA 10/10 auto-enviada + ADVERTENCIA confirmable), tarjeta ILEGIBLE, pill GENERICO, panel de corrección, QuadEditor, recorte-rescate (no consume intento), rotación, OCR, transmisión, historial, CTAs de todos los estados (pila D6 de ADVERTENCIA, solo-repetir §7.4 de RECHAZADA, partido por intento §7.3 de EN_REVISION_HUMANA), badge D8, packages/scanner-lab.
+
+**Verificado:** `bun run lint` 0 · `bunx tsc --noEmit` 0 · build estático 0 · `git diff main...HEAD -- apps/scanner-lab packages` VACÍO · QA navegador 390×844 (AC1-AC8 + AC4b Rev. 2) · cero errores de consola.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
