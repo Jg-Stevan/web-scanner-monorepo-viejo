@@ -141,6 +141,21 @@
 
 ---
 
+## 0-octavo. FIX v8 — Pan con zoom en el EDITOR: el iPhone no puede desplazarse (rama `fix/editor-pan-v8`)
+
+**Base:** `main` en `6a99ddf` (PR #19 v7-b fusionado y verificado). Documentación completa (diagnóstico, cambios, evidencia E2E): `apps/scanner-lab/docs/fix-editor-pan-v8.md`. Reporte: en el EDITOR el doble-toque amplía bien pero el pan con zoom es «muy difícil» en iPhone físico; la PresentationView (botón Maximize2) funciona bien. La lógica pointer del editor era correcta (verificado en Chromium táctil: pan 1:1, clamp exacto) — lo que fallaba era la capa de gestos de WebKit, el mismo patrón del 6.3.
+
+**Cambios (ambos en `EditorView.tsx`):**
+
+- **8.1 Listener `touchmove` NO pasivo en el stage de zoom** — WebKit se queda con el gesto (rubber-band residual / heurística de doble-toque) y dispara `pointercancel` a mitad del pan aunque toda la cadena tenga `touch-none`; el listener con `preventDefault` lo mata (idéntico al 6.3 de la presentación, que el usuario confirma funcional en su iPhone). El efecto depende de `[mode]` porque el stage es condicional: se desmonta al entrar en «Ajustar bordes» y remonta al volver — un `useEffect([])` solo adjuntaría la primera vez.
+- **8.2 `onPointerLeave` solo para mouse** — iOS dispara `pointerleave` espurios a mitad del pan (recomposite del chip de zoom `AnimatePresence` / capa `will-change`) y el handler `onPointerLeave={onStagePointerUp}` lo interpretaba como fin de gesto, matando el paneo con el dedo aún apoyado. Ahora `if (e.pointerType === "mouse")` — el escritorio conserva el comportamiento, el táctil ya no muere. `onPointerCancel` queda INTACTO (recupera los gestos que WebKit sí cancela).
+
+**NO cambiado (lista dura):** `clampZoomPan` (incluido el tope cuando la página es más angosta que el stage — matemática correcta, no es bug), lógica pointer del stage, swipe F-SWIPE, hold-comparar, doble-toque 1×↔2,5×, pinza, PresentationView COMPLETA (6.2/6.3 intactos), todo v7/v6/v5/v4/v3, `PROCESSED_MAX_LONG_SIDE=4032`, reglas E3, watchdog.
+
+**Verificado:** `tsc` = 0, `eslint` = 0, `git diff main...HEAD | grep -c digitalizador-e14` = 0, E2E Chromium táctil (dev efímero :3005, CDP `Input.dispatchTouchEvent`): doble-toque → `scale(2.5)`; pan 40px→`translateX(−40px)` y 150px→`translateY(150px)` exactos (1:1); clamp en el tope sin saltos; swipe a 1× navega páginas y el vertical no hace nada; tras entrar a «Ajustar bordes» y volver el listener 8.1 re-adjunta (depende de `mode`); 0 errores de consola nuevas. QA físico iPhone CONFIRMADO por el dueño vía Vercel Preview (PR #21).
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
