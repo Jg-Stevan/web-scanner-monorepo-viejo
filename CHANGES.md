@@ -174,6 +174,22 @@
 
 **Verificado:** `bun run lint` EXIT=0 · `bunx tsc --noEmit` EXIT=0 · build estático `BUILD_STATIC=1 NEXT_PUBLIC_BASE_PATH=/web-scanner` EXIT=0 (3/3 páginas) · `git diff main...HEAD -- apps/scanner-lab packages` VACÍO · vaciado `rg "exportarPdf|exportarPdfActa|buildDocPdf|EXPORTAR PDF" apps/digitalizador-e14/src` = **0** · `rg "pdf-export" apps/scanner-lab/src` = 2 (EditorView, LibraryView — el módulo vive) · bundle: «SEGUIR ESCANEANDO»/«Ver acta a pantalla completa»/«fila-estado» presentes, «EXPORTAR PDF»/«PDF GENERADO» ausentes, piso score-10 intacto (`identificada&&(r=Math.max(r,10))`) · QA navegador 390×844 (AC1-AC8) — ver worklog del repo.
 
+## 0-noveno-bis. FIX v9 — Auto-captura invariante al FPS del dispositivo (rama `fix/auto-shutter-fps-v9`)
+
+**Base:** `main` en `8eb4434` (PR #21 v8 fusionado y con QA físico confirmado). Reporte de campo: en dispositivos con video muy fluido la auto-captura NUNCA dispara, como si la app creyera que el usuario «se mueve muy rápido»; en equipos medios funciona normal.
+
+**Causa raíz:** `shouldTriggerShutter` mezclaba «número de muestras» con «tiempo». La compuerta F-STAB vieja exigía que las últimas 6 muestras ocuparan ≥ 260 ms — pero a 30 fps de análisis (throttle adaptativo F-PERF SUBE los fps en equipos rápidos) 6 muestras = 200 ms < 260 → **bloqueado SIEMPRE**. La velocidad de llegada de las muestras depende del FPS del dispositivo, NO de la velocidad del usuario.
+
+**Cambios:**
+
+- **9.1 `quality.ts` — `computeShutterDecision` (exportada) + `shouldTriggerShutter` como wrapper** (misma firma, no rompe consumidores). Decisión en TIEMPO puro + proporción: última buena → ventana temporal completa de 1200 ms (sin `slice(-6)`) → K dinámico `max(2, ceil(windowSamples × 0.7))` → F-STAB v9 = tramo CONTINUO bueno hacia atrás con tolerancia de hueco `max(1.6 × intervaloMedio, 350)` ms → sostenimiento `SHUTTER_SUSTAIN_MS` 260 → **400 ms**. Intactos: `SHUTTER_SCORE=0.8`, `SHUTTER_SPAN_MS=1200`, `CAPTURE_COOLDOWN_MS`, `NO_DETECT_TIMEOUT_MS`, `STABILITY_*`. Eliminadas `SHUTTER_K`/`SHUTTER_N` (0 referencias).
+- **9.2 `frame-loop.ts` — `MAX_HISTORY` 24 → 36** (a 30 fps el tramo continuo de 400 ms quedaba recortado con 24 entradas) + campo público `lastShutterHealth` computado ANTES de `emit` y CONGELADO durante el rearm post-captura (la telemetría refleja el frame que DISPARÓ, no los frames residuales con historial vacío).
+- **9.3 `CameraView.tsx` — telemetría QA silenciosa** `window.__lastShutter` (`{fpsEff, windowSamples, kRequired, goodInWindow, sustainedGoodMs, triggered, reason}`), mismo patrón que `__cameraTelemetry`. Sin UI.
+
+**NO cambiado (lista dura):** `apps/digitalizador-e14/` (0 archivos), `EditorView.tsx`, `PresentationView.tsx`, `detection-worker.js`, calidad de guardado (`PROCESSED_MAX_LONG_SIDE=4032`, `sensor-profiler`, `dispatchBestFrame`, `upgradeStreamResolution`, `IDEAL_PREVIEW_*`), reglas E3, watchdog, F-ZSL.
+
+**Verificado:** tabla unitaria U1–U8 en Node (bun) con historiales sintéticos — 9/9 PASS: U1 30fps estable dispara (antes bloqueado), U4 gama baja 3fps dispara con K dinámico=3 (bug latente corregido), **U5 barrido rápido SIGUE bloqueado (`sustain`, 165 ms < 400) — regresión crítica cubierta**, U6 `last-bad`, U7 intercaladas no dispara, U8 pico de ruido aislado tolerado (550 ms ≥ 400). E2E sandbox (Playwright + emulación iPhone 14, escena sintética de documento estable vía override de getUserMedia con canvas 1440×1920 @ 30 fps): **CPU 1× dispara** (`fpsEff` 12.3–14.7 — tope del pipeline F-PERF 65 ms ≈ 15 fps, `sustainedGoodMs` 459, editor con página añadida, 0 errores) y **CPU 6× también dispara** (`fpsEff` 2.43, `windowSamples` 3, K dinámico 3, `sustainedGoodMs` 964, editor, 0 errores) — invarianza al FPS demostrada de 2.4 a ~15 fps de análisis. `tsc --noEmit` = 0 en `scanner-core` y `scanner-lab`; `eslint` = 0. Diff limitado a `quality.ts`, `frame-loop.ts`, `CameraView.tsx` (solo telemetría) + este CHANGES.md.
+
 ---
 
 ## Resumen de commits

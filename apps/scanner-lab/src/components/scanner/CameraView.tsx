@@ -60,7 +60,7 @@ import {
   SyntheticCamera,
   type FrameLoopTelemetry,
 } from "@jg-stevan/scanner-core/frame-loop";
-import { SHUTTER_SCORE } from "@jg-stevan/scanner-core/quality";
+import { SHUTTER_SCORE, type ShutterHealth } from "@jg-stevan/scanner-core/quality";
 import {
   buildCappedPhotoSettings,
   clampBlobToSafeCap,
@@ -547,6 +547,10 @@ declare global {
   interface Window {
     /** QA: telemetría del frame loop desde la consola. */
     __cameraTelemetry?: FrameLoopTelemetry;
+    /** FIX v9 QA: última decisión de disparo del obturador automático
+     *  (invariante al FPS) — {fpsEff, windowSamples, kRequired,
+     *  goodInWindow, sustainedGoodMs, triggered, reason}. */
+    __lastShutter?: ShutterHealth | null;
   }
 }
 
@@ -2026,6 +2030,9 @@ export default function CameraView() {
         // por debajo del umbral del watchdog (4 s) → sin falsos positivos.
         lastFrameAtRef.current = performance.now();
         window.__cameraTelemetry = t;
+        // FIX v9 QA: salud del disparo (fpsEff / K dinámico / tramo
+        // continuo) — telemetría silenciosa, sin UI.
+        window.__lastShutter = loop.lastShutterHealth;
         // F-ZSL: alimenta el buffer Best-Shot (~5 Hz) — cubre la ventana
         // pre-tap de 80–450 ms para la captura manual sin tap shock.
         feedRingFromVideo();
