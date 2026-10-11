@@ -172,6 +172,22 @@
 
 ---
 
+## 0-undecimo. EXPERIMENTO v11 — Crash-test fuente única, SIN red de seguridad (rama `fix/crash-test-fuente-unica-v11`)
+
+**Base:** `fix/editor-display-quality-v10` en `4f285f1` (PR #25 v10, apilado). Documentación completa: `apps/scanner-lab/docs/fix-crash-test-v11.md`. **Pregunta del experimento:** ¿un dispositivo gama baja crashea si TODO (editor, presentación, zoom) consume el dato completo (PNG ≤4032) sin ninguna copia de pantalla, sin degradación por tier y sin red de seguridad? Decisión del dueño: mientras dure el experimento, **todos los dispositivos ven el mismo dato** (el de 4032). Si no crashea → permanente (más simple, mejor calidad percibida) y las fases de degradación del plan v8 se archivan; si crashea → protección SOLO en el punto exacto. La «red de seguridad» era la copia de pantalla `displayUrl` (JPEG re-encodeado, v5 5.1) — la única protección de datos activa. Beneficio inmediato: editor y presentación consumen exactamente la misma fuente → imposible que se vean distintas (la queja «el editor se ve peor que pantalla completa» desaparece por construcción). SUSTITUYE a v10-C (HIFI condicional por tier): fuente única incondicional, sin `deviceMemory`.
+
+**Cambios:**
+
+- **11.1+11.2 `EditorView.tsx` — generación de `displayUrl` APAGADA (commit `cbd166e`):** G1 lazy-fill eliminado (la entrada sembrada/rotada se pinta YA con su url completa) · G2 build inicial sin re-encode (entry solo con `url/w/h/engine`) · G3 cola de presentación (concurrencia 2, que SE MANTIENE) con swap directo al dato, sin siembra en caché · `computeDisplayMaxLongSide()` → `return 4032` incondicional (tiers v10-A aparcados) → `window.__displayMax === 4032` en todos los dispositivos · `makeDisplayUrl` y `PreviewEntry.displayUrl` NO borrados (seam de reversión con un commit) con contador de verificación `window.__displayUrlCalls` (debe quedar en 0 — prueba de que la red de seguridad no corre).
+- **11.3+11.4 `EditorView.tsx` — fuente única (commit `36b5eac`):** C1 editor `src={preview.displayUrl ?? preview.url}` → `src={preview.url}` (zoom/pan del PR #21 intacto) · C2 presentación `entry?.displayUrl ?? null` → `entry?.url ?? null` (si la entry existe arranca YA con el dato; si no, placeholder thumbnail + swap v6.4 intacto, sin re-encode) · telemetría `window.__editorSource = "preview-url"`.
+- **11.5 `lib/crash-reporter.ts` NUEVO + `page.tsx` (SOLO observación — NO es red de seguridad):** `installCrashReporter()` idempotente escucha `error` + `unhandledrejection`; PROHIBIDO y ausente: preventDefault/stopPropagation/reintentos/resets/fetch/interceptar console. Registro `{ts, type, message ≤300, source/line/col, stack ≤2000, view, ua, deviceMemory, hardwareConcurrency, heapMB}` → anillo `localStorage["scannerlab_crash_ring"]` (máx 10) + `window.__crashLog`. Banner fijo arriba (equivalente `fixed top-0 inset-x-0 z-[9999] bg-red-900`, estilos INLINE para pintar incluso sin CSS) «⛔ ERROR CAPTURADO — toma captura de pantalla» + botón Cerrar que solo oculta; un banner a la vez. Instalación module-level en `page.tsx` + `window.__scannerView` sincronizado con la vista activa.
+
+**NO cambiado (lista dura):** `apps/digitalizador-e14/` (0 archivos), `PROCESSED_MAX_LONG_SIDE=4032` y exportación SIEMPRE máxima (v10-B intacto: chip eliminado + migración), pan del editor (PR #21: gestos, `touch-none`, doble-tap), reglas E3, recuperación de stream v4/v6/v7 (watchdog, `recoverStream`, latido rVFC), LRU de `previewCache` en 6 (NO reducida — medir la presión real ES el experimento), miniaturas ~160 px, fallback `frame-loop` solo bajo `__scene` QA. **⛔ APARCADO:** plan v8 Fases 0/1/3/4 (la Fase 2 = v9 vive en su PR #23).
+
+**Verificado:** `tsc --noEmit` = 0 · `eslint` = 0 · sin `next build` · `grep displayUrl` → solo tipo + `makeDisplayUrl` (sin llamadas activas) + comentarios «EXPERIMENTO v11»; **cero** lecturas `preview.displayUrl ??`/`entry?.displayUrl ??` · diff limitado a `apps/scanner-lab` (EditorView.tsx, page.tsx, crash-reporter.ts nuevo, CHANGES.md, docs/fix-crash-test-v11.md). Telemetría en 3 entornos + banner TEST-CRASH + escenarios A–D del crash-test: pendientes de QA físico por Vercel Preview (PR ABIERTO SIN FUSIONAR).
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
