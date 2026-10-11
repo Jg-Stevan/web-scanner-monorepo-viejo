@@ -129,30 +129,41 @@ export function SegmentedBar({
  *  ToolItem del lab (Fuente: apps/scanner-lab/src/components/scanner/
  *  EditorView.tsx L2205-2210 — `active={page?.ocrDone === true}`, L2208):
  *  cuando active, solo cambia el TINTE (borde + texto + fondo 10%) —
- *  alto/tamaño IDÉNTICOS (criterio D38 sigue vigente). */
+ *  alto/tamaño IDÉNTICOS (criterio D38 sigue vigente).
+ *  D5 (SPEC-rediseno-chrome-3-estados Rev. 3): prop opcional `tone` —
+ *  con "crit" el botón se pinta ROJO SÓLIDO (bg-crit border-crit
+ *  text-white, mock 1) en lugar del estilo neutro — SOLO lo usa
+ *  «Recortar» en RECHAZADA. */
 export function ToolbarBtn({
   icon,
   label,
   onClick,
   active = false,
+  tone,
 }: {
   icon: ReactNode;
   label: string;
   onClick?: () => void;
   /** D39/F-OCR: distingue el botón cuando ya hay texto reconocido. */
   active?: boolean;
+  /** D5 Rev. 3: «Recortar» rojo sólido en RECHAZADA (mock 1). */
+  tone?: "crit";
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={`flex-1 min-w-0 min-h-11 h-11 px-2.5 py-1.5 rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs font-semibold tracking-wide border ${
-        active
-          ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
-          : "bg-surface-4/90 hover:bg-surface-5 border-outline-dim/40 text-ink"
+        tone === "crit"
+          ? "bg-crit border-crit text-white"
+          : active
+            ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
+            : "bg-surface-4/90 hover:bg-surface-5 border-outline-dim/40 text-ink"
       }`}
     >
-      <span className="text-ok-tint shrink-0 flex items-center justify-center">{icon}</span>
+      <span className={`${tone === "crit" ? "text-white" : "text-ok-tint"} shrink-0 flex items-center justify-center`}>
+        {icon}
+      </span>
       <span className="truncate">{label}</span>
     </button>
   );
@@ -161,6 +172,8 @@ export function ToolbarBtn({
 /**
  * Botón CTA grande del footer (h-12, rounded-xl).
  * variant: "ok" (verde sólido + glow) · "warn" (ámbar) · "crit" (rojo) · "outline" (oscuro) · "outline-crit"
+ * · "outline-warn" (D6-bis SPEC-rediseno-chrome-3-estados Rev. 3 — botón
+ * «REVISIÓN HUMANA»: ámbar contorneado, tono del candado del mock).
  */
 export function PrimaryBtn({
   variant = "ok",
@@ -170,7 +183,7 @@ export function PrimaryBtn({
   ariaLabel,
   disabled = false,
 }: {
-  variant?: "ok" | "warn" | "crit" | "outline" | "outline-crit";
+  variant?: "ok" | "warn" | "crit" | "outline" | "outline-crit" | "outline-warn";
   onClick?: () => void;
   icon?: ReactNode;
   children: ReactNode;
@@ -186,6 +199,7 @@ export function PrimaryBtn({
     crit: "bg-crit hover:bg-crit/90 active:bg-crit-deep text-white shadow-lg shadow-crit/30",
     outline: "bg-surface-2 hover:bg-hover text-ink-dim border border-outline-dim",
     "outline-crit": "bg-white/5 hover:bg-white/10 text-ink-dim border border-crit/30",
+    "outline-warn": "bg-transparent hover:bg-warn/10 text-warn border border-warn/60",
   };
   return (
     <button

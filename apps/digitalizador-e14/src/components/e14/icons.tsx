@@ -324,3 +324,40 @@ export const MapPinIcon = ({ className = "w-4 h-4" }: IconProps) => (
     <circle cx="12" cy="10" r="3" />
   </svg>
 );
+
+/** PlusCircle (D6 SPEC-rediseno-chrome-3-estados — CTA «SEGUIR ESCANEANDO»
+ *  de ENVIADA: el icono ⊕ del mock «score alto»; trazo calca el
+ *  `circle-plus` de lucide, mismo patrón SVG inline del archivo). */
+export const PlusCircleIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-2 fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M8 12h8" />
+    <path d="M12 8v8" />
+  </svg>
+);
+
+/** UserKey (D6-bis SPEC-rediseno-chrome-3-estados Rev. 3 — botón «REVISIÓN
+ *  HUMANA»: glifo persona + llave de la imagen QR de referencia del dueño;
+ *  busto a la izquierda (cabeza circular + hombros) y llave vertical a la
+ *  derecha (anillo redondo, tallo y un diente), mismo patrón SVG inline). */
+export const UserKeyIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-2 fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <circle cx="8" cy="7.5" r="3.5" />
+    <path d="M2.5 20.5a5.5 5.5 0 0 1 11 0" />
+    <circle cx="17.5" cy="7.5" r="3" />
+    <path d="M17.5 10.5v10" />
+    <path d="M17.5 16.5h3.5" />
+  </svg>
+);

@@ -78,6 +78,13 @@ interface E14Store {
   analisisCompletado: () => void;
   enviarActa: () => void;
   repetirFoto: () => void;
+  /** D6-bis (SPEC-rediseno-chrome-3-estados Rev. 3): escalación MANUAL a
+   *  revisión humana — el botón «REVISIÓN HUMANA» (solo ADVERTENCIA/RECHAZADA,
+   *  habilitado tras rechazos repetidos) entrega el acta al sabor contingencia
+   *  EXACTO del camino automático (§7.5): status EN_REVISION_HUMANA +
+   *  intento = maxIntentos (cede el ciclo) + fila de historial + toast.
+   *  Sin re-escaneo: NO pasa por el gate ni por el pipeline. */
+  escalarRevisionHumana: () => void;
   /**
    * Panel de corrección (SPEC-cabecera-clasificacion §5): persiste la
    * ubicación corregida por el operador como nivel AUTO-manual, archiva su
@@ -473,6 +480,24 @@ export const useE14Store = create<E14Store>((set, get) => {
       const { actaActual } = get();
       const intento = (actaActual?.intento ?? 0) + 1;
       void get().dispararEscaneo(intento);
+    },
+
+    escalarRevisionHumana: () => {
+      const acta = get().actaActual;
+      // Guard del dueño: SOLO score intermedio (ADVERTENCIA) y bajo
+      // (RECHAZADA). ENVIADA/OPTIMA/EN_RH: no-op.
+      if (!acta || (acta.status !== "ADVERTENCIA" && acta.status !== "RECHAZADA")) return;
+      const fila: HistorialRow = {
+        id: `h-${Date.now()}`,
+        titulo: tituloPaginaActual(),
+        estado: "REVISION_HUMANA",
+        hora: bridge.horaHistorial(),
+      };
+      set({
+        actaActual: { ...acta, status: "EN_REVISION_HUMANA", intento: acta.maxIntentos },
+        historial: [fila, ...get().historial],
+      });
+      notificar("warn", "ENVIADA A CONTINGENCIA", "Un auditor validará esta acta.");
     },
 
     guardarUbicacion: (clasificacion) => {
