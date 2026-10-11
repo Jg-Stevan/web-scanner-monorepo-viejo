@@ -25,6 +25,9 @@ import EditorView from "@/components/scanner/EditorView";
 import SettingsView from "@/components/scanner/SettingsView";
 import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
+// v13-post-15: píldora «Sin conexión» (informativa, no bloqueante) — vive en
+// el marco, fuera del AnimatePresence de vistas (no se re-monta al navegar).
+import OfflineNotice from "@/components/scanner/OfflineNotice";
 import { installCrashReporter } from "@/lib/crash-reporter";
 
 // EXPERIMENTO v11 — crash reporter (SOLO observación): instalar lo más
@@ -171,6 +174,10 @@ export default function Home() {
         ].join(" ")}
       >
         <main className="relative flex min-h-0 flex-1 flex-col">
+          {/* Aviso de red (v13-post-15): flotando sobre CUALQUIER vista,
+              incluida cámara/editor a pantalla completa — z-30 sobre el
+              contenido, bajo los toasts de sonner. */}
+          <OfflineNotice />
           {/* Onboarding de primera ejecución — tapa las vistas dentro del
               frame y hace fade-out al completarse (transición a biblioteca). */}
           <AnimatePresence>
