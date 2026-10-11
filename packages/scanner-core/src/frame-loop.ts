@@ -23,7 +23,7 @@
 import type { Quad } from "./types";
 import { MotionStabilizer } from "./motion-stabilizer";
 import {
-  computeProcessDims,
+  PROCESS_LONG_SIDE,
   getScannerWorker,
   type ScannerWorkerClient,
 } from "./detector-client";
@@ -83,6 +83,10 @@ const MAX_HISTORY = 36;
  *  cuando el papel aparece) pero deja de quemar CPU/GPU a 5–15 fps. */
 const STANDBY_ANALYSIS_INTERVAL_MS = 500;
 
+/** FIX v12 (12.2a) — ventana móvil de duraciones de análisis (muestras)
+ *  que alimenta la mediana del control adaptativo de resolución. */
+const ANALYSIS_WINDOW = 10;
+
 export class CameraFrameLoop {
   private video: HTMLVideoElement | null = null;
   private cb: FrameLoopCallbacks | null = null;
@@ -110,6 +114,21 @@ export class CameraFrameLoop {
   // v4 4.3, que vigila readyState/muted del TRACK, no debe confundirse:
   // solo el análisis baja de régimen, el sensor sigue entregando frames).
   private idleMode = false;
+
+  // FIX v12 (12.2a) — resolución de análisis ADAPTATIVA. Antes el bucle
+  // remuestreaba SIEMPRE a 400 px; en gama baja cada análisis (bitmap +
+  // OpenCV WASM) tarda 200–400 ms → 2,5–5 fps → overlay entrecortado y
+  // competencia de CPU con el video. La mediana de la ventana móvil
+  // (ANALYSIS_WINDOW muestras) decide el lado mayor: ≤200 ms → 400 px;
+  // >200 ms → 320 px; >300 ms → 280 px (piso), con HISTÉRESIS (bajar tras
+  // 1 ventana mala, subir tras 3 buenas consecutivas — anti-oscilación).
+  // SOLO el ANÁLISIS cambia, NUNCA los datos: los corners salen
+  // normalizados 0–1 (el overlay se dibuja igual) y el QUAD de guardado
+  // nace del overlay vivo (bornQuad) o de la re-detección full-res en
+  // background del handler de captura — exactamente igual que hoy.
+  private analysisLongSide = PROCESS_LONG_SIDE; // arranca en 400 (clase actual)
+  private analysisMsRing: number[] = [];
+  private goodWindowsUp = 0;
 
   private quadHistory: QuadSample[] = [];
   private scoreHistory: ScoreSample[] = [];
@@ -159,6 +178,11 @@ export class CameraFrameLoop {
     // F-PERF: estado del throttle adaptativo limpio en cada sesión de cámara.
     this.lastTickMs = 0;
     this.dynamicThrottleMs = 65;
+    // FIX v12 (12.2a): la resolución adaptativa también arranca limpia
+    // (400 px + ventana vacía) — mismo patrón que el throttle por sesión.
+    this.analysisLongSide = PROCESS_LONG_SIDE;
+    this.analysisMsRing = [];
+    this.goodWindowsUp = 0;
     // FIX v5 (5.4): cada sesión de loop arranca ACTIVA (sin espera heredada).
     this.idleMode = false;
     this.running = true;
@@ -265,7 +289,16 @@ export class CameraFrameLoop {
 
     const w = video.videoWidth;
     const h = video.videoHeight;
-    const dims = computeProcessDims(w, h);
+    // FIX v12 (12.2a) — resolución de análisis ADAPTATIVA: el lado mayor
+    // deja de ser fijo 400 px (ver el bloque de campos de clase). El
+    // remuestreo conserva el aspecto del video (mismo contrato que
+    // computeProcessDims — solo cambia el lado mayor).
+    const s = this.analysisLongSide / Math.max(w, h);
+    const dims = {
+      w: Math.max(1, Math.round(w * s)),
+      h: Math.max(1, Math.round(h * s)),
+    };
+    const analysisT0 = performance.now();
 
     createImageBitmap(video, {
       resizeWidth: dims.w,
@@ -286,6 +319,9 @@ export class CameraFrameLoop {
             this.processed += 1;
             this.fpsWindow.push(now);
             this.fpsWindow = this.fpsWindow.filter((t) => now - t <= 1000);
+            // FIX v12 (12.2a) — duración REAL del análisis (bitmap +
+            // worker): alimenta la mediana que decide la resolución.
+            this.noteAnalysisMs(performance.now() - analysisT0);
             this.handleResult(out, hist, dims.w, dims.h, now);
           })
           .catch(() => {
@@ -375,11 +411,20 @@ export class CameraFrameLoop {
     this.firstAttemptMs = now;
 
     // Quad en px de proceso (contrato de stability: 400-clase).
+    // FIX v12 (12.2a): la referencia es FIJA (lado mayor 400) aunque la
+    // resolución de análisis baje a 320/280 px — el historial de estabilidad
+    // NUNCA mezcla escalas: bajar la resolución NO es un salto del documento
+    // (una cambio de régimen a mitad de sesión no degradaría el score). A
+    // 400 px de análisis el mapeo es BIT a bit el de siempre (refScale=1).
+    const long = Math.max(procW, procH) || 1;
+    const refScale = PROCESS_LONG_SIDE / long;
+    const refW = procW * refScale;
+    const refH = procH * refScale;
     const quadPx: Quad = [
-      { x: corners[0]!.x * procW, y: corners[0]!.y * procH },
-      { x: corners[1]!.x * procW, y: corners[1]!.y * procH },
-      { x: corners[2]!.x * procW, y: corners[2]!.y * procH },
-      { x: corners[3]!.x * procW, y: corners[3]!.y * procH },
+      { x: corners[0]!.x * refW, y: corners[0]!.y * refH },
+      { x: corners[1]!.x * refW, y: corners[1]!.y * refH },
+      { x: corners[2]!.x * refW, y: corners[2]!.y * refH },
+      { x: corners[3]!.x * refW, y: corners[3]!.y * refH },
     ];
     this.quadHistory.push({ t: now, quad: quadPx });
     this.quadHistory = this.quadHistory.filter(
@@ -457,6 +502,59 @@ export class CameraFrameLoop {
       processed: this.processed,
       precision: this.client?.isReady ?? false,
     });
+  }
+
+  /** FIX v12 (12.2a) — ventana móvil (~ANALYSIS_WINDOW muestras) de
+   *  duraciones de análisis → mediana → resolución objetivo con
+   *  HISTÉRESIS: bajar de nivel tras 1 ventana mala (la fluidez manda);
+   *  subir tras 3 buenas consecutivas y de UN nivel por vez
+   *  (anti-oscilación). Telemetría QA: window.__analysisW (lado mayor
+   *  vigente) y window.__analysisMs (mediana, ms). */
+  private noteAnalysisMs(ms: number): void {
+    this.analysisMsRing.push(ms);
+    if (this.analysisMsRing.length > ANALYSIS_WINDOW) {
+      this.analysisMsRing.shift();
+    }
+    if (this.analysisMsRing.length < ANALYSIS_WINDOW) return; // ventana llena
+    const sorted = [...this.analysisMsRing].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median =
+      sorted.length % 2 === 1
+        ? sorted[mid]!
+        : (sorted[mid - 1]! + sorted[mid]!) / 2;
+    this.adaptAnalysis(median);
+  }
+
+  private adaptAnalysis(medianMs: number): void {
+    const cur = this.analysisLongSide;
+    let target: number;
+    if (medianMs > 300) target = 280;
+    else if (medianMs > 200) target = 320;
+    else target = 400;
+    if (target < cur) {
+      // 1 ventana mala basta: bajar YA (el overlay entrecortado ES el
+      // síntoma que este fix persigue).
+      this.analysisLongSide = target;
+      this.goodWindowsUp = 0;
+    } else if (target > cur) {
+      // Subir requiere 3 ventanas buenas CONSECUTIVAS y sube UN nivel
+      // (280→320→400) — nunca salta directo a 400 desde el piso.
+      this.goodWindowsUp += 1;
+      if (this.goodWindowsUp >= 3) {
+        this.analysisLongSide = cur === 280 ? 320 : 400;
+        this.goodWindowsUp = 0;
+      }
+    } else {
+      this.goodWindowsUp = 0;
+    }
+    if (typeof window !== "undefined") {
+      const w = window as unknown as {
+        __analysisW?: number;
+        __analysisMs?: number;
+      };
+      w.__analysisW = this.analysisLongSide;
+      w.__analysisMs = Math.round(medianMs);
+    }
   }
 }
 

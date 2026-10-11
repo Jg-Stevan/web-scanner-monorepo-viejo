@@ -642,6 +642,32 @@ export default function CameraView() {
   const [stable, setStable] = useState(false); // solo fallback simulado
   const [quad, setQuad] = useState<Quad>(() => defaultQuad());
   const [processing, setProcessing] = useState(false);
+
+  /* ── FIX v12 (12.3) — pill «Abriendo editor…» ─────────────────────────
+   * El tramo NO reducible del disparo (takePhotoBlob: 0,5–3 s de la HAL
+   * del sensor) hoy es silencioso: el usuario ve el flash y luego NADA
+   * hasta que el editor abre. Esta pill cubre TODO el tramo disparo →
+   * setView("editor") y aparece SOLO si supera 300 ms (en gama alta el
+   * editor abre tan rápido que ni se ve — sin parpadeo). Es PROGRESO,
+   * no calidad: cero toasts de calidad (prohibidos desde v7). La cierra
+   * el finally de handleCaptureDataUrl; las rutas que NO llegan ahí
+   * (stream recuperado a mitad de disparo, burst vacío, encode fallido)
+   * la liberan explícitamente — y un tope duro de 12 s evita cualquier
+   * pill clavada por una ruta imprevista. */
+  const [openingEditor, setOpeningEditor] = useState(false);
+  const [openingEditorVisible, setOpeningEditorVisible] = useState(false);
+  useEffect(() => {
+    if (!openingEditor) {
+      setOpeningEditorVisible(false);
+      return;
+    }
+    const show = window.setTimeout(() => setOpeningEditorVisible(true), 300);
+    const hardStop = window.setTimeout(() => setOpeningEditor(false), 12000);
+    return () => {
+      window.clearTimeout(show);
+      window.clearTimeout(hardStop);
+    };
+  }, [openingEditor]);
   /** FIX v4 4.2 — espejo visual de capturingRef (botón deshabilitado +
    *  feedback mientras dura el disparo). */
   const [isCapturing, setIsCapturing] = useState(false);
@@ -997,6 +1023,13 @@ export default function CameraView() {
       }
       processingRef.current = true;
       setProcessing(true);
+      // FIX v12 (12.2c) — ceder CPU durante el post-captura: con el
+      // disparo en marcha (processingRef), el análisis en vivo baja a
+      // 2 fps (loop.setIdle — modo espera v5 4, API existente) para no
+      // competir con el decode/encode de la captura por la única CPU
+      // grande de un equipo gama baja. Al terminar/liberar vuelve al
+      // régimen normal. El STREAM no se toca (solo el análisis).
+      loopRef.current?.setIdle(true);
       setFlashKey((k) => k + 1); // flash blanco breve
       if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
         navigator.vibrate(30);
@@ -1158,6 +1191,11 @@ export default function CameraView() {
         closeProbe(probe);
         processingRef.current = false;
         setProcessing(false);
+        // FIX v12 (12.2c + 12.3): devolver la CPU al análisis y cerrar la
+        // pill de «Abriendo editor…» (el editor ya está abierto — o falló
+        // el disparo y el usuario vuelve a ver la cámara despejada).
+        loopRef.current?.setIdle(false);
+        setOpeningEditor(false);
       }
     },
     [addCapturePage, setView, applyAutoQuad, scheduleBackgroundResolve]
@@ -1368,8 +1406,14 @@ export default function CameraView() {
    *  anti doble-disparo (capturingRef) y un try/finally SIMÉTRICO que
    *  SIEMPRE libera el obturador. */
   const runCaptureFlow = useCallback(async () => {
-    if (processingRef.current) return;
-    if (cooldownRef.current > Date.now()) return;
+    if (processingRef.current) {
+      setOpeningEditor(false); // FIX v12 (12.3): este disparo no procede
+      return;
+    }
+    if (cooldownRef.current > Date.now()) {
+      setOpeningEditor(false); // FIX v12 (12.3): dentro del cooldown post-captura
+      return;
+    }
     loopRef.current?.notifyCaptured();
     cooldownRef.current = Date.now() + 1500;
     // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
@@ -1413,6 +1457,7 @@ export default function CameraView() {
         // la cámara (antes: solo el toast → el editor jamás abría y el visor
         // quedaba negro para siempre — exactamente el final del síntoma
         // reportado por el propietario).
+        setOpeningEditor(false); // FIX v12 (12.3): sin editor que abrir
         if (isStreamDead()) {
           recoverStream();
           return; // el toast de recoverStream ya informa al usuario
@@ -1459,6 +1504,7 @@ export default function CameraView() {
       } else {
         // B8: encode falló → feedback en vez de descartar el disparo.
         releaseFrame(winner);
+        setOpeningEditor(false); // FIX v12 (12.3): sin editor que abrir
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
       }
     };
@@ -1506,6 +1552,9 @@ export default function CameraView() {
         shot?.timedOut &&
         (isStreamDead() || performance.now() - lastFrameAtRef.current > 4000)
       ) {
+        // FIX v12 (12.3): esta ruta NO llega a handleCaptureDataUrl → la
+        // pill se libera aquí (el usuario se queda en la cámara).
+        setOpeningEditor(false);
         recoverStream();
         return;
       }
@@ -1638,9 +1687,13 @@ export default function CameraView() {
     // para no encolar nada mientras dura un disparo en curso.
     if (capturingRef.current || processingRef.current) return;
     if (hasStream && videoRef.current && videoRef.current.readyState >= 2) {
+      // FIX v12 (12.3): pill «Abriendo editor…» desde el DISPARO (manual)
+      // hasta setView("editor") — cubre el tramo silencioso de la HAL.
       if (canTakePhotoRef.current || status !== "live") {
+        setOpeningEditor(true);
         void captureSmart();
       } else {
+        setOpeningEditor(true);
         captureInputRef.current?.click(); // HQ-iOS: cámara nativa
       }
       return;
@@ -2257,6 +2310,8 @@ export default function CameraView() {
         if (!autoRef.current) return;
         if (processingRef.current) return;
         if (cooldownRef.current > Date.now()) return;
+        // FIX v12 (12.3): el tramo disparo→editor arranca AQUÍ (auto-captura).
+        setOpeningEditor(true);
         void captureSmartRef.current();
       },
       onNoDetectTimeout: () => {
@@ -3126,6 +3181,34 @@ export default function CameraView() {
           aria-hidden="true"
         />
       )}
+
+      {/* FIX v12 (12.3) — pill de progreso «Abriendo editor…»: cubre el
+          tramo NO reducible del disparo (takePhoto 0,5–3 s de la HAL) que
+          antes era silencioso. Aparece SOLO si el tramo supera 300 ms (en
+          gama alta ni se ve — sin parpadeo). Progreso, NO calidad (toasts
+          de calidad prohibidos desde v7). Patrón visual de la pill
+          «Ajustando recorte…» del editor. */}
+      <AnimatePresence>
+        {openingEditorVisible && (
+          <motion.div
+            key="opening-editor-pill"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="pointer-events-none absolute inset-x-0 bottom-[104px] z-40 flex justify-center px-6"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-2 rounded-full bg-[#1c1c1e]/92 px-4 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.35)] ring-1 ring-inset ring-white/10 backdrop-blur-xl">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007aff]" />
+              <span className="text-[12.5px] font-medium text-white/85">
+                Abriendo editor…
+              </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

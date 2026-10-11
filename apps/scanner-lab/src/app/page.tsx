@@ -67,8 +67,7 @@ export default function Home() {
   }
 
   // Precalienta el pipeline de precisión (worker + OpenCV.js self-hosted)
-  // al montar la app: la primera detección ya es instantánea. También
-  // hidrata documentos + ajustes desde IndexedDB/localStorage (§8 — la
+  // y hidrata documentos + ajustes desde IndexedDB/localStorage (§8 — la
   // biblioteca sobrevive al recargar; en instalación nueva conservan mocks).
   useEffect(() => {
     // Marca de onboarding (lectura síncrona ANTES de hidratar): si ya se
@@ -81,15 +80,7 @@ export default function Home() {
     } catch {
       /* sin localStorage (privada/SSR): el onboarding vuelve a mostrarse */
     }
-    warmUpScannerWorker();
     void useScannerStore.getState().hydrateFromStorage();
-
-    // FIX v3 (fix-editor-quality): F-DEVBENCH ELIMINADO — la app procesa y
-    // guarda SIEMPRE al máximo del lente con un único tope técnico fijo
-    // (4032 px, canvas iOS). El tope del warp del worker se fija aquí; su
-    // default ya ES 4032, así que esta llamada solo lo hace explícito.
-    // Cero tests de CPU/canvas en idle: la app arranca sin picos de carga.
-    getScannerWorker()?.setWarpCap(PROCESSED_MAX_LONG_SIDE);
 
     // Limpieza one-liner de la key huérfana del benchmark viejo (inofensiva
     // si se deja, pero mejor no acumular basura en localStorage).
@@ -98,6 +89,62 @@ export default function Home() {
     } catch {
       /* privada/SSR: no pasa nada */
     }
+  }, []);
+
+  // FIX v12 (12.2b) — PRECALENTAMIENTO del detector EN IDLE: cargar el
+  // OpenCV WASM (1–3 s en gama baja) durante el arranque compite con la
+  // hidratación y el primer render. Se difiere a requestIdleCallback
+  // (fallback setTimeout 1500), UNA vez por sesión, silencioso si falla.
+  // Reutiliza la inicialización existente de detector-client
+  // (warmUpScannerWorker + setWarpCap — nunca un worker duplicado); si el
+  // usuario abre la cámara antes, el propio loop arranca el worker y esto
+  // es un no-op. Telemetría QA: window.__prewarm = { ok, ms }.
+  useEffect(() => {
+    const w = window as unknown as {
+      __prewarm?: { ok: boolean; ms: number };
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let started = false;
+    let handle = 0;
+    let usedIdle = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      const t0 = performance.now();
+      try {
+        warmUpScannerWorker();
+        const c = getScannerWorker();
+        // FIX v3 (fix-editor-quality): tope único del warp (su default ya ES
+        // 4032 — llamada explícita, ahora tras el spawn del worker).
+        c?.setWarpCap(PROCESSED_MAX_LONG_SIDE);
+        void c
+          ?.waitReady()
+          .then((ok) => {
+            w.__prewarm = { ok, ms: Math.round(performance.now() - t0) };
+          })
+          .catch(() => {
+            w.__prewarm = { ok: false, ms: Math.round(performance.now() - t0) };
+          });
+      } catch {
+        w.__prewarm = { ok: false, ms: Math.round(performance.now() - t0) };
+      }
+    };
+    if (typeof w.requestIdleCallback === "function") {
+      usedIdle = true;
+      handle = w.requestIdleCallback(start, { timeout: 2500 });
+    } else {
+      handle = window.setTimeout(start, 1500);
+    }
+    return () => {
+      if (!started) {
+        if (usedIdle && typeof w.cancelIdleCallback === "function") {
+          w.cancelIdleCallback(handle);
+        } else {
+          window.clearTimeout(handle);
+        }
+      }
+    };
   }, []);
 
   // EXPERIMENTO v11 — sincroniza la vista activa en window.__scannerView
