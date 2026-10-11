@@ -148,6 +148,16 @@ const CAM_NOTICE_COPY: Record<
   },
 };
 
+/** FIX v13 (13.5) — límite del guard de tamaño de importación: >80 MB se
+ *  rechaza ANTES de decodificar (sin guard, un archivo así entraba directo
+ *  a la cascada completa y presionaba la RAM de gama baja sin remedio). */
+const IMPORT_MAX_BYTES = 80 * 1024 * 1024;
+/** FIX v13 (13.5) — anti-parpadeo (patrón 12.3): la pill de conversión solo
+ *  aparece si el procesado pasa >300 ms. Cubre HEIC real, «.jpg» con
+ *  contenido HEIC (5–15 s con heic2any en gama baja) y decodificaciones
+ *  lentas — sin parpadear en archivos que abren al instante. */
+const IMPORT_PILL_DELAY_MS = 300;
+
 /** FIX v5 (5.5) — umbral de exposición (0-1, fracción de píxeles bien
  *  expuestos) por debajo del cual el modo Auto enciende el torch para el
  *  disparo. Constante local ajustable (empezar en 0.30). */
@@ -1527,8 +1537,12 @@ export default function CameraView() {
   // F-IMPORT (robusto) + F-HEIC: el File se decodifica con la cascada nativa
   // (createImageBitmap con EXIF → <img>) y, si el navegador no abre el formato
   // (HEIC en Android/Chrome, o «.jpg» con contenido HEIC), se convierte con
-  // libheif (heic2any) dentro de fileToCaptureDataUrl. La conversión puede
-  // tardar unos segundos en fotos de 12 MP → toast de progreso.
+  // libheif (heic2any) dentro de fileToCaptureDataUrl.
+  // FIX v13 (13.5): (a) guard de tamaño >80 MB y de archivo vacío ANTES de
+  // decodificar; (b) pill «Convirtiendo imagen…» anti-parpadeo — aparece a
+  // los 300 ms de procesado para CUALQUIER archivo lento (HEIC real, «.jpg»
+  // HEIC disfrazado, decodificación pesada), no solo el HEIC por extensión.
+  // El orden del flujo de datos NO cambia: decodificar → handleCaptureDataUrl.
   const onFilePicked = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -1539,21 +1553,37 @@ export default function CameraView() {
         toast.error("El archivo seleccionado no es una imagen");
         return;
       }
-      const looksHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
-      // Heurística: los «.jpg» de iPhone transportados por apps pueden traer
-      // contenido HEIC; si la decodificación nativa falla también irán al
-      // rescate, pero no podemos saberlo de antemano → toast solo si es HEIC.
-      const toastId = looksHeic
-        ? toast.loading("Convirtiendo HEIC… (puede tardar unos segundos)")
-        : undefined;
+      // FIX v13 (13.5) — guard de tamaño: rechazo limpio sin decodificar.
+      if (file.size > IMPORT_MAX_BYTES) {
+        toast.error("Imagen demasiado grande", {
+          description: `Pesa ${(file.size / (1024 * 1024)).toFixed(0)} MB y el máximo es 80 MB. Redúcela (menos resolución o calidad) y vuelve a importarla.`,
+        });
+        return;
+      }
+      // FIX v13 (13.5) — archivo vacío: antes caía a la cascada y moría en
+      // un toast genérico; ahora el mensaje dice la causa real.
+      if (file.size === 0) {
+        toast.error("El archivo está vacío", {
+          description: "Parece no haberse guardado bien. Vuelve a exportarlo o elige otro.",
+        });
+        return;
+      }
+      // FIX v13 (13.5) — pill anti-parpadeo: solo si pasa >300 ms.
+      let pillId: string | number | undefined;
+      const pillTimer = window.setTimeout(() => {
+        pillId = toast.loading("Convirtiendo imagen… puede tardar unos segundos");
+      }, IMPORT_PILL_DELAY_MS);
+      const clearPillTimer = () => window.clearTimeout(pillTimer);
       void (async () => {
         try {
           const dataUrl = await fileToCaptureDataUrl(file);
-          if (toastId !== undefined) toast.success("Imagen lista", { id: toastId, duration: 1500 });
+          clearPillTimer();
+          if (pillId !== undefined) toast.success("Imagen lista", { id: pillId, duration: 1500 });
           await handleCaptureDataUrl(dataUrl);
         } catch (err) {
+          clearPillTimer();
+          if (pillId !== undefined) toast.dismiss(pillId);
           const msg = err instanceof Error ? err.message : "";
-          if (toastId !== undefined) toast.dismiss(toastId);
           if (/heic|heif/i.test(msg)) {
             toast.error("No se pudo convertir el HEIC", { description: "El archivo parece dañado o protegido. Prueba con otro." });
           } else {
