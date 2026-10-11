@@ -1480,6 +1480,14 @@ export default function EditorView() {
         const [moved] = order.splice(activeIdx, 1);
         order.splice(to, 0, moved);
         reorderCapturePages(order);
+        // FIX r6 — El commit DIRECTO por teclado también debe sincronizar el
+        // orden visual del carrusel: el effect de sync usa IGUALDAD DE
+        // CONJUNTO (evita el snap-back durante el drag) y un re-orden del
+        // store NO cambia el conjunto — sin esto, el carrusel quedaba en el
+        // orden VIEJO y la primera miniatura podía quedar etiquetada
+        // «página 2» (el camino del drag llega ya sincronizado vía
+        // onReorder, el de teclado no).
+        setCarouselOrder(order);
         return;
       }
       const nav = e.key === "ArrowRight" ? 1 : -1;
