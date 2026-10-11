@@ -2458,7 +2458,8 @@ export default function CameraView() {
               );
             }}
             className={cn(
-              "relative flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
+              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9.
+              "relative flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
               settings.flashMode !== "off"
                 ? "bg-[#ffd60a]/18 ring-1 ring-[#ffd60a]/60"
                 : "bg-black/30"
@@ -2500,7 +2501,8 @@ export default function CameraView() {
               }
             }}
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
+              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9.
+              "flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
               autoCapture
                 ? "bg-[#ffd60a]/18 ring-1 ring-[#ffd60a]/60"
                 : "bg-black/30"
