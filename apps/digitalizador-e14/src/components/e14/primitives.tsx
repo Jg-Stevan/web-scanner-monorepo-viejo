@@ -33,7 +33,11 @@ export function StatusDot({ tone, pulse = false }: { tone: Tone; pulse?: boolean
   );
 }
 
-/** Chip mono pequeño (tint 10% + borde 40% del color). */
+/** Chip del chrome — CYBER-NEÓN (SPEC-e14-cyber-neon §5): cápsula 34px
+ *  mono bold tracking 0.14em. `solid` = relleno SÓLIDO del tono con texto
+ *  NEGRO + glow-sm (chip 1 TRANSMISIÓN — cambio núm. 1 de la fila);
+ *  inactivo = navy surface-3 + texto blanco + borde white/6 (§5).
+ *  El TONO del sólido sigue elegido por estado (§10: ok/crit/ámbar). */
 export function Chip({
   tone = "neutral",
   solid = false,
@@ -48,13 +52,13 @@ export function Chip({
   if (solid) {
     return (
       <span
-        className={`px-2 py-0.5 rounded font-data text-[10px] font-semibold whitespace-nowrap ${
+        className={`inline-flex items-center h-[34px] px-4 rounded-full font-data text-[11px] font-bold tracking-[0.14em] uppercase whitespace-nowrap ${
           tone === "ok"
-            ? "bg-ok-tint text-ok-ink"
+            ? "bg-ok-tint text-neon-ink glow-sm"
             : tone === "warn"
-              ? "bg-warn text-warn-ink"
+              ? "bg-warn text-neon-ink glow-sm-warn"
               : tone === "crit"
-                ? "bg-crit text-white"
+                ? "bg-crit text-neon-ink glow-sm-crit"
                 : "bg-ink-dim text-bg"
         } ${className}`}
       >
@@ -64,15 +68,7 @@ export function Chip({
   }
   return (
     <span
-      className={`px-2 py-0.5 rounded font-data text-[10px] font-semibold whitespace-nowrap ${
-        tone === "ok"
-          ? "bg-ok-tint/15 text-ok-tint border border-ok-tint/30"
-          : tone === "warn"
-            ? "bg-warn/15 text-warn border border-warn/30"
-            : tone === "crit"
-              ? "bg-crit/15 text-crit border border-crit/30"
-              : "bg-black/60 text-ink-dim border border-line"
-      } ${className}`}
+      className={`inline-flex items-center h-[34px] px-4 rounded-full font-data text-[11px] font-bold tracking-[0.14em] uppercase whitespace-nowrap bg-surface-3 text-white border border-white/6 ${className}`}
     >
       {children}
     </span>
@@ -131,9 +127,12 @@ export function SegmentedBar({
  *  cuando active, solo cambia el TINTE (borde + texto + fondo 10%) —
  *  alto/tamaño IDÉNTICOS (criterio D38 sigue vigente).
  *  D5 (SPEC-rediseno-chrome-3-estados Rev. 3): prop opcional `tone` —
- *  con "crit" el botón se pinta ROJO SÓLIDO (bg-crit border-crit
- *  text-white, mock 1) en lugar del estilo neutro — SOLO lo usa
- *  «Recortar» en RECHAZADA. */
+ *  con "crit" el botón se pinta ROJO SÓLIDO (mock 1) — SOLO lo usa
+ *  «Recortar» en RECHAZADA.
+ *  CYBER-NEÓN (SPEC-e14-cyber-neon §2 tipografía + §10): cápsula
+ *  rounded-full, mono bold uppercase tracking 0.1em, neutro = navy
+ *  surface-3 + borde white/6 (mismo lenguaje que los chips 2-3),
+ *  tono crit sólido con glow-sm-crit. */
 export function ToolbarBtn({
   icon,
   label,
@@ -153,12 +152,12 @@ export function ToolbarBtn({
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 min-w-0 min-h-11 h-11 px-2.5 py-1.5 rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs font-semibold tracking-wide border ${
+      className={`flex-1 min-w-0 min-h-11 h-11 px-3 rounded-full active:scale-95 transition-all flex items-center justify-center gap-1.5 font-data text-[10px] font-bold tracking-[0.1em] uppercase border ${
         tone === "crit"
-          ? "bg-crit border-crit text-white"
+          ? "bg-crit border-crit text-white glow-sm-crit"
           : active
             ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
-            : "bg-surface-4/90 hover:bg-surface-5 border-outline-dim/40 text-ink"
+            : "bg-surface-3 border-white/6 text-ink"
       }`}
     >
       <span className={`${tone === "crit" ? "text-white" : "text-ok-tint"} shrink-0 flex items-center justify-center`}>
@@ -170,10 +169,12 @@ export function ToolbarBtn({
 }
 
 /**
- * Botón CTA grande del footer (h-12, rounded-xl).
- * variant: "ok" (verde sólido + glow) · "warn" (ámbar) · "crit" (rojo) · "outline" (oscuro) · "outline-crit"
- * · "outline-warn" (D6-bis SPEC-rediseno-chrome-3-estados Rev. 3 — botón
- * «REVISIÓN HUMANA»: ámbar contorneado, tono del candado del mock).
+ * Botón CTA grande del footer — CYBER-NEÓN (SPEC-e14-cyber-neon §8):
+ * cápsula 52px radio completo, mono extrabold uppercase; el relleno
+ * sólido lleva glow-cta del tono (§10) y el outline-warn (REVISIÓN
+ * HUMANA, §10) = bg warn/12 + borde warn/40 + glow ámbar.
+ * variant: "ok" (neón sólido #03DF73 + texto negro) · "warn" · "crit" ·
+ * "outline" (oscuro) · "outline-crit" · "outline-warn".
  */
 export function PrimaryBtn({
   variant = "ok",
@@ -192,14 +193,14 @@ export function PrimaryBtn({
   disabled?: boolean;
 }) {
   const base =
-    "flex-1 h-12 px-2.5 rounded-xl flex items-center justify-center gap-1.5 font-extrabold text-[10px] md:text-[11px] uppercase tracking-wide transition-all transform active:scale-[0.98] leading-tight text-center";
+    "flex-1 min-w-0 h-[52px] px-2.5 rounded-full flex items-center justify-center gap-2 font-data font-extrabold text-[10px] md:text-[11px] uppercase tracking-[0.1em] transition-all transform active:scale-[0.98] leading-tight text-center";
   const styles: Record<string, string> = {
-    ok: "bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink shadow-[0_0_12px_rgba(63,229,108,0.45)]",
-    warn: "bg-warn hover:bg-warn/90 active:bg-warn/80 text-warn-ink shadow-lg shadow-warn/20",
-    crit: "bg-crit hover:bg-crit/90 active:bg-crit-deep text-white shadow-lg shadow-crit/30",
+    ok: "bg-neon-strong hover:bg-neon-strong/90 text-neon-ink glow-cta",
+    warn: "bg-warn hover:bg-warn/90 active:bg-warn/80 text-warn-ink glow-cta-warn",
+    crit: "bg-crit hover:bg-crit/90 active:bg-crit-deep text-white glow-cta-crit",
     outline: "bg-surface-2 hover:bg-hover text-ink-dim border border-outline-dim",
     "outline-crit": "bg-white/5 hover:bg-white/10 text-ink-dim border border-crit/30",
-    "outline-warn": "bg-transparent hover:bg-warn/10 text-warn border border-warn/60",
+    "outline-warn": "bg-warn/12 hover:bg-warn/20 text-warn border border-warn/40 glow-sm-warn",
   };
   return (
     <button

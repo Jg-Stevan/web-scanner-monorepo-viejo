@@ -21,10 +21,14 @@ export const metadata: Metadata = {
     "Digitalizador de actas E-14: escaneo con score de calidad, control de mesas y transmisión verificada. Interfaz Precision Monitor.",
   applicationName: "Digitalizador E-14",
   formatDetection: { telephone: false },
+  // §12 PWA (SPEC-e14-cyber-neon): pantalla completa sin barras del
+  // navegador — standalone + manifest (Next prefija el basePath al servir).
+  // SIN service worker ni install-prompt (fuera de alcance de la ronda).
+  manifest: "/manifest.webmanifest",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0e1414",
+  themeColor: "#060A0D",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,

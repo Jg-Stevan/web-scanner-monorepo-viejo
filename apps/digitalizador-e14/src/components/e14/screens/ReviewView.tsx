@@ -29,6 +29,21 @@
  * incluida ENVIADA (D4), «Recortar» rojo sólido en RECHAZADA (D5), CTAs
  * al mock + botón «REVISIÓN HUMANA» con candado intento >= 3 (D6/D6-bis)
  * y tarjeta ILEGIBLE/pill GENERICO fuera (D7).
+ * CYBER-NEÓN (SPEC-e14-cyber-neon Rev. 1, §4-§8): supersede visual del
+ * chrome — fidelidad 1:1 al mock del dueño (mandato: «imagina que no
+ * tenemos nada de diseño… prohibido no quedar igual»). Banner = cápsula
+ * 42px surface-2 con punto 10px; chips cápsulas 34px centradas gap-2.5
+ * (TRANSMISIÓN sólido neón texto NEGRO; MESA/PÁG navy texto blanco);
+ * tarjeta = CONTENEDOR OSCURO surface-card 20px con brackets BARRAS neón
+ * 3.5px glow y acta blanca rounded-14px object-cover; barra de envío =
+ * cápsula 46px green-bar con check círculo neón sólido + hora en recuadro
+ * green-inset (SHA-256 FUERA de esta vista — cambio deliberado del dueño);
+ * extrapolación §10: barra de rechazo crit (✕ círculo sólido) + banner
+ * ADVERTENCIA re-vestido como cáscara ámbar; CTA ENVIADA = pill 52px
+ * neon-strong 2 líneas con «+» en círculo negro. LA LÓGICA SIGUE INTACTA
+ * (Rev. 5): datos data-driven, gate, escalación, candado RH, grid-cols-2.
+ * §11 DEV-6: espaciador condicional en EN_RH para que el banner flotante
+ * no tape los chips.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useE14Store } from "@/lib/e14/store";
@@ -38,7 +53,7 @@ import type { PageFilter } from "@jg-stevan/scanner-core/types";
 import { QuadEditor } from "../QuadEditor";
 import { PanelClasificacion } from "../PanelClasificacion";
 import { Chip, PrimaryBtn, ToolbarBtn } from "../primitives";
-import { CopyIcon, CropIcon, FullscreenIcon, LoaderIcon, PlusCircleIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, UserKeyIcon, WarnTriangleIcon } from "../icons";
+import { CheckIcon, CopyIcon, CropIcon, FullscreenIcon, LoaderIcon, PlusIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, UserKeyIcon, WarnTriangleIcon, XIcon } from "../icons";
 
 // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L89-L93
 // (CSS_FILTERS — aproximación CSS de cada filtro para las previews en vivo:
@@ -103,6 +118,26 @@ function Pill({ tone, children }: { tone: "ok" | "crit"; children: React.ReactNo
       }`}
     >
       {children}
+    </div>
+  );
+}
+
+/** §6.2 (cyber-neón): brackets = BARRAS bg neón 3.5px × ~34px sobre las
+ *  esquinas del CONTENEDOR oscuro (posición Rev. 4 conservada — el fix
+ *  border-r del corner inferior-derecho queda subsumido: ahora son 8
+ *  barras simétricas absolutas), rounded-[2px] y glow-md (drop-shadow del
+ *  grupo — cada barra brilla). Reemplaza los corners border de la Rev. 4. */
+function BracketsNeon() {
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10 glow-md" aria-hidden>
+      <div className="absolute top-0 left-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute top-0 left-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute top-0 right-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute top-0 right-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute bottom-0 left-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute bottom-0 left-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute bottom-0 right-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
+      <div className="absolute bottom-0 right-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
     </div>
   );
 }
@@ -189,11 +224,16 @@ export function ReviewView() {
     : status === "EN_REVISION_HUMANA"
       ? "bg-warn"
       : "bg-crit";
-  const textoUbicacion = hayClasificacion
-    ? "text-white"
-    : status === "EN_REVISION_HUMANA"
-      ? "text-warn"
-      : "text-crit";
+  // CYBER-NEÓN §4/§10: el TEXTO de la cápsula es SIEMPRE ink (blanco, bold
+  // tracking 0.12em — el punto y el borde/glow llevan el tono); el borde
+  // por TONO DE ESTADO (ok → white/5 neutro del mock; crit/ámbar → anillo
+  // del tono con glow). El título real siempre (regla D2 Rev. 4 vigente).
+  const bordeUbicacion =
+    status === "RECHAZADA"
+      ? "border-crit/35 glow-sm-crit"
+      : status === "ADVERTENCIA" || status === "EN_REVISION_HUMANA"
+        ? "border-warn/35 glow-sm-warn"
+        : "border-white/5";
   const texto = hayClasificacion
     ? acta.titulo
     : status === "EN_REVISION_HUMANA"
@@ -241,9 +281,11 @@ export function ReviewView() {
           mocks. ELIMINADA la línea de ubicación anterior (higiene: 0 refs). Es
           el <h1> visible de la pantalla cuando hay acta. */}
       <div className="shrink-0 px-4 pt-1">
-        <h1 className="w-full max-w-md mx-auto shrink-0 h-9 px-3 rounded-lg bg-surface-1 border border-line flex items-center gap-2 min-w-0">
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotUbicacion}`} aria-hidden />
-          <span className={`text-[12px] font-extrabold uppercase tracking-wider truncate min-w-0 ${textoUbicacion}`}>
+        <h1
+          className={`w-full max-w-md mx-auto shrink-0 h-[42px] px-4 rounded-full bg-surface-2 border flex items-center gap-2.5 min-w-0 ${bordeUbicacion}`}
+        >
+          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotUbicacion}`} aria-hidden />
+          <span className="font-data text-[12px] font-bold tracking-[0.12em] uppercase text-ink truncate min-w-0">
             {texto}
           </span>
         </h1>
@@ -307,12 +349,19 @@ export function ReviewView() {
             ))}
         </div>
 
+        {/* §11 DEV-6 (cyber-neón): el banner flotante EN_RH (repetir-primero
+            y contingencia, absolute top-2) tapa la fila de chips — espaciador
+            condicional para que queden visibles debajo del banner. */}
+        {status === "EN_REVISION_HUMANA" && <div className="h-16 shrink-0" aria-hidden />}
+
         {/* D3 Rev. 5 (dueño: «son diseños, la lógica sigue igual, los datos sí
             se pueden cambiar»): VALORES data-driven — el fallback «---» aparece
             SOLO cuando el sistema NO identificó (veto Rev. 2, decisión 3), en
             CUALQUIER estado. TONO del chip 1 por estado (visual del export
-            Stitch). El banner (D2) NO cambia: título data-driven. */}
-        <div className="w-full max-w-sm flex items-center justify-center gap-1.5 pb-2 flex-wrap">
+            Stitch). El banner (D2) NO cambia: título data-driven.
+            CYBER-NEÓN §5: fila centrada (justify-center, gap-2.5); chip 1
+            SÓLIDO con texto negro + glow; chips 2-3 navy texto blanco. */}
+        <div className="w-full max-w-sm flex items-center justify-center gap-2.5 pb-2 flex-wrap">
           <Chip tone={toneEstado} solid>{hayClasificacion ? tipo : "---"}</Chip>
           <Chip tone="neutral">{hayClasificacion ? `MESA ${acta.ubicacion.mesa}` : "MESA ---"}</Chip>
           <Chip tone="neutral">{paginaIdentificada ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}</Chip>
@@ -326,30 +375,25 @@ export function ReviewView() {
             D3 (SPEC-rediseno-enviada §3): ENVIADA estrena la tarjeta héroe del
             mock — TOCABLE (tap → pantalla completa; el overlay ya existe y
             funciona para cualquier estado). El resto de estados conserva la
-            tarjeta con brackets (editables), idéntica a la de siempre. */}
+            tarjeta con brackets (editables), idéntica a la de siempre.
+            CYBER-NEÓN §6: el acta vive DENTRO de un CONTENEDOR OSCURO
+            surface-card rounded-20px p-10px con brackets BARRA neón 3.5px
+            sobre las esquinas DEL CONTENEDOR; acta blanca rounded-14px
+            object-cover (esquinas propias, separada 10px). */}
         {status === "ENVIADA" ? (
           <button
             type="button"
             aria-label="Ver acta a pantalla completa"
             onClick={() => (acta.fotoProcesada ? setVisorAbierto(true) : undefined)}
-            className="relative bg-white p-1.5 border border-line rounded-xl flex items-center justify-center w-full flex-1 min-h-0"
+            className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
           >
+            <BracketsNeon />
             <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {/* D4 Rev. 4 (export Stitch): brackets VERDES FIJOS en TODOS los
-                  estados — los 5 HTML del export dibujan las esquinas con
-                  #00E676 3.5px, incluidas RECHAZADA y ADVERTENCIA (DEV-1);
-                  pointer-events-none; el botón y su onClick quedan EXACTOS. */}
-              <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-[3.5px] border-l-[3.5px] border-ok-tint" />
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-[3.5px] border-r-[3.5px] border-ok-tint" />
-                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[3.5px] border-l-[3.5px] border-ok-tint" />
-                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[3.5px] border-r-[3.5px] border-ok-tint" />
-              </div>
               {hayFoto ? (
                 <img
                   src={acta.fotoProcesada}
                   alt="Foto real del acta procesada por el core"
-                  className="w-full h-full object-contain rounded-sm"
+                  className="w-full h-full object-cover rounded-[14px]"
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -361,21 +405,14 @@ export function ReviewView() {
             </div>
           </button>
         ) : (
-          <section className="relative bg-surface-1 rounded-xl border border-line p-3 flex items-center justify-center w-full flex-1 min-h-0">
-            <div className="w-full h-full relative flex items-center justify-center py-2 px-1 min-h-0">
-              {/* D4 Rev. 4 (DEV-1): brackets VERDES 3.5px fijos — igual que la
-                  tarjeta ENVIADA (export: #00E676 en TODOS los estados). */}
-              <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-[3.5px] border-l-[3.5px] border-ok-tint" />
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-[3.5px] border-r-[3.5px] border-ok-tint" />
-                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[3.5px] border-l-[3.5px] border-ok-tint" />
-                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[3.5px] border-r-[3.5px] border-ok-tint" />
-              </div>
+          <section className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0">
+            <BracketsNeon />
+            <div className="w-full h-full relative flex items-center justify-center min-h-0">
               {hayFoto ? (
                 <img
                   src={acta.fotoProcesada}
                   alt="Foto real del acta procesada por el core"
-                  className="w-full h-full object-contain rounded-sm"
+                  className="w-full h-full object-cover rounded-[14px]"
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -388,35 +425,79 @@ export function ReviewView() {
           </section>
         )}
 
-        {/* D4/D5 (SPEC-rediseno-enviada §4-§5, Rev. 3 chrome-3-estados): la
-            fila de chips SUBIÓ ENCIMA de la tarjeta (D3 — fila única
-            compartida, tono por estado y fallback sin clasificación); queda
-            aquí SOLO la fila de estado DEDICADA (justify-between: ✓ ENVIADO
-            a la izquierda, hora a la derecha — el «✓ ENVIADO
-            AUTOMÁTICAMENTE» salió de la fila de chips) + SHA-256
-            micro-caption (evidencia de transmisión — no se elimina
-            funcionalidad). ENVIADA no tiene toolbar: el ÚNICO CTA es
-            SEGUIR ESCANEANDO (D6). */}
+        {/* §7 (cyber-neón): barra de envío = cápsula 46px verde-traslúcida
+            (green-bar + borde green-bar-border) con check en círculo neón
+            sólido 28px (glow-md, palomita negra strokeWidth 3), texto neón
+            11.5px y hora en recuadro PROPIO green-inset 9px a la derecha.
+            EL SHA-256 DESAPARECE de esta vista (cambio deliberado del dueño
+            frente a lo actual: el hash se sigue calculando para
+            RESUMEN/registro — solo sale del chrome de esta pantalla). */}
         {status === "ENVIADA" && (
-          <>
+          <div className="w-full max-w-sm pt-2 shrink-0">
             <div
-              className="w-full max-w-sm flex items-center justify-between pt-2"
+              className="h-[46px] rounded-full bg-green-bar border border-green-bar-border px-3.5 flex items-center gap-3"
               data-testid="fila-estado"
             >
-              <span className="flex items-center gap-1.5 font-data text-[10px] font-bold text-ok-tint tracking-wide">
-                ✓ ENVIADO {acta.enviadoAutomaticamente ? "AUTOMÁTICAMENTE" : "CORRECTAMENTE"}
+              <span className="w-7 h-7 rounded-full bg-ok-tint glow-md flex items-center justify-center shrink-0">
+                <CheckIcon className="w-4 h-4 text-neon-ink" strokeWidth={3} />
               </span>
-              <span className="font-data text-[11px] text-ink-dim">
+              <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-ok-tint flex-1 min-w-0 truncate">
+                ENVIADO {acta.enviadoAutomaticamente ? "AUTOMÁTICAMENTE" : "CORRECTAMENTE"}
+              </span>
+              <span className="bg-green-inset rounded-[9px] px-2.5 py-1 font-data text-[12px] font-bold text-white shrink-0">
                 {acta.enviadoAutomaticamente ?? "--:--:--"}
               </span>
             </div>
-            {acta.hashSha256 && (
-              <span className="font-data text-[8px] text-ink-faint">
-                SHA-256: {acta.hashSha256}
-              </span>
-            )}
-          </>
+          </div>
         )}
+
+        {/* §10 (cyber-neón): barra de rechazo — MISMA geometría que la de
+            envío en tono crit (bg crit/12 + borde crit/30) con ✕ en círculo
+            crit sólido (glow-md-crit). Extrapolación del mock al estado
+            RECHAZADA; la razón del rechazo sigue en pill TopBar + CTA. */}
+        {status === "RECHAZADA" && (
+          <div className="w-full max-w-sm pt-2 shrink-0" data-testid="barra-rechazo">
+            <div className="h-[46px] rounded-full bg-crit/12 border border-crit/30 px-3.5 flex items-center gap-3">
+              <span className="w-7 h-7 rounded-full bg-crit glow-md-crit flex items-center justify-center shrink-0">
+                <XIcon className="w-4 h-4 text-neon-ink" />
+              </span>
+              <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-crit flex-1 min-w-0 truncate">
+                ACTA RECHAZADA
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* §10 (cyber-neón): banner de ADVERTENCIA re-estilizado como cápsula
+            ámbar (bg warn/12 + borde warn/30) con ▲ en círculo ámbar sólido —
+            misma geometría de la barra de envío, bajo la tarjeta; la razón
+            (data-driven, métrica más baja) sigue intacta. */}
+        {status === "ADVERTENCIA" &&
+          (() => {
+            const m = acta.metricas;
+            const razon = !m
+              ? null
+              : m.sharpness <= m.contrast && m.sharpness <= m.brightness
+                ? "LEVE DESFOQUE"
+                : m.contrast <= m.brightness
+                  ? "CONTRASTE"
+                  : "LUMINOSIDAD";
+            return (
+              <div
+                className="w-full max-w-sm pt-2 shrink-0"
+                data-testid="banner-revision"
+              >
+                <div className="h-[46px] rounded-full bg-warn/12 border border-warn/30 px-3.5 flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-full bg-warn glow-md-warn flex items-center justify-center shrink-0">
+                    <WarnTriangleIcon className="w-3.5 h-3.5 text-neon-ink" />
+                  </span>
+                  <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-warn flex-1 min-w-0 truncate">
+                    REVISIÓN REQUERIDA{razon ? ` (${razon})` : ""}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
 
         {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor,
             shrink-0, alto CONSTANTE, anclada al borde inferior (justo
@@ -503,31 +584,9 @@ export function ReviewView() {
           </div>
         )}
 
-        {/* D4: razón display-only derivada de las métricas — el gate NO se
-            toca. La métrica MÁS BAJA define la razón (el mock muestra LEVE
-            DESFOQUE = caso sharpness). Sin métricas → banner sin paréntesis. */}
-        {status === "ADVERTENCIA" &&
-          (() => {
-            const m = acta.metricas;
-            const razon = !m
-              ? null
-              : m.sharpness <= m.contrast && m.sharpness <= m.brightness
-                ? "LEVE DESFOQUE"
-                : m.contrast <= m.brightness
-                  ? "CONTRASTE"
-                  : "LUMINOSIDAD";
-            return (
-              <div
-                className="w-full max-w-sm flex items-center justify-center gap-1.5 pt-2"
-                data-testid="banner-revision"
-              >
-                <WarnTriangleIcon className="w-3.5 h-3.5 text-warn shrink-0" />
-                <span className="font-data text-[10px] font-bold tracking-wide text-warn uppercase">
-                  REVISIÓN REQUERIDA{razon ? ` (${razon})` : ""}
-                </span>
-              </div>
-            );
-          })()}
+        {/* D4 (antes de cyber-neón): el banner de razón de ADVERTENCIA
+            («REVISIÓN REQUERIDA (…)») subió a la posición de la barra de
+            estado — bajo la tarjeta, re-estilizado como cáscara ámbar §10. */}
       </main>
 
       {/* ── PANEL DE CORRECCIÓN §5 (SPEC-cabecera-clasificacion): SOLO cuando
@@ -789,20 +848,32 @@ export function ReviewCtas() {
 
   if (status === "ENVIADA") {
     // D6 (SPEC-rediseno-enviada Rev. 2, §6 + Rev. 3 chrome-3-estados): UN
-    // solo CTA verde — «SEGUIR ESCANEANDO» (veto Rev. 2: sin «MESA») con el
-    // icono ⊕ del mock (PlusCircleIcon). El mock no dibuja botón de
-    // exportación y el dueño lo confirmó («sip elimina el pdf»). El branch
-    // `if (esReal)` de dos botones DESAPARECE: ENVIADA devuelve este botón
-    // único con y sin foto (§7 eliminó la exportación de la cadena completa
-    // — sin código muerto).
+    // solo CTA verde — «SEGUIR ESCANEANDO» (veto Rev. 2: sin «MESA»). El
+    // mock no dibuja botón de exportación y el dueño lo confirmó («sip
+    // elimina el pdf»). El branch `if (esReal)` de dos botones DESAPARECE:
+    // ENVIADA devuelve este botón único con y sin foto (§7 eliminó la
+    // exportación de la cadena completa — sin código muerto).
+    // CYBER-NEÓN §8: pill 52px radio completo bg neon-strong (#03DF73) +
+    // glow-cta; «+» en círculo NEGRO 28px a la izquierda del bloque de
+    // texto; «SEGUIR / ESCANEANDO» en DOS LÍNEAS (como el mock) mono
+    // extrabold 14px tracking 0.18em texto negro.
     return (
       <button
         type="button"
         onClick={() => navegar("escanear")}
-        className="w-full h-13 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98]"
+        className="w-full h-[52px] rounded-full bg-neon-strong glow-cta active:scale-95 transition-transform flex items-center justify-center gap-4"
       >
-        <PlusCircleIcon className="w-4 h-4" />
-        <span>SEGUIR ESCANEANDO</span>
+        <span
+          className="w-7 h-7 rounded-full bg-black flex items-center justify-center shrink-0"
+          aria-hidden
+        >
+          <PlusIcon className="w-4 h-4 text-white" />
+        </span>
+        <span className="font-data font-extrabold text-[14px] tracking-[0.18em] leading-[1.35] text-center text-neon-ink uppercase">
+          SEGUIR
+          <br />
+          ESCANEANDO
+        </span>
       </button>
     );
   }
