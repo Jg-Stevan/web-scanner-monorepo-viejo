@@ -117,15 +117,17 @@ const LOUPE_GAP = 14;
 const COMPARE_HOLD_MS = 350;
 
 /** Preview procesado de la página en edición (modo review).
- *  FIX v5 (5.1): `url` es el DATO completo (PNG hasta 4032 px — fuente de
- *  verdad para rotación/export/guardado). `displayUrl` es la copia de
- *  PANTALLA (JPEG ≤2560) que consumen todos los <img> del editor: en
- *  dispositivos con poca RAM, decodificar un data URL PNG de 5–20 MB
- *  through una superficie de baja resolución → preview borroso aunque el
- *  dato esté intacto. Opcional: si falta, el <img> cae a `url`. */
+ *  `url` es el DATO completo (PNG hasta 4032 px — fuente de
+ *  verdad para rotación/export/guardado) y, desde el EXPERIMENTO
+ *  v11, es TAMBIÉN lo que consumen todos los <img> del editor y de
+ *  la presentación: fuente única, sin copia de pantalla.
+ *  EXPERIMENTO v11 (crash-test): `displayUrl` (la copia de PANTALLA
+ *  JPEG ≤ tope de v5/v10-A) queda APAGADA — nadie la escribe ni la
+ *  lee. El campo y `makeDisplayUrl` se conservan como SEAM para
+ *  revertir el experimento con un commit si el crash-test lo pide. */
 interface PreviewEntry {
   url: string;
-  /** Copia de display JPEG ≤ DISPLAY_MAX_LONG_SIDE (solo pantalla). */
+  /** EXPERIMENTO v11: APAGADO — seam sin uso (copia de display v5/v10-A). */
   displayUrl?: string;
   w: number;
   h: number;
@@ -239,26 +241,58 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return blob;
 }
 
-/** FIX v5 (5.1) — lado mayor máximo de la copia de DISPLAY del editor. */
-const DISPLAY_MAX_LONG_SIDE = 2560;
-/** FIX v5 (5.1) — calidad JPEG de la copia de display (solo pantalla). */
+/** EXPERIMENTO v11 (crash-test fuente única) — tope de DISPLAY apagado
+ *  por decisión del dueño: TODOS los dispositivos ven el mismo dato de
+ *  imagen (el de 4032 px), sin degradación por tier y sin red de
+ *  seguridad. Si el crash-test en gama baja NO crashea, esto se vuelve
+ *  permanente; si crashea, se reactiva la protección SOLO en el punto
+ *  exacto del fallo (restaurar los tiers v10-A: deviceMemory
+ *  4032/3200/2560, iOS 3200).
+ *
+ *  (Histórico v10-A: tope adaptativo 2560/3200/4032 por deviceMemory;
+ *  v5 fijaba 2560 para ahorrar RAM en gama baja. Memoria esperada por
+ *  imagen activa decodificada: 2560→~19 MB · 3200→~33 MB · 4032→~49 MB.)
+ *
+ *  La telemetría `window.__displayMax` sigue viva y debe leer **4032**
+ *  en todos los entornos mientras dure el experimento. */
+function computeDisplayMaxLongSide(): number {
+  // EXPERIMENTO v11: apagado por decisión del dueño — todos los dispositivos
+  // ven el dato completo; restaurar tiers solo si el crash-test lo justifica.
+  return 4032;
+}
+
+/** FIX v10-A — tope de DISPLAY (EXPERIMENTO v11: constante 4032 — ver computeDisplayMaxLongSide). */
+const DISPLAY_MAX_LONG_SIDE = computeDisplayMaxLongSide();
+
+// Telemetría QA (patrón existente, solo dev/QA): tope efectivo en window.
+if (typeof window !== "undefined") {
+  (window as unknown as { __displayMax?: number }).__displayMax = DISPLAY_MAX_LONG_SIDE;
+}
+
+/** FIX v5 (5.1) — calidad JPEG de la copia de display (seam v11, sin uso activo). */
 const DISPLAY_JPEG_QUALITY = 0.92;
 
-/** FIX v5 (5.1) — makeDisplayUrl: re-encode JPEG ≤2560 px para PANTALLA.
+/** FIX v5 (5.1) / v10-A — makeDisplayUrl: re-encode JPEG ≤ DISPLAY_MAX_LONG_SIDE px para PANTALLA.
  *
- *  El editor mostraba el data URL PNG completo del worker (4032 px →
- *  5–20 MB de cadena): en dispositivos con poca RAM el navegador lo
- *  decodifica/renderiza por una superficie de baja resolución → preview
- *  BORROSO aunque el dato esté intacto (al guardar se ve bien porque el
- *  store reprocesa desde page.original).
+ *  ⚠️ EXPERIMENTO v11 (crash-test fuente única): SIN LLAMADAS ACTIVAS —
+ *  la red de seguridad está APAGADA por decisión del dueño (todos los
+ *  dispositivos consumen el dato completo). Esta función queda como
+ *  SEAM para revertir el experimento con un commit; su única línea viva
+ *  es el contador de verificación `window.__displayUrlCalls`, que debe
+ *  permanecer en **0** durante el QA (prueba de que no corre).
  *
- *  Esta copia es SOLO de display: ligera, SIEMPRE JPEG (un PNG de 2560
- *  seguiría pesando) y re-encodeada incluso si la fuente ya es ≤2560.
- *  El DATO no cambia → WYSIWYG conservado por construcción (el guardado
- *  re-procesa desde page.original con PROCESSED_MAX_LONG_SIDE=4032).
- *  Ante cualquier fallo se devuelve la url original (mejor borrosa que
- *  pantalla en blanco). */
+ *  (Histórico v5 5.1: el editor mostraba el data URL PNG completo del
+ *  worker (4032 px → 5–20 MB de cadena): en gama baja el navegador lo
+ *  decodificaba por una superficie de baja resolución → preview BORROSO
+ *  aunque el dato estuviera intacto. La copia era SOLO de display:
+ *  ligera, SIEMPRE JPEG, re-encodeada incluso si la fuente ya era ≤ tope;
+ *  el DATO no cambiaba. Ante cualquier fallo devolvía la url original.) */
 async function makeDisplayUrl(dataUrl: string): Promise<string> {
+  // EXPERIMENTO v11 — contador de verificación QA: debe quedar en 0
+  // (la red de seguridad NO corre; makeDisplayUrl es solo el seam de
+  // reversión).
+  (window as unknown as { __displayUrlCalls?: number }).__displayUrlCalls =
+    ((window as unknown as { __displayUrlCalls?: number }).__displayUrlCalls ?? 0) + 1;
   const img = await loadImage(dataUrl);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
@@ -351,9 +385,6 @@ export default function EditorView() {
   /** F-NOVIEW — modo revisión de documento: el editor trabaja sobre las
    *  páginas de un documento guardado (cargadas como sesión con sus ids). */
   const reviewDocId = useScannerStore((s) => s.reviewDocId);
-  /** FIX v3 (2.4): el chip «Se guardará…» cambia la calidad de exportación
-   *  sin salir del editor (mismo ajuste que Ajustes › Exportación). */
-  const updateSettings = useScannerStore((s) => s.updateSettings);
   const reviewDoc = useScannerStore((s) =>
     s.reviewDocId ? (s.documents.find((d) => d.id === s.reviewDocId) ?? null) : null
   );
@@ -427,9 +458,6 @@ export default function EditorView() {
   // ── Presentación a pantalla completa (desde el header) ───────────────────
   const [presentationOpen, setPresentationOpen] = useState(false);
 
-  // ── FIX v3 (2.4): drawer de calidad de guardado (chip «Se guardará…») ────
-  const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
-
   // ── Estado local ─────────────────────────────────────────────────────────
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -486,10 +514,6 @@ export default function EditorView() {
   const headerTitle = reviewDoc ? reviewDoc.title : `Digitalización ${documentsCount + 1}`;
   const headerDate = prettyDate(reviewDoc ? reviewDoc.updatedAt : Date.now());
 
-  // FIX v3 (2.4): etiqueta amable de la calidad de exportación (chip).
-  const exportQualityLabel =
-    exportQuality === "standard" ? "Estándar" : exportQuality === "alta" ? "Alta" : "Máxima";
-
   // ── Badge "Bordes detectados" (persistente 4s y se desvanece) ────────────
   const showBadge = useCallback(() => {
     setBadgeVisible(true);
@@ -518,8 +542,9 @@ export default function EditorView() {
    *  (data URL PNG) pesa ~el doble (10-25 MB como cadena JS, ×2 en heap):
    *  mismo presupuesto TOTAL de memoria que antes, mitades entradas → sin
    *  riesgo de jetsam en iOS con sesiones largas (runOcrAll incluido).
-   *  FIX v5 (5.1): cada entrada lleva ADEMÁS su copia de display JPEG
-   *  ≤2560 (~0,3-1 MB) — +5-10 % por entrada, dentro del presupuesto. */
+   *  EXPERIMENTO v11: la entrada es SOLO el dato completo (sin copia de
+   *  display) — el LRU de 6 NO se toca (medir la presión real ES el
+   *  experimento). */
   const cachePreviewEntry = useCallback((key: string, entry: PreviewEntry) => {
     previewCache.current.set(key, entry);
     if (previewCache.current.size > 6) {
@@ -551,26 +576,9 @@ export default function EditorView() {
     if (cached) {
       setPreview(cached);
       setPreviewLoading(false);
-      // FIX v5 (5.1): entrada sin copia de display (semilla desde
-      // page.processed, rotación rápida o siembra de runOcrAll) → se pinta
-      // YA con la url completa y la copia ligera se genera en 2º plano
-      // (al terminar se intercambia en cache + preview si sigue vigente).
-      if (!cached.displayUrl) {
-        const entry = cached;
-        void (async () => {
-          try {
-            const display = await makeDisplayUrl(entry.url);
-            if (cancelled) return;
-            if (previewCache.current.get(cacheKey) === entry) {
-              const updated = { ...entry, displayUrl: display };
-              previewCache.current.set(cacheKey, updated);
-              setPreview(updated);
-            }
-          } catch {
-            /* sin copia de display: se queda la url completa */
-          }
-        })();
-      }
+      // EXPERIMENTO v11: sin copia de display — se consume el DATO
+      // completo directamente (la generación en 2º plano de displayUrl
+      // de v5 5.1 está APAGADA; la entrada se pinta YA con su url).
       return () => {
         cancelled = true;
       };
@@ -590,14 +598,12 @@ export default function EditorView() {
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
         if (cancelled) return;
-        // FIX v5 (5.1): el DATO (res.processed) se guarda intacto como
-        // fuente de verdad; la copia de DISPLAY (JPEG ≤2560) se genera
-        // aquí — los <img> del editor nunca decodifican el PNG gigante.
-        const display = await makeDisplayUrl(res.processed);
-        if (cancelled) return;
+        // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
+        // con el DATO completo (url/w/h/engine); los <img> del editor
+        // decodifican directamente el PNG ≤4032 (red de seguridad
+        // APAGADA — el re-encode de v5 5.1/v10-A no corre).
         const entry: PreviewEntry = {
           url: res.processed,
-          displayUrl: display,
           w: res.precision?.width ?? 0,
           h: res.precision?.height ?? 0,
           engine: res.precision?.engine === "worker" ? "worker" : "canvas",
@@ -615,6 +621,14 @@ export default function EditorView() {
     };
      
   }, [mode, cacheKey, page?.original, cachePreviewEntry]);
+
+  // EXPERIMENTO v11 — telemetría QA: fuente única en el editor. El <img>
+  // del preview consume preview.url (el DATO completo) — sin copia de
+  // display. Debe leer "preview-url" durante el QA físico.
+  useEffect(() => {
+    if (mode !== "review" || !preview) return;
+    (window as unknown as { __editorSource?: string }).__editorSource = "preview-url";
+  }, [mode, preview]);
 
   // ── Comparación antes/después (mantener pulsado el preview a 1×) ──────────
   const startCompareTimer = useCallback(() => {
@@ -1750,16 +1764,15 @@ export default function EditorView() {
     const state = useScannerStore.getState();
     if (state.capturePages.length === 0) return;
     const built = state.capturePages.map((p) => {
-      // FIX v5 (5.1): la presentación también consume la copia de DISPLAY
-      // (JPEG ≤2560) cuando existe en la caché — mismo problema de
-      // decodificación del PNG gigante en el <img> a pantalla completa.
-      // FIX v6 (6.4): si NO existe, ya NO se decodifica el PNG de 4032 px
-      // (o el JPEG original de 12 MP) dentro de la transición de apertura:
-      // se pinta YA el THUMBNAIL (~160 px, placeholder con blur estilo iOS
-      // en PresentationView) y la copia de display se genera en background
-      // (cola de concurrencia 2, abajo) — al aterrizar, swap suave.
+      // EXPERIMENTO v11: la presentación consume el DATO completo — si la
+      // entry existe en la caché de previews, se arranca YA con su url
+      // (PNG ≤4032), la MISMA fuente que el editor (imposible que se vean
+      // distintas). FIX v6 (6.4): si NO existe, se pinta YA el THUMBNAIL
+      // (~160 px, placeholder con blur estilo iOS en PresentationView) y
+      // el dato completo se intercambia en background (cola de concurrencia
+      // 2, abajo — ahora SIN re-encode) — al aterrizar, swap suave.
       const entry = previewCache.current.get(capturePageKey(p));
-      const ready = entry?.displayUrl ?? null;
+      const ready = entry?.url ?? null;
       return {
         page: {
           id: p.id,
@@ -1779,9 +1792,10 @@ export default function EditorView() {
           displayPending: !ready,
         } as PresentationPage,
         key: capturePageKey(p),
-        // Fuente para la copia de display en background: el DATO procesado
-        // de la caché si existe; si la página nunca fue previsualizada, el
-        // original (mismo fallback que v5, pero SIN bloquear la apertura).
+        // Fuente para el swap en background (EXPERIMENTO v11: SIN
+        // re-encode): el DATO procesado de la caché si existe; si la
+        // página nunca fue previsualizada, el original (mismo fallback
+        // que v5/v6, pero sin bloquear la apertura).
         source: entry?.url ?? p.original,
       };
     });
@@ -1801,27 +1815,24 @@ export default function EditorView() {
       if (!item) return;
       void (async () => {
         try {
-          const display = await makeDisplayUrl(item.source);
-          const entry = previewCache.current.get(item.key);
-          if (entry && !entry.displayUrl) {
-            previewCache.current.set(item.key, { ...entry, displayUrl: display });
-          }
+          // EXPERIMENTO v11: SIN re-encode — swap directo al DATO completo
+          // (entry?.url ?? p.original). La red de seguridad está apagada:
+          // ya NO se escriben displayUrl en la caché.
+          const resolved = item.source;
           setPresentationPages((prev) =>
             prev.map((pg) =>
               pg.id === item.page.id
-                ? { ...pg, processed: display, displayPending: false }
+                ? { ...pg, processed: resolved, displayPending: false }
                 : pg
             )
           );
-        } catch {
-          /* sin copia de display: la página conserva el placeholder */
         } finally {
           runNext();
         }
       })();
     };
     runNext();
-    runNext(); // concurrencia 2
+    runNext(); // concurrencia 2 — EXPERIMENTO v11: SE MANTIENE (evita decodificar N PNG de 4032 px a la vez en la apertura)
   }, []);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
@@ -1980,7 +1991,11 @@ export default function EditorView() {
                 >
                   <img
                     ref={zoomImgRef}
-                    src={preview.displayUrl ?? preview.url}
+                    /* EXPERIMENTO v11: fuente única — el <img> del editor
+                     * consume preview.url (el DATO completo, PNG ≤4032),
+                     * sin copia de display. El resto del zoom/pan (ref,
+                     * touch-none, gestos, doble-tap del PR #21) intacto. */
+                    src={preview.url}
                     alt={`Página ${activeIdx + 1} escaneada y recortada`}
                     draggable={false}
                     /* FIX v6 (6.3): el toque nace en el <img> — sin su
@@ -2462,27 +2477,6 @@ export default function EditorView() {
             <ToolItem icon={Trash2} label="Eliminar" danger onClick={handleDeletePage} />
           </nav>
 
-          {/* FIX v3 (2.4): chip WYSIWYG — calidad y resolución con las que se
-              guardará el PDF (transparencia: lo que ves ES lo que se guarda).
-              Botón que abre el drawer de calidad (mismo patrón que Filtros). */}
-          <div className="flex justify-center px-5 pt-1.5">
-            <button
-              type="button"
-              aria-label="Calidad de guardado del PDF"
-              aria-haspopup="dialog"
-              onClick={() => setQualitySheetOpen(true)}
-              className="flex max-w-full items-center gap-1.5 truncate rounded-full bg-[#1c1c1e]/95 px-3 py-1 text-[12px] font-medium text-white/80 shadow-[0_2px_10px_rgba(0,0,0,0.4)] ring-1 ring-inset ring-white/10 backdrop-blur-md transition-transform active:scale-95"
-            >
-              <span className="truncate">
-                Se guardará: {exportQualityLabel} ·{" "}
-                {preview && preview.w > 0 && preview.h > 0
-                  ? `${preview.w}×${preview.h} px`
-                  : `hasta ${PROCESSED_MAX_LONG_SIDE} px`}
-              </span>
-              <ChevronDown className="size-3 shrink-0 text-white/50" strokeWidth={2.6} aria-hidden="true" />
-            </button>
-          </div>
-
           {/* Botones principales: seguir escaneando/añadir página + Guardar PDF */}
           <div className="flex gap-3 px-5 pb-2 pt-2.5">
             <button
@@ -2514,71 +2508,6 @@ export default function EditorView() {
 
       {mode === "crop" && (
         <div className="home-indicator mb-2 mt-0 shrink-0" aria-hidden="true" />
-      )}
-
-      {/* ── FIX v3 (2.4): Sheet de calidad de guardado (chip «Se guardará…») ── */}
-      {portalEl && (
-        <DrawerPrimitive.Root open={qualitySheetOpen} onOpenChange={setQualitySheetOpen}>
-          <DrawerPrimitive.Portal container={portalEl}>
-            <DrawerPrimitive.Overlay className="absolute inset-0 z-40 bg-black/50" />
-            <DrawerPrimitive.Content
-              className="absolute inset-x-0 bottom-0 z-50 mx-auto rounded-t-[22px] bg-[#1c1c1e] pb-safe outline-none"
-            >
-              <div className="mx-auto mt-2.5 h-1.5 w-9 rounded-full bg-white/25" />
-              <DrawerPrimitive.Title className="px-5 pb-1 pt-3 text-center text-[17px] font-semibold text-white">
-                Calidad de guardado
-              </DrawerPrimitive.Title>
-              <DrawerPrimitive.Description className="sr-only">
-                Elige la calidad con la que se exportará el PDF. Las páginas se
-                guardan siempre a resolución máxima; esta preferencia solo
-                afecta al re-encode JPEG del archivo PDF final.
-              </DrawerPrimitive.Description>
-              <div className="flex flex-col gap-1 px-4 pb-5 pt-2">
-                {([
-                  { id: "standard", label: "Estándar", hint: "Archivo más ligero" },
-                  { id: "alta", label: "Alta", hint: "Equilibrio calidad/peso" },
-                  { id: "máxima", label: "Máxima", hint: "Sin pérdidas añadidas" },
-                ] as const).map((q) => {
-                  const active = exportQuality === q.id;
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => {
-                        if (!active) {
-                          updateSettings({ exportQuality: q.id });
-                          toast.success(`Calidad de guardado: ${q.label}`, { duration: 1500 });
-                        }
-                        setQualitySheetOpen(false);
-                      }}
-                      className="flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl px-4 py-2.5 text-left transition-colors active:bg-white/8"
-                    >
-                      <span className="min-w-0">
-                        <span className={cn("block text-[15px] leading-snug", active ? "font-semibold text-white" : "text-white/85")}>
-                          {q.label}
-                        </span>
-                        <span className="block text-[12px] leading-snug text-[#8e8e93]">
-                          {q.hint}
-                        </span>
-                      </span>
-                      {active ? (
-                        <Check className="size-5 shrink-0 text-[#007aff]" strokeWidth={2.6} aria-hidden="true" />
-                      ) : (
-                        <span className="size-5 shrink-0" aria-hidden="true" />
-                      )}
-                    </button>
-                  );
-                })}
-                <p className="px-1 pt-1 text-center text-[11.5px] leading-snug text-[#8e8e93]">
-                  Las páginas se guardan a resolución máxima ({PROCESSED_MAX_LONG_SIDE} px); si el PDF
-                  supera el presupuesto de bytes, la calidad baja automáticamente para que el archivo
-                  quepa.
-                </p>
-              </div>
-            </DrawerPrimitive.Content>
-          </DrawerPrimitive.Portal>
-        </DrawerPrimitive.Root>
       )}
 
       {/* ── Sheet de filtros (vaul, confinado al marco del teléfono) ────── */}

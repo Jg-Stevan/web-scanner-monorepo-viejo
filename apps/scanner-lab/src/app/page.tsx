@@ -25,6 +25,17 @@ import EditorView from "@/components/scanner/EditorView";
 import SettingsView from "@/components/scanner/SettingsView";
 import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
+import { installCrashReporter } from "@/lib/crash-reporter";
+
+// EXPERIMENTO v11 — crash reporter (SOLO observación): instalar lo más
+// temprano posible, ANTES del primer render, para capturar errores desde
+// el arranque. Nada de preventDefault/reintentos/fetch — el error sigue
+// apareciendo en consola normalmente; el registro vive en el anillo
+// localStorage "scannerlab_crash_ring" + window.__crashLog y el banner
+// rojo pide captura de pantalla al dueño.
+if (typeof window !== "undefined") {
+  installCrashReporter();
+}
 
 /** Profundidad de navegación (para decidir dirección del slide). */
 const VIEW_RANK: Record<ScannerView, number> = {
@@ -88,6 +99,12 @@ export default function Home() {
       /* privada/SSR: no pasa nada */
     }
   }, []);
+
+  // EXPERIMENTO v11 — sincroniza la vista activa en window.__scannerView
+  // para que el crash reporter sepa DÓNDE crasheó (library/camera/editor/…).
+  useEffect(() => {
+    (window as unknown as { __scannerView?: string }).__scannerView = view;
+  }, [view]);
 
   // Previene el scroll del body en vistas de cámara (negro) para simular app nativa
   useEffect(() => {
