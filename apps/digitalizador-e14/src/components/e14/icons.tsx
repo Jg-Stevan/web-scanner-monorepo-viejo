@@ -417,3 +417,70 @@ export const UserKeyIcon = ({ className = "w-4 h-4" }: IconProps) => (
     <path d="M17.5 16.5h3.5" />
   </svg>
 );
+
+/** FolderInput (SPEC-e14-cyber-neon-captura §1/§8 — botón IMPORTAR de la fila
+ *  de disparo: carpeta con flecha entrando; trazo calca el `folder-input` de
+ *  lucide, strokeWidth 1.8 como pide la spec). */
+export const FolderImportIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-[1.8] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1" />
+    <path d="M2 13h10" />
+    <path d="m9 16 3-3-3-3" />
+  </svg>
+);
+
+/** Bolt (SPEC-e14-cyber-neon-captura §1/§8 — botón FLASH de la fila de
+ *  disparo: rayo HUD del mock; trazo calca el `zap` clásico de lucide,
+ *  strokeWidth 1.8 como pide la spec). */
+export const BoltIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-[1.8] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+  </svg>
+);
+
+/** FocusFrame (SPEC-e14-cyber-neon-captura §1/§4 — botón HUD ámbar superior
+ *  derecho: 4 brackets de enfoque + punto central (retícula de cámara pro);
+ *  strokeWidth 2, hereda el color ámbar del botón). */
+export const FocusFrameIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-2 fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
+    <circle cx="12" cy="12" r="1.6" />
+  </svg>
+);
+
+/** FileDoc (SPEC-e14-cyber-neon-captura §1/§8 — icono del OBTURADOR: el mock
+ *  sustituye el círculo liso por un documento con líneas (es un escáner de
+ *  actas); trazo calca el `file-text` de lucide, strokeWidth 1.8). */
+export const FileDocIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current stroke-[1.8] fill-none`}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    <path d="M10 9H8" />
+    <path d="M16 13H8" />
+    <path d="M16 17H8" />
+  </svg>
+);

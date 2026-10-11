@@ -282,6 +282,29 @@
 
 ---
 
+## 0-decimocuarto. E14 — REDISEÑO «CYBER-NEÓN» de la PANTALLA DE CÁMARA (rama `feat/e14-rediseno-cyber-neon-captura`, base main@`bb2aa8f`)
+
+**Base:** main con la ronda neón del chrome ya mergeada (PR #30). SPEC-e14-cyber-neon-captura Rev. 1 — re-estiliza la pantalla ESCANEAR (`ScanView.tsx`) 1:1 al mock del dueño 260×588 (visor negro, HUD de cámara pro). Tokens y nav heredados de SPEC-e14-cyber-neon §2/§9. La LÓGICA de cámara queda INTACTA (fallbacks, disparo por plataforma, linterna F-FLASH v3, ZSL, sensor-profiler, rutas iOS): solo capa visual.
+
+**Cambios (3 archivos de código + CHANGES.md):**
+
+- **§2 `globals.css`:** 3 tokens nuevos de HUD: `--visor-bg #030504` (visor negro absoluto cálido), `--amber-hud #E8C84A` (botón HUD superior derecho), `--hud-blue #24357A` (punto azul del pill de modos).
+- **§1 `icons.tsx`:** 4 iconos nuevos — `FolderImportIcon` (carpeta con flecha, stroke 1.8), `BoltIcon` (rayo, 1.8), `FocusFrameIcon` (4 brackets de enfoque + punto central), `FileDocIcon` (documento con líneas, 1.8 — el obturador del mock).
+- **§3 `ScanView.tsx` — pill de modos (sup. izq.):** cápsula `h-[40px] bg-[#0C1018]/90 border-white/10` con «IA» (chip BLANCO h-28 → SIMULACIÓN), icono cuadrícula (→ IMPORTAR, abre picker), punto azul y «AUTO» (→ CÁMARA). REEMPLAZA la fila de chips de fuente con la MISMA acción de cambio de modo (mismo `setFuente`/`inputRef.click()`, con fallbacks). El chip blanco SIEMPRE es data-driven del store.
+- **§4 HUD ámbar + ⋮ (sup. der.):** círculo 44px border-2 ámbar + glow 12px con `FocusFrameIcon` («Modo de enfoque») y botón ⋮ 40×40 — decorativos, sin lógica (opción por defecto de la spec).
+- **§5 visor:** full-bleed `bg-visor-bg` ocupando todo el alto entre top bar y fila de estado, LIMPIO en SIMULACIÓN/ARCHIVO (sin corner brackets, sin retícula, sin «ESPERANDO CAPTURA» — la info de modo vive en la fila de estado). En CÁMARA se conservan TODOS los overlays funcionales re-vestidos a tokens neón (cápsulas border-white/10, tipografía bold mono, radios cápsula): INICIANDO, quad SVG + anclajes, BUSCANDO ACTA (reubicada a `top-[72px]` bajo la fila HUD), HUD CALIDAD/DETECTADA/IA·AUTO (posición intacta), MANTÉN INMÓVIL (cápsula), CAPTURANDO y destello.
+- **§6 fila de estado:** `h-[24px]` sobre fondo de página — punto `bg-ok-tint` + label del modo ACTIVO data-driven («SIMULACIÓN»/«CÁMARA»/«IMPORTAR») 10px bold tracking 0.14em #C7CEDA; derecha HUD decorativo «ISO: 1600» #666A69 (string canónico de la spec).
+- **§7 chips de calidad:** 3 chips `h-[30px] rounded-[10px]` DECORATIVOS (no interactivos) — ÓPTIMA `[8.2]` (tinte 12%/borde 40% de #0bf282), MEDIO `[7.0]` (#ffd600), BAJA `[4.3]` (#ff5252), dot sólido + anillo colgante `w-2.5 h-2.5 border-2` del tono medio solapado (`-mt-[5px]`). Brackets con `aria-hidden`.
+- **§8 fila de disparo:** en SIM/ARCHIVO 1:1 al mock `[Importar | obturador | Flash]` gap-52px: carpeta 26px+label (MISMO picker), obturador Ø72 border-2.5 blanco con anillo interior 56px y `FileDocIcon` 30px (MISMO `alDisparar`), rayo 24px+label (div decorativo aria-hidden). En CÁMARA conserva los CONTROLES FUNCIONALES re-vestidos al lenguaje del mock: `[FLASH (linterna real, ámbar cuando torch on) | obturador | AUTO (armado, ok-tint)]`.
+
+**Decisiones interpretativas (documentadas, extrapolación de la spec):** (1) ARCHIVO también visor limpio — la spec elimina la retícula/«ESPERANDO» de SIMULACIÓN; el modo se comunica en fila de estado + botón Importar con label. (2) En CÁMARA la fila de disparo NO es 1:1 al mock (el mock es estado SIMULACIÓN): FLASH conserva la linterna real (F-FLASH v3) y AUTO el armado del gate (D22/D24) — eliminarlos sería regresión funcional; mismos botones columna icono+label. (3) Corner brackets eliminados en TODOS los modos (decorativos, ausentes en el mock; los overlays FUNCIONALES de CÁMARA se conservan íntegros). (4) Panel de simulación inferior ELIMINADO: el toggle online ya vive en el TopBar (mismo `alternarConexion`), la info de modo en la fila de estado, IMPORTAR en la fila de disparo/pill. (5) Pill «BUSCANDO ACTA» baja a top-[72px] para no chocar con la fila HUD flotante. (6) Obturador con glow ok-tint cuando `scoreAlto` en CÁMARA (cue funcional del gate, re-vestido). (7) Pill de modos y HUD flotan SOBRE el visor (spec §5: el visor ocupa «todo el alto entre top bar y fila de estado»).
+
+**NO cambiado:** TODA la lógica de cámara de `ScanView.tsx` (estados, efectos, `probeCamera`/`chooseMainProbe`, ZSL, `capturarInteligente`, `alDisparar` por plataforma, `alElegirArchivo`/`alElegirFotoCamara`, linterna, fallbacks L866-1089 y disparo L1211+ — 0 hunks del diff tocan esos bloques), `store.ts`, `types.ts`, `ReviewView`/`TopBar`/`BottomNav` (neón del PR #30), `apps/scanner-lab`, `packages/`.
+
+**Verificado:** gates 3/3 (`lint:e14` 0 · `e14:check` tsc 0 · build estático 0, 3/3 páginas) · higiene AC1 (diff confinado a §1: `git diff -- apps/scanner-lab packages` = 0 líneas; sin hunks en bloques de lógica) · fingerprint del bundle local: tokens `#030504`/`#e8c84a`×3/`#24357a` servidos, strings «ISO: 1600»/«ÓPTIMA»/«MEDIO»/«BAJA» presentes y «ESPERANDO CAPTURA»/«ESPERANDO IMAGEN»/«PASAR A OFFLINE» 0 hits · QA navegador M21-1 (390×844 + 360×740): AC2-AC11 ALL PASS — colores computados token por token, chip blanco data-driven, fallback de cámara con toast intacto, visor limpio (walk DOM), fila de estado data-driven, chips con anillos colgantes, obturador Ø72 con documento y flujo E2E SIMULACIÓN+IMPORTAR intacto (REVISIÓN 8.1/10.0), consola 0 errores, 0 overflow horizontal, comparación visual 1:1 vs mock sin desviaciones estructurales.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
