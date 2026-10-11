@@ -20,9 +20,9 @@ export interface ProgresoAnalisis {
 export type ActaStatus =
   | "OPTIMA" // verde   ≥ 8.0  → envío automático
   | "ADVERTENCIA" // ámbar   6.5–7.9 → confirmar o repetir
-  | "RECHAZADA" // rojo    < 6.5  → repetir obligatorio (2 intentos)
+  | "RECHAZADA" // rojo    < 6.5  → repetir obligatorio (4 intentos; contingencia automática al agotar)
   | "ENVIADA" // verde   tras envío (auto o manual)
-  | "EN_REVISION_HUMANA"; // ámbar   salida manual desde RECHAZADA (C4)
+  | "EN_REVISION_HUMANA"; // ámbar   contingencia al AGOTAR intentos (C4 automática) o SUGERIDA/MANUAL «repetir-primero»
 
 export interface ActaUbicacion {
   departamento: string;
@@ -61,7 +61,7 @@ export interface Acta {
   /** Motivo del rechazo → define la variante visual (§7.5) */
   rechazo: null | { tipo: "ILEGIBLE"; detalle: string } | { tipo: "GENERICO"; detalle: string };
   intento: number;
-  maxIntentos: number; // "INTENTO 1 DE 2"
+  maxIntentos: number; // "INTENTO 1 DE 4"
   enviadoAutomaticamente?: string; // "16:42:00"
   hashSha256?: string; // "EN COLA" | hash
 
