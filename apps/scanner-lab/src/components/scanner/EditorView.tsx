@@ -2377,17 +2377,23 @@ export default function EditorView() {
           </div>
 
           {/* Pill "Página X de Y" con navegación (estilo Adobe Scan).
-              v13-post-27 — en landscape corto (shortViewport) la fila se
-              reparte: grupo de navegación a la izquierda + toggle de
-              miniaturas a la derecha (justify-between) — se ahorra la fila
-              de 32 px del toggle; en portrait la composición original
-              (todo centrado, toggle en fila propia abajo). El grupo interno
+              v13-post-27 — en landscape corto (shortViewport) el toggle de
+              miniaturas se INTEGRA a la fila (se ahorra la fila de 32 px);
+              v13-post-29 — el CLÚSTER completo (flechas+pill+toggle) va
+              CENTRADO como una sola unidad de control: con
+              justify-between en pantallas anchas (844×390) quedaba un
+              hueco enorme entre el grupo y el toggle (medido por QA
+              visual — el grupo pegado a la izquierda y el toggle a la
+              esquina contraria). Centrado = lenguaje de toolbar iOS: un
+              solo grupo cohesivo que respira junto; en 568×320 el clúster
+              (~300 px) sigue cabiendo. En portrait la composición original
+              (pill centrada, toggle en fila propia abajo). El grupo interno
               existe en ambos casos (flex anidado idéntico visualmente). */}
           {totalPages > 0 && (
             <div
               className={cn(
                 "relative z-10 flex shrink-0 items-center gap-1.5",
-                shortViewport ? "justify-between px-4 py-1.5" : "justify-center py-2"
+                shortViewport ? "justify-center gap-4 py-1.5" : "justify-center py-2"
               )}
             >
               <div className="flex items-center gap-1.5">
@@ -2826,7 +2832,12 @@ export default function EditorView() {
             </motion.button>
           </div>
 
-          <div className="home-indicator mb-1.5 mt-0.5" aria-hidden="true" />
+          {/* v13-post-29 — margen compacto en landscape corto (cada px de
+              stage cuenta); en portrait el original. */}
+          <div
+            className={cn("home-indicator", shortViewport ? "mb-0.5 mt-0" : "mb-1.5 mt-0.5")}
+            aria-hidden="true"
+          />
         </div>
       )}
 
