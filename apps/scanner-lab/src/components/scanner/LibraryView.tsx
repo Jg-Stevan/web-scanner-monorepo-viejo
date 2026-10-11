@@ -1832,7 +1832,9 @@ function GridCard({
             </span>
           </span>
         )}
-        {/* Estrella (oculta en modo selección) */}
+        {/* Estrella (oculta en modo selección) — v13-post-10: pop elástico
+            al cambiar de estado (remonte por key; reduced-motion lo salta
+            vía MotionConfig). */}
         <button
           type="button"
           aria-label={doc.favorite ? "Quitar de favoritos" : "Añadir a favoritos"}
@@ -1847,6 +1849,13 @@ function GridCard({
           )}
           tabIndex={selecting ? -1 : 0}
         >
+          <motion.span
+            key={doc.favorite ? "fav" : "nofav"}
+            initial={{ scale: 0.4, rotate: doc.favorite ? -30 : 0 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: "spring", stiffness: 500, damping: 17 }}
+            className="flex"
+          >
           <Star
             className={cn(
               "h-[18px] w-[18px] drop-shadow-sm",
@@ -1854,6 +1863,7 @@ function GridCard({
             )}
             strokeWidth={2}
           />
+          </motion.span>
         </button>
       </div>
       <div className="px-3 pb-2.5 pt-2">
@@ -2020,7 +2030,7 @@ function ListRow({
       }}
       {...handlers}
       className={cn(
-        "flex cursor-pointer select-none items-center gap-3 rounded-xl bg-white dark:bg-[#1c1c1e] p-3 shadow-[0_2px_8px_rgba(0,0,0,0.08)] outline-none transition-shadow duration-150 focus-visible:ring-2 focus-visible:ring-[#007aff]/60",
+        "group flex cursor-pointer select-none items-center gap-3 rounded-xl bg-white dark:bg-[#1c1c1e] p-3 shadow-[0_2px_8px_rgba(0,0,0,0.08)] outline-none transition-shadow duration-150 focus-visible:ring-2 focus-visible:ring-[#007aff]/60",
         selecting && selected && "ring-2 ring-[#007aff]"
       )}
     >
@@ -2028,7 +2038,7 @@ function ListRow({
         <Thumb
           src={doc.pages[0]?.thumbnail}
           alt={doc.title}
-          className="h-16 w-12 rounded-lg"
+          className="h-16 w-12 rounded-lg transition-transform duration-300 ease-out group-hover:scale-[1.04]"
         />
         {/* Tinte azul + check sobre la miniatura */}
         {selecting && selected && (
@@ -2082,13 +2092,22 @@ function ListRow({
         )}
         tabIndex={selecting ? -1 : 0}
       >
-        <Star
-          className={cn(
-            "h-[18px] w-[18px]",
-            doc.favorite ? "fill-[#ffce00] text-[#ffce00]" : "text-[#c7c7cc] dark:text-[#545456]"
-          )}
-          strokeWidth={2}
-        />
+        {/* v13-post-10 — pop elástico al cambiar (mismo patrón que la cuadrícula). */}
+        <motion.span
+          key={doc.favorite ? "fav" : "nofav"}
+          initial={{ scale: 0.4, rotate: doc.favorite ? -30 : 0 }}
+          animate={{ scale: 1, rotate: 0 }}
+          transition={{ type: "spring", stiffness: 500, damping: 17 }}
+          className="flex"
+        >
+          <Star
+            className={cn(
+              "h-[18px] w-[18px]",
+              doc.favorite ? "fill-[#ffce00] text-[#ffce00]" : "text-[#c7c7cc] dark:text-[#545456]"
+            )}
+            strokeWidth={2}
+          />
+        </motion.span>
       </button>
       <span className={cn("shrink-0 transition-opacity duration-150", selecting && "pointer-events-none opacity-0")}>
         <DocMenu doc={doc} onRename={onRename} onDelete={onDelete} onTags={onTags} onSelect={onStartSelection} />

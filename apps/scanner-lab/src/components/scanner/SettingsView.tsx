@@ -6,8 +6,8 @@
  * calidad PDF y borrado de todos los documentos con confirmación.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import { Check, Copy, FileText, Layers, Monitor, Moon, PlusSquare, ScanText, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -79,20 +79,66 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/** Mini-card de estadística (patrón widget de iOS: número grande + label). */
+/** Mini-card de estadística (patrón widget de iOS: número grande + label).
+ *  v13-post-10 — `countTo` anima el número de 0 al valor con easeOutCubic
+ *  (~600 ms, escalonado por `delay`): la lectura de «cuánto hay» aterriza
+ *  mejor que un número que aparece de golpe. Respeta «Reducir movimiento»
+ *  (salta al valor final) y los valores NO numéricos (p. ej. «26.0 KB»)
+ *  se muestran como siempre. */
 function StatCard({
   value,
   label,
   icon: Icon,
   color,
   delay = 0,
+  countTo,
+  decimals = 0,
+  compactK = false,
 }: {
   value: string;
   label: string;
   icon: typeof FileText;
   color: string;
   delay?: number;
+  /** Valor numérico a animar (0 → countTo); si se omite, muestra `value` tal cual. */
+  countTo?: number;
+  /** Decimales al animar (p. ej. páginas/doc = 1). */
+  decimals?: number;
+  /** Formato compacto ≥1000 (1.2k), como el valor estático de palabras OCR. */
+  compactK?: boolean;
 }) {
+  const reduced = useReducedMotion();
+  const [display, setDisplay] = useState<number>(countTo ?? 0);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (countTo === undefined || reduced) {
+      setDisplay(countTo ?? 0);
+      return;
+    }
+    const DURATION = 600;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / DURATION, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      setDisplay(countTo * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    // El delay de la card también escala la animación (misma coreografía).
+    const timer = window.setTimeout(() => {
+      rafRef.current = requestAnimationFrame(tick);
+    }, delay * 1000);
+    return () => {
+      window.clearTimeout(timer);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [countTo, reduced, delay]);
+
+  const format = (n: number) =>
+    compactK && n >= 1000
+      ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`
+      : n.toFixed(decimals);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 8, scale: 0.97 }}
@@ -106,8 +152,9 @@ function StatCard({
       <Icon className="size-[15px]" strokeWidth={2.2} style={{ color }} aria-hidden="true" />
       <span
         className="text-[20px] font-semibold leading-none tracking-[-0.3px] text-[#1c1c1e] dark:text-white tabular-nums"
+        aria-label={countTo !== undefined ? value : undefined}
       >
-        {value}
+        {countTo !== undefined ? format(display) : value}
       </span>
       <span className="text-[11px] font-medium leading-tight text-[#8e8e93]">{label}</span>
     </motion.div>
@@ -194,6 +241,7 @@ export default function SettingsView() {
           <div className="grid grid-cols-3 gap-2">
             <StatCard
               value={String(liveDocs.length)}
+              countTo={liveDocs.length}
               label={plural(liveDocs.length, "documento", "documentos")}
               icon={FileText}
               color="#007aff"
@@ -201,6 +249,7 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(totalPages)}
+              countTo={totalPages}
               label={plural(totalPages, "página", "páginas")}
               icon={Layers}
               color="#5856d6"
@@ -208,6 +257,7 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(ocrPages)}
+              countTo={ocrPages}
               label="con texto OCR"
               icon={ScanText}
               color="#34c759"
@@ -215,6 +265,8 @@ export default function SettingsView() {
             />
             <StatCard
               value={ocrWords >= 1000 ? `${(ocrWords / 1000).toFixed(1).replace(".0", "")}k` : String(ocrWords)}
+              countTo={ocrWords}
+              compactK
               label={ocrWords === 1 ? "palabra OCR" : "palabras OCR"}
               icon={Type}
               color="#30d158"
@@ -222,6 +274,7 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(favoriteCount)}
+              countTo={favoriteCount}
               label={plural(favoriteCount, "favorito", "favoritos")}
               icon={Star}
               color="#ff9500"
@@ -229,6 +282,7 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(tagCount)}
+              countTo={tagCount}
               label={plural(tagCount, "etiqueta", "etiquetas")}
               icon={Tags}
               color="#ff2d55"
@@ -243,6 +297,7 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(trashCount)}
+              countTo={trashCount}
               label="en Eliminados"
               icon={Trash2}
               color="#ff453a"
@@ -250,6 +305,8 @@ export default function SettingsView() {
             />
             <StatCard
               value={String(liveDocs.length > 0 ? Math.round((totalPages / liveDocs.length) * 10) / 10 : 0)}
+              countTo={liveDocs.length > 0 ? Math.round((totalPages / liveDocs.length) * 10) / 10 : 0}
+              decimals={1}
               label="páginas/doc"
               icon={Layers}
               color="#64d2ff"
