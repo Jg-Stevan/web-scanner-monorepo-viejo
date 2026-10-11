@@ -78,6 +78,23 @@ const GESTURES: { action: string; hint: string }[] = [
   { action: "Selección múltiple", hint: "Pulsación larga sobre un documento" },
 ];
 
+/**
+ * v13-post-30 — Secciones de Ajustes para el raíl de navegación rápida.
+ * El MISMO orden en que se pintan abajo; los ids son estables (anclas de
+ * scrollIntoView). «Biblioteca» en vez de «Tu biblioteca»: en el raíl el
+ * texto largo es ruido — el ancla salta al h2 completo de la sección.
+ */
+const SETTINGS_SECTIONS: { id: string; label: string }[] = [
+  { id: "ajustes-biblioteca", label: "Biblioteca" },
+  { id: "ajustes-apariencia", label: "Apariencia" },
+  { id: "ajustes-instalacion", label: "Instalación" },
+  { id: "ajustes-procesamiento", label: "Procesamiento" },
+  { id: "ajustes-exportacion", label: "Exportación" },
+  { id: "ajustes-almacenamiento", label: "Almacenamiento" },
+  { id: "ajustes-dispositivo", label: "Dispositivo" },
+  { id: "ajustes-acerca", label: "Acerca de" },
+];
+
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -164,6 +181,172 @@ function StatCard({
   );
 }
 
+/** v13-post-30 — Raíl de navegación rápida entre secciones de Ajustes.
+ *
+ *  Problema medido en la auditoría r9: en landscape corto (568×320, SE 1.ª
+ *  gen) el scroller muestra ~158 px para ~2 600 px de contenido — ~17
+ *  pantallas de scroll ciego para llegar a «Dispositivo» o «Acerca de»;
+ *  en 844×390 son ~213 px (misma odisea). r8 lo señaló como auditoría
+ *  pendiente y el QA de r9 lo confirmó como la carencia dominante.
+ *
+ *  Patrón App Store «Today»: chips horizontales bajo el título que saltan
+ *  a cada sección. El chip activo SIGUE el scroll (rAF-throttled, una sola
+ *  fuente de verdad — durante un salto suave el pill «barre» las secciones
+ *  intermedias y aterriza en la daga, como el scrubber de Fotos) y se
+ *  auto-centra en el raíl. Fades de borde solo en el lado con contenido
+ *  pendiente (patrón carrusel del editor, v13-post-7). «Reducir movimiento»:
+ *  saltos y centrado secos (behavior:"auto"; MotionConfig apaga el muelle
+ *  del pill). Háptica sutil de 6 ms al saltar (patrón BottomNav).
+ */
+function SettingsQuickNav({
+  scrollerRef,
+}: {
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const reduced = useReducedMotion();
+  const railRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(SETTINGS_SECTIONS[0].id);
+  const [edges, setEdges] = useState({ left: false, right: true });
+  /** No auto-centrar el chip en el montaje: el primero ya está a la vista
+   *  y centrarlo revelaría contenido a medias sin intención del usuario. */
+  const settledRef = useRef(false);
+
+  /* Chip activo = última sección cuyo borde superior cruzó la franja
+   *  superior del scroller (48 px ≈ la banda donde vive su h2). Caso final:
+   *  si el scroll tocó fondo, gana la ÚLTIMA sección — en viewports altos
+   *  la última sección no alcanza el tope y el pill se quedaría corto. */
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const top = scroller.getBoundingClientRect().top;
+      let current = SETTINGS_SECTIONS[0].id;
+      for (const s of SETTINGS_SECTIONS) {
+        const el = document.getElementById(s.id);
+        if (el && el.getBoundingClientRect().top - top <= 48) current = s.id;
+      }
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) {
+        current = SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1].id;
+      }
+      setActive(current);
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    measure();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [scrollerRef]);
+
+  /* El chip activo se auto-centra en el raíl tras el primer cambio. */
+  useEffect(() => {
+    if (!settledRef.current) {
+      settledRef.current = true;
+      return;
+    }
+    const rail = railRef.current;
+    const chip = rail?.querySelector<HTMLElement>(`[data-chip="${active}"]`);
+    if (!rail || !chip) return;
+    rail.scrollTo({
+      left: chip.offsetLeft - (rail.clientWidth - chip.offsetWidth) / 2,
+      behavior: reduced ? "auto" : "smooth",
+    });
+  }, [active, reduced]);
+
+  /* Fades de borde del raíl: solo en el lado donde queda contenido por ver. */
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const sync = () => {
+      const max = rail.scrollWidth - rail.clientWidth;
+      setEdges({ left: rail.scrollLeft > 4, right: rail.scrollLeft < max - 4 });
+    };
+    sync();
+    rail.addEventListener("scroll", sync, { passive: true });
+    return () => rail.removeEventListener("scroll", sync);
+  }, []);
+
+  /** Tick háptico corto (silencioso donde no hay vibratoria). */
+  const tick = () => {
+    try {
+      navigator.vibrate?.(6);
+    } catch {
+      /* sin permiso/hardware: no-op */
+    }
+  };
+
+  const jump = (id: string) => {
+    document
+      .getElementById(id)
+      ?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    tick();
+  };
+
+  return (
+    <nav aria-label="Secciones de Ajustes" className="relative shrink-0">
+      <div
+        ref={railRef}
+        className="no-scrollbar flex items-center gap-1.5 overflow-x-auto px-5 pb-2.5"
+      >
+        {SETTINGS_SECTIONS.map((s) => {
+          const isActive = active === s.id;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              data-chip={s.id}
+              aria-current={isActive ? "true" : undefined}
+              onClick={() => jump(s.id)}
+              className={cn(
+                "relative flex h-8 shrink-0 items-center rounded-full px-3.5 text-[13px] font-semibold transition-colors duration-150 active:scale-95",
+                isActive
+                  ? "text-white dark:text-black"
+                  : "border border-[#e5e5ea] bg-white text-[#3c3c43] hover:border-[#d1d1d6] dark:border-[#3a3a3c] dark:bg-[#1c1c1e] dark:text-white dark:hover:border-[#48484a] active:opacity-70"
+              )}
+            >
+              {/* Píldora activa deslizante (patrón segmented control de iOS,
+               *  mismo lenguaje que los chips de orden de la biblioteca
+               *  v13-post-13): la misma capa física viaja de chip en chip
+               *  vía layoutId; con «Reducir movimiento» MotionConfig apaga
+               *  las layout animations (salto seco). */}
+              {isActive && (
+                <motion.span
+                  layoutId="settings-quicknav-pill"
+                  transition={{ type: "spring", stiffness: 480, damping: 38 }}
+                  className="absolute inset-0 rounded-full bg-black shadow-[0_2px_8px_rgba(0,0,0,0.22)] dark:bg-white dark:shadow-[0_2px_10px_rgba(255,255,255,0.18)]"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="relative z-10">{s.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {/* Fades de borde con el MISMO fondo del marco de Ajustes — revelan
+       *  que el raíl sigue más allá del pliegue. */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-[#f2f2f7] to-transparent transition-opacity duration-200 dark:from-black",
+          edges.left ? "opacity-100" : "opacity-0"
+        )}
+      />
+      <div
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[#f2f2f7] to-transparent transition-opacity duration-200 dark:from-black",
+          edges.right ? "opacity-100" : "opacity-0"
+        )}
+      />
+    </nav>
+  );
+}
+
 export default function SettingsView() {
   const settings = useScannerStore((s) => s.settings);
   const updateSettings = useScannerStore((s) => s.updateSettings);
@@ -171,6 +354,10 @@ export default function SettingsView() {
   const wipeLibrary = useScannerStore((s) => s.wipeLibrary);
 
   const [confirmWipe, setConfirmWipe] = useState(false);
+
+  /* v13-post-30 — ancla del scroller para el raíl de navegación rápida
+   *  (tracking del chip activo). */
+  const scrollerRef = useRef<HTMLDivElement>(null);
 
   /* F-TRASH: las estadísticas cuentan solo la biblioteca VIVA (la papelera
    *  se muestra aparte — es contenido distinto, como iOS Files). */
@@ -234,10 +421,13 @@ export default function SettingsView() {
         <p className="mt-1 text-[13px] text-[#8e8e93]">Personaliza tu escáner</p>
       </header>
 
+      {/* v13-post-30 — Raíl de navegación rápida entre secciones */}
+      <SettingsQuickNav scrollerRef={scrollerRef} />
+
       {/* Grupos estilo iOS con scroll central */}
-      <div className="ios-scroll flex-1 overflow-y-auto overscroll-contain pb-8">
+      <div ref={scrollerRef} className="ios-scroll flex-1 overflow-y-auto overscroll-contain pb-8">
         {/* Panel de estadísticas de la biblioteca */}
-        <section aria-label="Estadísticas de la biblioteca" className="px-5 pb-1 pt-2">
+        <section id="ajustes-biblioteca" aria-label="Estadísticas de la biblioteca" className="px-5 pb-1 pt-2">
           <h2 className="mb-2 px-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6d6d72] dark:text-[#98989e]">
             Tu biblioteca
           </h2>
@@ -324,7 +514,7 @@ export default function SettingsView() {
         {/* F-PWA: instalación en el móvil (Android: prompt nativo · iOS: guía) */}
         <InstallSection />
 
-        <SettingsGroup label="Procesamiento" delay={0.1}>
+        <SettingsGroup label="Procesamiento" id="ajustes-procesamiento" delay={0.1}>
           {/* FIX v3: fila informativa estática (sin medición) — el benchmark
               F-DEVBENCH se eliminó: la app procesa SIEMPRE al máximo del
               lente con tope técnico único. */}
@@ -395,7 +585,7 @@ export default function SettingsView() {
           </SettingsRow>
         </SettingsGroup>
 
-        <SettingsGroup label="Exportación" delay={0.15}>
+        <SettingsGroup label="Exportación" id="ajustes-exportacion" delay={0.15}>
           <SettingsRow title="Calidad PDF">
             <Select
               value={settings.exportQuality}
@@ -424,7 +614,7 @@ export default function SettingsView() {
           </SettingsRow>
         </SettingsGroup>
 
-        <SettingsGroup label="Almacenamiento" delay={0.15}>
+        <SettingsGroup label="Almacenamiento" id="ajustes-almacenamiento" delay={0.15}>
           <SettingsRow
             title="Uso estimado"
             subtitle={`${plural(liveDocs.length, "documento", "documentos")} · ${plural(
@@ -475,7 +665,7 @@ export default function SettingsView() {
             ⛔ No altera captura ni análisis (invariante de la spec v13). */}
         <DeviceSection />
 
-        <SettingsGroup label="Acerca de" delay={0.2}>
+        <SettingsGroup label="Acerca de" id="ajustes-acerca" delay={0.2}>
           <SettingsRow title="Versión">
             <span className="shrink-0 text-[15px] text-[#8e8e93]">2.0.0</span>
           </SettingsRow>
@@ -636,7 +826,7 @@ function AppearanceSection() {
   ];
 
   return (
-    <SettingsGroup label="Apariencia" delay={0.05}>
+    <SettingsGroup label="Apariencia" id="ajustes-apariencia" delay={0.05}>
       {options.map((o) => {
         const active = mounted && current === o.id;
         const Icon = o.icon;
@@ -684,16 +874,20 @@ function AppearanceSection() {
 
 function SettingsGroup({
   label,
+  id,
   delay = 0,
   children,
 }: {
   label: string;
+  /** v13-post-30 — ancla del raíl de navegación (scrollIntoView). */
+  id?: string;
   delay?: number;
   children: React.ReactNode;
 }) {
   return (
     <motion.section
       aria-label={label}
+      id={id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay, ease: "easeOut" }}
@@ -867,7 +1061,7 @@ function DeviceSection() {
   };
 
   return (
-    <SettingsGroup label="Dispositivo" delay={0.2}>
+    <SettingsGroup label="Dispositivo" id="ajustes-dispositivo" delay={0.2}>
       <SettingsRow
         title="Rendimiento detectado"
         subtitle={`Diagnóstico v13 · no altera la captura (siempre ${PROCESSED_MAX_LONG_SIDE} px)`}
@@ -1033,7 +1227,7 @@ function InstallSection() {
   };
 
   return (
-    <SettingsGroup label="Instalación" delay={0.12}>
+    <SettingsGroup label="Instalación" id="ajustes-instalacion" delay={0.12}>
       {state.installed ? (
         <SettingsRow title="App instalada" subtitle="Corre a pantalla completa y sin conexión">
           <span
