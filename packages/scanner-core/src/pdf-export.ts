@@ -561,6 +561,10 @@ export async function buildLibraryPdf(
 
 /** Dispara la descarga de un blob con nombre limpio (patrón ancla). */
 export function downloadBlob(blob: Blob, fileName: string): void {
+  // FIX v13 (13.3) — INVARIANTE DE MEMORIA (verificado en main): el URL del
+  // blob de descarga se revoca con timeout corto post-click (4 s) — el ancla
+  // ya consumió el href para entonces; sin revoke, cada exportación deja un
+  // object URL vivo apuntando al PDF completo hasta cerrar el tab.
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

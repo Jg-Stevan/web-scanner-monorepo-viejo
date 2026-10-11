@@ -197,6 +197,11 @@ async function nativeDecodeToCappedDataUrl(blob: Blob): Promise<string | null> {
   }
 
   // objectURL → <img> → canvas (el navegador decodifica y aplica EXIF al pintar).
+  // FIX v13 (13.3) — INVARIANTE DE MEMORIA (verificado en main): el objectUrl
+  // se revoca en `finally` (onload/onerror del decode) — vive exactamente lo
+  // que el decode necesita. Una página 4032 px ≈ 49 MB decodificada: sin este
+  // revoke, sesiones largas en 2–3 GB RAM acumulan URLs → iOS recarga el tab
+  // y se pierde la sesión. NO relajar este patrón sin propuesta de persistencia.
   const objectUrl = URL.createObjectURL(blob);
   try {
     const img = await loadImage(objectUrl);
