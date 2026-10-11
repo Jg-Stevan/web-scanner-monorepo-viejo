@@ -2346,10 +2346,14 @@ export default function CameraView() {
             aria-pressed={autoCapture}
             title="Captura automática (recorte y disparo al detectar el documento)"
             onClick={() => {
-              setAutoCapture((v) => !v);
-              // FIX v7 (7.2) — auto-captura recién activada: subir YA (el
-              // stream lleva abierto — sin delay, no es arranque).
-              if (!autoCapture) {
+              const next = !autoCapture;
+              setAutoCapture(next);
+              // FIX v7-b — autoRef se sincroniza en render (~731); si llamamos
+              // upgradeStreamResolution AHORA (antes del re-render), su guard
+              // `!autoRef.current` vería el valor VIEJO y abortaría. Sincronizar
+              // el ref YA (el render lo re-fijará con el mismo valor).
+              autoRef.current = next;
+              if (next) {
                 upgradeStreamResolution(streamRef.current?.getVideoTracks()[0]);
               }
             }}
@@ -2869,9 +2873,13 @@ export default function CameraView() {
                 label="Auto-captura"
                 value={autoCapture ? "Sí" : "No"}
                 onClick={() => {
-                  setAutoCapture((v) => !v);
-                  // FIX v7 (7.2) — activada a mitad de sesión: subir YA.
-                  if (!autoCapture) {
+                  const next = !autoCapture;
+                  setAutoCapture(next);
+                  // FIX v7-b — sincronizar autoRef YA (mismo patrón que el
+                  // toggle de la toolbar): sin esto, el guard del helper lee
+                  // el valor VIEJO y aborta la subida.
+                  autoRef.current = next;
+                  if (next) {
                     upgradeStreamResolution(streamRef.current?.getVideoTracks()[0]);
                   }
                 }}
