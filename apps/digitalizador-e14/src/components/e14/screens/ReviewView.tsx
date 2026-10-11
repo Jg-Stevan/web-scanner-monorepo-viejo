@@ -49,13 +49,6 @@ const CSS_FILTERS: Record<PageFilter, string> = {
   bw: "grayscale(1) contrast(2.6) brightness(1.05)",
 };
 
-/** Color de brackets según el estado del acta. */
-function tonoBrackets(status: string) {
-  if (status === "ADVERTENCIA" || status === "EN_REVISION_HUMANA") return "border-warn";
-  if (status === "RECHAZADA") return "border-crit";
-  return "border-ok-tint";
-}
-
 // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L237-271
 // (OcrHighlightedText — F-FIND: texto OCR con las coincidencias de la
 // búsqueda resaltadas, marca amarilla #ffd60a estilo iOS, case-insensitive.
@@ -176,6 +169,11 @@ export function ReviewView() {
   // PENDIENTE + chips fallback); RECHAZADA lleva clasificacion:null (ídem).
   const hayClasificacion =
     acta.clasificacion != null && acta.clasificacion.nivel !== "MANUAL";
+  // D3 Rev. 5 (decisión 4): PÁG data-driven — la paginación se conoce siempre
+  // que el pipeline adjuntó clasificación (AUTO/SUGERIDA/MANUAL, p. ej. el
+  // EN_RH de sin-anclas); «PÁG - DE -» SOLO si la página no se pudo
+  // identificar (RECHAZADA con clasificacion null — «muy pocas veces»).
+  const paginaIdentificada = acta.clasificacion != null;
   // D3: tono del chip 1 por estado — identidad visual del mock, dato aparte.
   const toneEstado =
     status === "RECHAZADA"
@@ -309,14 +307,15 @@ export function ReviewView() {
             ))}
         </div>
 
-        {/* D3 Rev. 2 (veto del dueño): chips ARRIBA de la tarjeta en todos los
-            estados, DATA-DRIVEN — el «---» es SOLO el fallback cuando el sistema
-            NO logra identificar (foto borrosa, rasgada, rota o manchada). Con
-            clasificación presente → datos reales del acta en cualquier estado. */}
+        {/* D3 Rev. 5 (dueño: «son diseños, la lógica sigue igual, los datos sí
+            se pueden cambiar»): VALORES data-driven — el fallback «---» aparece
+            SOLO cuando el sistema NO identificó (veto Rev. 2, decisión 3), en
+            CUALQUIER estado. TONO del chip 1 por estado (visual del export
+            Stitch). El banner (D2) NO cambia: título data-driven. */}
         <div className="w-full max-w-sm flex items-center justify-center gap-1.5 pb-2 flex-wrap">
           <Chip tone={toneEstado} solid>{hayClasificacion ? tipo : "---"}</Chip>
           <Chip tone="neutral">{hayClasificacion ? `MESA ${acta.ubicacion.mesa}` : "MESA ---"}</Chip>
-          <Chip tone="neutral">{hayClasificacion ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}</Chip>
+          <Chip tone="neutral">{paginaIdentificada ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}</Chip>
         </div>
 
         {/* Visor — F3: la FOTO REAL es el visor ÚNICO (el papel sintético se
@@ -336,15 +335,15 @@ export function ReviewView() {
             className="relative bg-white p-1.5 border border-line rounded-xl flex items-center justify-center w-full flex-1 min-h-0"
           >
             <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {/* D4 (SPEC-rediseno-chrome-3-estados): ENVIADA RECUPERA los
-                  brackets verdes del mock 3 — el MISMO overlay de 4 esquinas
-                  de la rama no-ENVIADA (tonoBrackets → border-ok-tint),
+              {/* D4 Rev. 4 (export Stitch): brackets VERDES FIJOS en TODOS los
+                  estados — los 5 HTML del export dibujan las esquinas con
+                  #00E676 3.5px, incluidas RECHAZADA y ADVERTENCIA (DEV-1);
                   pointer-events-none; el botón y su onClick quedan EXACTOS. */}
               <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
-                <div className={`absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-[3.5px] border-l-[3.5px] border-ok-tint" />
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-[3.5px] border-r-[3.5px] border-ok-tint" />
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[3.5px] border-l-[3.5px] border-ok-tint" />
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[3.5px] border-r-[3.5px] border-ok-tint" />
               </div>
               {hayFoto ? (
                 <img
@@ -364,11 +363,13 @@ export function ReviewView() {
         ) : (
           <section className="relative bg-surface-1 rounded-xl border border-line p-3 flex items-center justify-center w-full flex-1 min-h-0">
             <div className="w-full h-full relative flex items-center justify-center py-2 px-1 min-h-0">
+              {/* D4 Rev. 4 (DEV-1): brackets VERDES 3.5px fijos — igual que la
+                  tarjeta ENVIADA (export: #00E676 en TODOS los estados). */}
               <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
-                <div className={`absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
-                <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-[3.5px] border-l-[3.5px] border-ok-tint" />
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-[3.5px] border-r-[3.5px] border-ok-tint" />
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[3.5px] border-l-[3.5px] border-ok-tint" />
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[3.5px] border-r-[3.5px] border-ok-tint" />
               </div>
               {hayFoto ? (
                 <img
@@ -751,19 +752,20 @@ export function ReviewView() {
 
 /** CTAs del footer por estado (se anclan sobre el BottomNav, §7.4/§7.5). */
 
-// Candado del botón manual (D6-bis Rev. 3): «repetidamente» ≈ 3 capturas
+// Candado del botón manual (D6-bis Rev. 4): «repetidamente» ≈ 3 capturas
 // rechazadas del ciclo. Con maxIntentos = 4, la ventana es la pantalla
 // «INTENTO 3 DE 4». Tunable: un solo número.
 const UMBRAL_REVISION_HUMANA = 3;
 
-/** D6-bis (Rev. 3): escalación manual con candado — deshabilitado hasta
- *  acumular UMBRAL_REVISION_HUMANA capturas rechazadas. Icono persona+llave
- *  (imagen de referencia QR del dueño). */
-function BtnRevisionHumana({ puedeEscalar, onClick }: { puedeEscalar: boolean; onClick: () => void }) {
+/** D6-bis (Rev. 4, DEV-2): escalación manual — SOLO se monta con el candado
+ *  abierto (puedeEscalar): el diseño expresa el candado POR AUSENCIA (adv_1
+ *  y rechazada_1 no dibujan el botón; adv_2 lo muestra ya activo). Icono
+ *  persona+llave (imagen QR del dueño; el export dibuja 👤 simple — manda la
+ *  referencia QR explícita). */
+function BtnRevisionHumana({ onClick }: { onClick: () => void }) {
   return (
     <PrimaryBtn
       variant="outline-warn"
-      disabled={!puedeEscalar}
       onClick={onClick}
       icon={<UserKeyIcon className="w-4 h-4" />}
       ariaLabel="Enviar esta acta a revisión humana"
@@ -822,30 +824,37 @@ export function ReviewCtas() {
   }
 
   if (status === "ADVERTENCIA") {
-    // D6 Rev. 3 (mock «score intermedio» + petición del dueño): REPETIR FOTO
-    // sigue siendo el camino primario; debajo, «REVISIÓN HUMANA» — deshabilitado
-    // hasta el intento 3 («si repetidamente rechaza la imagen se habilita»).
-    // El botón de confirmación manual de envío sigue FUERA (veto Rev. 2): el acta
-    // solo se envía sola (score ≥ 8), vía rescate por recorte, o el usuario
-    // la entrega a revisión humana con el botón de abajo.
-    return (
-      <div className="flex flex-col gap-2 w-full">
-        <PrimaryBtn variant="outline-crit" onClick={repetirFoto}>
+    // D6 Rev. 4 (export Stitch adv_1/adv_2): REPETIR FOTO = outline-warn
+    // (ÁMBAR, no rojo — DEV-4). Candado OCULTO (DEV-2): con intento < 3 va
+    // SOLO full-width (adv_1 no dibuja REVISIÓN HUMANA); al abrirse
+    // (intento ≥ 3), grid-cols-2 lado a lado, ambos ámbar idénticos (adv_2).
+    // El botón de confirmación manual de envío sigue FUERA (veto Rev. 2).
+    return puedeEscalar ? (
+      <div className="grid grid-cols-2 gap-2 w-full">
+        <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
           <RefreshIcon className="w-4 h-4" />
           <span>REPETIR FOTO</span>
         </PrimaryBtn>
-        <BtnRevisionHumana puedeEscalar={puedeEscalar} onClick={escalarRevisionHumana} />
+        <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
+    ) : (
+      <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
+        <RefreshIcon className="w-4 h-4" />
+        <span>REPETIR FOTO</span>
+      </PrimaryBtn>
     );
   }
 
   if (status === "RECHAZADA") {
-    // §7.4 (SPEC-rediseno-revision) + D6 Rev. 3: el primario crítico coincide
-    // con el mock 1 — Rev. 3 lo envuelve en la pila y añade DEBAJO el botón
-    // de escalación (D6-bis) con el MISMO candado que ADVERTENCIA. El
-    // maxIntentos imprime «DE 4» real (el «DE 2» del mock es decorativo).
-    return (
-      <div className="flex flex-col gap-2 w-full">
+    // D6 Rev. 4: candado OCULTO — intento < 3: SOLO primario crítico
+    // full-width (rechazada_1/2); intento ≥ 3: grid-cols-2 crítico + RH
+    // (extrapolación de adv_2 — el export rechazada_2 confirma las 2
+    // columnas). El maxIntentos imprime «DE 4» real (el «DE 2» del mock es
+    // decorativo). El badge azul + spin del export = ruido de Stitch, NO se
+    // replica (decisión 11). El label largo envuelve a 2 líneas en
+    // half-width (leading-tight, como adv_2).
+    return puedeEscalar ? (
+      <div className="grid grid-cols-2 gap-2 w-full">
         <PrimaryBtn
           variant="crit"
           onClick={repetirFoto}
@@ -853,8 +862,16 @@ export function ReviewCtas() {
         >
           <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
         </PrimaryBtn>
-        <BtnRevisionHumana puedeEscalar={puedeEscalar} onClick={escalarRevisionHumana} />
+        <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
+    ) : (
+      <PrimaryBtn
+        variant="crit"
+        onClick={repetirFoto}
+        icon={<RefreshIcon className="w-3.5 h-3.5" />}
+      >
+        <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
+      </PrimaryBtn>
     );
   }
 
