@@ -97,6 +97,51 @@ function normalizeText(s: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+/** Rango [inicio, fin) del primer match de `q` dentro de `title`, buscando
+ *  como lo hace el filtro (minúsculas y sin tildes) pero devolviendo índices
+ *  del string ORIGINAL — para poder resaltarlo tal como se escribió.
+ *  v13-post-8: resalta lo que la búsqueda encontró en el título. */
+function highlightRange(title: string, q: string): [number, number] | null {
+  if (!q) return null;
+  const nq = normalizeText(q);
+  if (!nq) return null;
+  const idx = normalizeText(title).indexOf(nq);
+  if (idx < 0) return null;
+  // Camina el título original contando cuántos caracteres normalizados
+  // produce cada carácter (1 normal, 0 si el carácter se elimina — p. ej.
+  // la tilde combinante del NFD) hasta cubrir el rango normalizado.
+  let start = -1;
+  let end = -1;
+  let ni = 0;
+  for (let oi = 0; oi < title.length; oi++) {
+    if (ni === idx) start = oi;
+    ni += normalizeText(title[oi]).length;
+    if (ni >= idx + nq.length && end < 0) {
+      end = oi + 1;
+      break;
+    }
+  }
+  // Sin match que cubra el rango completo (no debería ocurrir si indexOf
+  // encontró el inicio): sin resaltado antes que romper el título.
+  return start >= 0 && end > start ? [start, end] : null;
+}
+
+/** Título con el match de búsqueda resaltado (subrayado amarillo suave,
+ *  estilo «buscar en página» de iOS). Solo pinta la primera coincidencia. */
+function TitleWithHighlight({ title, query }: { title: string; query?: string }) {
+  const range = query ? highlightRange(title, query) : null;
+  if (!range) return <>{title}</>;
+  return (
+    <>
+      {title.slice(0, range[0])}
+      <mark className="rounded-[3px] bg-[#ffce00]/45 px-px text-inherit dark:bg-[#ffce00]/30">
+        {title.slice(range[0], range[1])}
+      </mark>
+      {title.slice(range[1])}
+    </>
+  );
+}
+
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -930,9 +975,15 @@ export default function LibraryView() {
               <h1 className="text-[30px] font-semibold leading-tight tracking-[-0.4px] text-black dark:text-white">
                 Mis documentos
               </h1>
+              {/* v13-post-8 — el conteo refleja lo filtrado: mientras se busca
+                  (o filtra por etiqueta) muestra «N de M documentos» + el
+                  término, en vez del total de la biblioteca. */}
               <p className="mt-1 text-[13px] text-[#8e8e93]">
-                {plural(liveDocs.length, "documento", "documentos")} ·{" "}
-                {plural(totalPages, "página", "páginas")}
+                {searchQuery.trim() || tagFilter
+                  ? `${visible.length} de ${plural(liveDocs.length, "documento", "documentos")}${
+                      searchQuery.trim() ? ` · «${searchQuery.trim()}»` : ` · ${tagFilter}`
+                    }`
+                  : `${plural(liveDocs.length, "documento", "documentos")} · ${plural(totalPages, "página", "páginas")}`}
               </p>
             </div>
             <div className="mt-1 flex shrink-0 items-center gap-1">
@@ -1170,7 +1221,21 @@ export default function LibraryView() {
             Icon={empty.Icon}
             title={empty.title}
             text={empty.text}
-            onScan={() => setView("camera")}
+            /* v13-post-8 — si no hay resultados es más probable que el
+               usuario quiera corregir su búsqueda que escanear algo nuevo:
+               acción principal = limpiar, secundaria = escanear. */
+            onScan={
+              query.trim()
+                ? () => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }
+                : () => setView("camera")
+            }
+            scanLabel={query.trim() ? "Limpiar búsqueda" : undefined}
+            secondaryAction={
+              query.trim() ? { label: "Nuevo escaneo", onClick: () => setView("camera") } : undefined
+            }
           />
         ) : viewMode === "grid" ? (
           <div key={`grid-${sort}`} className="grid grid-cols-2 gap-3 px-4 pt-1">
@@ -1190,6 +1255,7 @@ export default function LibraryView() {
                 doc={doc}
                 index={i}
                 ocrMatch={ocrMatches.has(doc.id)}
+                highlight={searchQuery.trim() || undefined}
                 selecting={selecting}
                 selected={selectedIds.has(doc.id)}
                 onOpen={() => openDocSmart(doc)}
@@ -1229,6 +1295,7 @@ export default function LibraryView() {
                     doc={doc}
                     index={i}
                     ocrMatch={ocrMatches.has(doc.id)}
+                    highlight={searchQuery.trim() || undefined}
                     onOpen={() => openDocSmart(doc)}
                     onRename={() => openRename(doc)}
                     onDelete={() => setDeleting(doc)}
@@ -1267,6 +1334,7 @@ export default function LibraryView() {
                             doc={doc}
                             index={i}
                             ocrMatch={ocrMatches.has(doc.id)}
+                            highlight={searchQuery.trim() || undefined}
                             selecting={selecting}
                             selected={selectedIds.has(doc.id)}
                             onOpen={() => openDocSmart(doc)}
@@ -1643,6 +1711,7 @@ function GridCard({
   doc,
   index,
   ocrMatch,
+  highlight,
   selecting,
   selected,
   onOpen,
@@ -1655,6 +1724,8 @@ function GridCard({
   doc: ScanDocument;
   index: number;
   ocrMatch?: boolean;
+  /** v13-post-8 — término de búsqueda activo: resalta el match en el título. */
+  highlight?: string;
   selecting: boolean;
   selected: boolean;
   onOpen: () => void;
@@ -1788,7 +1859,7 @@ function GridCard({
       <div className="px-3 pb-2.5 pt-2">
         <div className="flex items-start gap-0.5">
           <p className="min-w-0 flex-1 text-[14px] font-semibold leading-tight text-black dark:text-white [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] [overflow:hidden]">
-            {doc.title}
+            <TitleWithHighlight title={doc.title} query={highlight} />
           </p>
           {/* Menú ··· (oculto en modo selección) */}
           <span className={cn("transition-opacity duration-150", selecting && "pointer-events-none opacity-0")}>
@@ -1826,6 +1897,7 @@ function ManualListRow({
   doc,
   index,
   ocrMatch,
+  highlight,
   onOpen,
   onRename,
   onDelete,
@@ -1836,6 +1908,8 @@ function ManualListRow({
   doc: ScanDocument;
   index: number;
   ocrMatch?: boolean;
+  /** v13-post-8 — término de búsqueda activo: resalta el match en el título. */
+  highlight?: string;
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -1862,6 +1936,7 @@ function ManualListRow({
         doc={doc}
         index={index}
         ocrMatch={ocrMatch}
+        highlight={highlight}
         selecting={false}
         selected={false}
         onOpen={onOpen}
@@ -1884,6 +1959,7 @@ function ListRow({
   doc,
   index,
   ocrMatch,
+  highlight,
   selecting,
   selected,
   onOpen,
@@ -1898,6 +1974,8 @@ function ListRow({
   doc: ScanDocument;
   index: number;
   ocrMatch?: boolean;
+  /** v13-post-8 — término de búsqueda activo: resalta el match en el título. */
+  highlight?: string;
   selecting: boolean;
   selected: boolean;
   onOpen: () => void;
@@ -1965,7 +2043,7 @@ function ListRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <p className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-tight text-black dark:text-white">
-            {doc.title}
+            <TitleWithHighlight title={doc.title} query={highlight} />
           </p>
           {ocrMatch && (
             <span
@@ -2278,6 +2356,7 @@ function EmptyState({
   text,
   onScan,
   scanLabel,
+  secondaryAction,
 }: {
   Icon: LucideIcon;
   title: string;
@@ -2285,6 +2364,8 @@ function EmptyState({
   onScan: () => void;
   /** Texto del botón (por defecto «Escanear primer documento»). */
   scanLabel?: string;
+  /** Acción secundaria (botón de texto discreto bajo el principal). */
+  secondaryAction?: { label: string; onClick: () => void };
 }) {
   return (
     <motion.div
@@ -2307,6 +2388,15 @@ function EmptyState({
       >
         {scanLabel ?? "Escanear primer documento"}
       </button>
+      {secondaryAction && (
+        <button
+          type="button"
+          onClick={secondaryAction.onClick}
+          className="mt-3 text-[14px] font-medium text-[#007aff]/80 transition-opacity hover:text-[#007aff] active:opacity-60"
+        >
+          {secondaryAction.label}
+        </button>
+      )}
     </motion.div>
   );
 }
