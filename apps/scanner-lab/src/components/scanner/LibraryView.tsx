@@ -2293,7 +2293,9 @@ function EmptyState({
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="flex flex-col items-center px-8 pt-14 text-center"
     >
-      <div className="flex h-24 w-24 items-center justify-center rounded-[28px] bg-[#e5e5ea]/60 dark:bg-[#2c2c2e]">
+      {/* v13-post-7 — icono con gradiente suave + anillo (antes plano
+       *  #e5e5ea]/60): misma paleta iOS pero con profundidad sutil. */}
+      <div className="flex h-24 w-24 items-center justify-center rounded-[28px] bg-gradient-to-b from-[#ececf1] to-[#dfe0e6] ring-1 ring-black/[0.05] dark:from-[#2e2e30] dark:to-[#232325] dark:ring-white/[0.06]">
         <Icon className="h-12 w-12 text-[#8e8e93]" strokeWidth={1.5} aria-hidden="true" />
       </div>
       <h2 className="mt-5 text-[17px] font-semibold text-black dark:text-white">{title}</h2>

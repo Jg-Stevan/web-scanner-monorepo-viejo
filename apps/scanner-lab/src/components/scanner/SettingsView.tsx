@@ -97,6 +97,9 @@ function StatCard({
     <motion.div
       initial={{ opacity: 0, y: 8, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
+      /* v13-post-7 — micro-elevación al pasar el puntero (escritorio); con
+       *  «Reducir movimiento» MotionConfig la desactiva automáticamente. */
+      whileHover={{ y: -2, boxShadow: "0 6px 16px rgba(0,0,0,0.10)", transition: { duration: 0.18 } }}
       transition={{ duration: 0.32, delay, ease: [0.22, 1, 0.36, 1] }}
       className="flex flex-col items-start gap-1 rounded-2xl bg-white dark:bg-[#1c1c1e] px-3 pb-2.5 pt-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
     >
@@ -740,6 +743,11 @@ function DeviceSection() {
   }, []);
 
   const tier = profile?.tier;
+  /** v13-post-7 — medidor segmentado del tier (barras estilo señal iOS):
+   *  bajo = 1 barra, medio = 2, alto = 3; el color lo manda el tier. */
+  const tierIdx = tier === "alto" ? 2 : tier === "medio" ? 1 : tier === "bajo" ? 0 : -1;
+  const tierColor =
+    tier === "alto" ? "#34c759" : tier === "medio" ? "#ff9500" : tier === "bajo" ? "#ff3b30" : null;
   const platformLabel =
     profile?.platform === "ios"
       ? `iOS${profile.osMajor ? " " + profile.osMajor : ""}`
@@ -807,7 +815,7 @@ function DeviceSection() {
         {tier ? (
           <span
             className={cn(
-              "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold",
+              "flex shrink-0 items-center gap-2 rounded-full px-2.5 py-1 text-[12px] font-semibold",
               tier === "alto"
                 ? "bg-[#34c759]/12 text-[#248a3d] dark:bg-[#30d158]/15 dark:text-[#30d158]"
                 : tier === "medio"
@@ -816,13 +824,19 @@ function DeviceSection() {
             )}
             role="status"
           >
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                tier === "alto" ? "bg-[#34c759]" : tier === "medio" ? "bg-[#ff9500]" : "bg-[#ff3b30]"
-              )}
-              aria-hidden="true"
-            />
+            <span className="flex items-end gap-[2px]" aria-hidden="true">
+              {(["h-[7px]", "h-[11px]", "h-[15px]"] as const).map((h, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "w-[5px] rounded-[2px] transition-colors duration-500",
+                    h,
+                    i <= tierIdx && tierColor ? "" : "bg-black/15 dark:bg-white/20"
+                  )}
+                  style={i <= tierIdx && tierColor ? { backgroundColor: tierColor } : undefined}
+                />
+              ))}
+            </span>
             {tier === "alto" ? "Alto" : tier === "medio" ? "Medio" : "Bajo"}
           </span>
         ) : (

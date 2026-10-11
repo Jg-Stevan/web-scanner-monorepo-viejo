@@ -493,6 +493,34 @@ export default function EditorView() {
   const carouselRef = useRef<HTMLDivElement>(null);
   /** F-THUMBS: carrusel de miniaturas visible (desplegable). */
   const [thumbsOpen, setThumbsOpen] = useState(true);
+  /** v13-post-7 — fade dinámico de bordes del carrusel: solo aparece en el
+   *  lado donde queda contenido por ver (máscara CSS recalculada al hacer
+   *  scroll, al añadir páginas y al redimensionar la ventana). */
+  const [thumbEdges, setThumbEdges] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = carouselRef.current;
+    if (!el || !thumbsOpen) return;
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      setThumbEdges({ left: el.scrollLeft > 8, right: el.scrollLeft < max - 8 });
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      el.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [thumbsOpen, capturePages.length]);
+  /** Gradiente de máscara según qué bordes tienen contenido oculto. */
+  const thumbMask =
+    thumbEdges.left && thumbEdges.right
+      ? "linear-gradient(to right, transparent 0, black 28px, black calc(100% - 28px), transparent 100%)"
+      : thumbEdges.right
+        ? "linear-gradient(to right, transparent 0, black 28px)"
+        : thumbEdges.left
+          ? "linear-gradient(to right, black calc(100% - 28px), transparent 100%)"
+          : undefined;
   const displayRef = useRef<Quad>(displayQuad);
   const draggingRef = useRef(false);
   const dragRef = useRef<{ kind: "corner" | "mid"; index: number } | null>(null);
@@ -2198,8 +2226,12 @@ export default function EditorView() {
               >
             <div
               ref={carouselRef}
-              className="no-scrollbar flex gap-2.5 overflow-x-auto px-5 pb-2 pt-1"
+              className="no-scrollbar flex gap-2.5 overflow-x-auto px-5 pb-2 pt-1 transition-[mask-image] duration-300"
               aria-label="Páginas de la sesión"
+              style={{
+                maskImage: thumbMask,
+                WebkitMaskImage: thumbMask,
+              }}
             >
               {capturePages.map((p, i) => (
                 <button
