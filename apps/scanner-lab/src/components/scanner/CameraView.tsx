@@ -114,34 +114,39 @@ function resolveCamNotice(
  *  nada reintentar: la salida es abrir en el navegador real). */
 const CAM_NOTICE_COPY: Record<
   CamNoticeKind,
-  { icon: string; title: string; body: string; retry: boolean }
+  { icon: string; title: string; body: string; retry: boolean; accent: string }
 > = {
   denied: {
     icon: "📷",
+    accent: "#ff453a", // rojo iOS — permiso
     title: "Sin acceso a la cámara",
     body: "Permiso denegado — lo que ves es un modo simulado. iPhone: candado 🔒 en la barra de direcciones › Permisos › Cámara (o Ajustes › Safari › Cámara). Android: candado 🔒 junto a la dirección › Permisos › Cámara › Permitir. Luego vuelve a intentarlo.",
     retry: true,
   },
   notfound: {
     icon: "🔍",
+    accent: "#ff9f0a", // ámbar iOS — hardware ausente
     title: "No se detecta cámara",
     body: "El dispositivo no tiene cámara disponible o está bloqueada a nivel del sistema (restricciones/control parental). Puedes importar fotos desde la galería con el botón de abajo.",
     retry: true,
   },
   notreadable: {
     icon: "⛔",
+    accent: "#ffd60a", // amarillo iOS — ocupada
     title: "Cámara ocupada",
     body: "Otra app está usando la cámara en este momento. Ciérrala (o cierra las pestañas que la usan) y toca «Activar cámara» de nuevo.",
     retry: true,
   },
   webview: {
     icon: "🚫",
+    accent: "#0a84ff", // azul iOS — contenedor social
     title: "Esta app no permite usar la cámara web",
     body: "Abre el enlace en Safari (iPhone) o Chrome (Android) para escanear con cámara. Mientras tanto puedes importar fotos desde la galería con el botón de abajo.",
     retry: false,
   },
   insecure: {
     icon: "🔒",
+    accent: "#bf5af2", // violeta iOS — contexto no seguro
     title: "Conexión no segura",
     body: "La cámara requiere una conexión cifrada (HTTPS). Abre la app desde su dirección https:// y el escáner funcionará con normalidad.",
     retry: true,
@@ -2403,7 +2408,8 @@ export default function CameraView() {
           aria-label="Cerrar cámara y volver a la biblioteca"
           onClick={closeToLibrary}
           // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 backdrop-blur-md transition-transform duration-150 active:scale-90"
+          // FIX v13-post: anillo focus-visible (accesibilidad teclado — escritorio).
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 backdrop-blur-md transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:scale-90"
         >
           <X className="h-5 w-5 text-white" strokeWidth={2.2} />
         </button>
@@ -2458,8 +2464,8 @@ export default function CameraView() {
               );
             }}
             className={cn(
-              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9.
-              "relative flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
+              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9. FIX v13-post: focus-visible.
+              "relative flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffd60a]/80 active:scale-90",
               settings.flashMode !== "off"
                 ? "bg-[#ffd60a]/18 ring-1 ring-[#ffd60a]/60"
                 : "bg-black/30"
@@ -2501,8 +2507,8 @@ export default function CameraView() {
               }
             }}
             className={cn(
-              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9.
-              "flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 active:scale-90",
+              // FIX v13 (13.6): target táctil 44 px (iOS HIG) — antes h-9 w-9. FIX v13-post: focus-visible.
+              "flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffd60a]/80 active:scale-90",
               autoCapture
                 ? "bg-[#ffd60a]/18 ring-1 ring-[#ffd60a]/60"
                 : "bg-black/30"
@@ -2524,7 +2530,8 @@ export default function CameraView() {
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
             // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
-            className="flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-150 active:scale-90"
+            // FIX v13-post: anillo focus-visible (accesibilidad teclado).
+            className="flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:scale-90"
           >
             <MoreVertical className="h-5 w-5 text-white" strokeWidth={2.2} />
           </button>
@@ -2717,6 +2724,10 @@ export default function CameraView() {
               exit={{ opacity: 0, y: -12, scale: 0.97 }}
               transition={{ duration: 0.22 }}
               role="alert"
+              // FIX v13-post: acento de color por causa (borde izquierdo) —
+              // rojo permiso · ámbar sin cámara · amarillo ocupada · azul
+              // WebView social · violeta sin HTTPS.
+              style={{ borderLeft: `4px solid ${CAM_NOTICE_COPY[camNotice].accent}` }}
               className="absolute inset-x-4 top-[calc(env(safe-area-inset-top)+60px)] z-40 rounded-2xl bg-[#1c1c1e]/95 p-4 shadow-[0_8px_32px_rgba(0,0,0,0.45)] ring-1 ring-white/10 backdrop-blur-md"
             >
               <div className="flex items-start gap-3">
@@ -2735,8 +2746,8 @@ export default function CameraView() {
                       <button
                         type="button"
                         onClick={() => void retryRealCamera()}
-                        // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
-                        className="flex min-h-[44px] items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all active:scale-95"
+                        // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9. FIX v13-post: focus-visible.
+                        className="flex min-h-[44px] items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 active:scale-95"
                       >
                         Activar cámara
                       </button>
@@ -2744,8 +2755,8 @@ export default function CameraView() {
                     <button
                       type="button"
                       onClick={() => setCamNotice(null)}
-                      // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
-                      className="flex min-h-[44px] items-center justify-center rounded-full bg-white/10 px-4 text-[13.5px] font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-all active:scale-95"
+                      // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9. FIX v13-post: focus-visible.
+                      className="flex min-h-[44px] items-center justify-center rounded-full bg-white/10 px-4 text-[13.5px] font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 active:scale-95"
                     >
                       Ocultar
                     </button>

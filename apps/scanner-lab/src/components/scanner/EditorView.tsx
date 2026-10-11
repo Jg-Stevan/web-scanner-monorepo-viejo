@@ -1856,7 +1856,7 @@ export default function EditorView() {
               if (reviewDocId) void exitReviewToLibrary();
               else setView("camera");
             }}
-            className="flex min-w-0 items-center gap-0.5 rounded-lg py-2 pr-2 text-white transition-opacity active:opacity-60"
+            className="flex min-w-0 items-center gap-0.5 rounded-lg py-2 pr-2 text-white transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:opacity-60"
           >
             <ChevronLeft className="h-[22px] w-[22px] shrink-0" strokeWidth={2.5} />
             <span className="hidden text-[17px] font-semibold tracking-tight min-[380px]:inline">
@@ -1877,8 +1877,8 @@ export default function EditorView() {
               aria-label="Compartir documento"
               onClick={() => void shareDocPdf()}
               disabled={sharing || totalPages === 0}
-              // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/85 transition-all active:scale-90 active:bg-white/10 disabled:opacity-30"
+              // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px). FIX v13-post: focus-visible.
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/85 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:scale-90 active:bg-white/10 disabled:opacity-30"
             >
               {sharing ? (
                 <Loader2 className="h-[19px] w-[19px] animate-spin" />
@@ -1893,8 +1893,8 @@ export default function EditorView() {
             aria-label="Ver presentación a pantalla completa"
             onClick={openPresentation}
             disabled={totalPages === 0}
-            // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/85 transition-all active:scale-90 active:bg-white/10 disabled:opacity-30"
+            // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px). FIX v13-post: focus-visible.
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white/85 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:scale-90 active:bg-white/10 disabled:opacity-30"
           >
             <Maximize2 className="h-[19px] w-[19px]" strokeWidth={2.2} />
           </button>
