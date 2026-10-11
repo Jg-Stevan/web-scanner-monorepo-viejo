@@ -2414,15 +2414,28 @@ export default function CameraView() {
           <X className="h-5 w-5 text-white" strokeWidth={2.2} />
         </button>
 
-        {/* Pill IA · AUTO — punto azul pulsante al rastrear (diseño del usuario) */}
-        <div className="flex h-9 items-center gap-2 rounded-full bg-black/40 px-3.5 backdrop-blur-md">
+        {/* Pill IA · AUTO — punto azul pulsante al rastrear (diseño del usuario).
+            FIX v13-post-21 — En pantallas ≤360 px (iPhone SE 1.ª gen, 320 px —
+            objetivo «chicas» de la spec) la cabecera no cabía: X (44) + pill
+            (126) + Flash/Auto/⋮ (44×3) + paddings = ~346 px y el botón ⋮ quedaba
+            RECORTADO 10 px (target táctil mutilado — medido con boundingRects).
+            Solución: por debajo de 360 px se ocultan SOLO los adornos del pill
+            (icono LayoutGrid y punto de precisión — ambos aria-hidden) y el
+            padding se aprieta px-3.5→px-2.5: el pill pasa de 126 a ~84 px y la
+            cabecera queda en ~304 px con 16 px de aire. El significado queda
+            intacto (badge IA + AUTO); 375 px y superiores no cambian. */}
+        <div className="flex h-9 items-center gap-2 rounded-full bg-black/40 px-3.5 backdrop-blur-md max-[360px]:px-2.5">
           <span className="flex h-[18px] w-[18px] items-center justify-center rounded-[4px] bg-white text-[9px] font-bold tracking-tight text-black">
             IA
           </span>
-          <LayoutGrid className="h-3.5 w-3.5 text-white" strokeWidth={2.4} aria-hidden="true" />
+          <LayoutGrid
+            className="h-3.5 w-3.5 text-white max-[360px]:hidden"
+            strokeWidth={2.4}
+            aria-hidden="true"
+          />
           <span
             className={cn(
-              "h-1.5 w-1.5 rounded-full bg-[#007aff]",
+              "h-1.5 w-1.5 rounded-full bg-[#007aff] max-[360px]:hidden",
               precisionLive && !overlayStable && "animate-pulse"
             )}
             aria-hidden="true"
