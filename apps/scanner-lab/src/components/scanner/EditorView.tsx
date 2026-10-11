@@ -743,6 +743,13 @@ export default function EditorView() {
   const goToPage = useCallback(
     (i: number) => {
       if (i < 0 || i >= capturePages.length || i === activeIdx) return;
+      // v13-post-11 — tick háptico al cambiar de página (mismo patrón que el
+      // asa de reorden: navigator.vibrate?. opcional, no-op en iOS/desktop).
+      try {
+        navigator.vibrate?.(8);
+      } catch {
+        /* sin Vibration API: silencio */
+      }
       setEditingIndex(i);
     },
     [capturePages.length, activeIdx, setEditingIndex]
@@ -2173,8 +2180,30 @@ export default function EditorView() {
               >
                 <ChevronLeft className="size-4" strokeWidth={2.6} />
               </button>
-              <span className="flex items-center gap-1.5 rounded-full bg-[#1c1c1e]/95 px-3.5 py-1.5 text-[13px] font-semibold tabular-nums text-white shadow-[0_2px_10px_rgba(0,0,0,0.4)] ring-1 ring-inset ring-white/10">
-                Página {activeIdx + 1} de {totalPages}
+              <span
+                aria-live="polite"
+                className="flex items-center gap-1.5 rounded-full bg-[#1c1c1e]/95 px-3.5 py-1.5 text-[13px] font-semibold tabular-nums text-white shadow-[0_2px_10px_rgba(0,0,0,0.4)] ring-1 ring-inset ring-white/10"
+              >
+                Página{" "}
+                {/* v13-post-11 — el número anima el cambio (slide corto
+                    direccional-agnóstico, 160 ms; MotionConfig lo apaga con
+                    «Reducir movimiento»). popLayout: el saliente se posiciona
+                    solo y no empuja al entrante. */}
+                <span className="relative inline-flex overflow-hidden">
+                  <AnimatePresence initial={false} mode="popLayout">
+                    <motion.span
+                      key={activeIdx}
+                      initial={{ y: 9, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      exit={{ y: -9, opacity: 0 }}
+                      transition={{ duration: 0.16, ease: "easeOut" }}
+                      className="inline-block"
+                    >
+                      {activeIdx + 1}
+                    </motion.span>
+                  </AnimatePresence>
+                </span>{" "}
+                de {totalPages}
               </span>
               <button
                 type="button"
