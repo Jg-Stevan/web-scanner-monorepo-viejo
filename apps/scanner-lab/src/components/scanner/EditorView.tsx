@@ -1495,10 +1495,34 @@ export default function EditorView() {
    *  (F-SWIPE) y en presentación: en escritorio no hacían nada. Mismas
    *  reglas que el swipe: solo a zoom 1×. Guardas: sin modificadores, nada
    *  abierto encima (presentación/OCR/filtros) y foco fuera de campos de
-   *  texto (los select nativos y el sheet OCR usan flechas propias). */
+   *  texto (los select nativos y el sheet OCR usan flechas propias).
+   *  v13-post-28 — Inicio/Fin saltan a la PRIMERA/ÚLTIMA página (paridad
+   *  con la presentación; en documentos largos el salto directo evita
+   *  la diana de flechas — mismas guardas que ←/→). */
   useEffect(() => {
     if (mode !== "review") return;
     const onKey = (e: KeyboardEvent) => {
+      const isHome = e.key === "Home";
+      const isEnd = e.key === "End";
+      if ((isHome || isEnd) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (presentationOpen || ocrOpen || filtersOpen) return;
+        if (zoomScale.get() > 1.01) return;
+        const el = document.activeElement;
+        if (
+          el instanceof HTMLElement &&
+          (el.tagName === "INPUT" ||
+            el.tagName === "TEXTAREA" ||
+            el.tagName === "SELECT" ||
+            el.isContentEditable)
+        ) {
+          return;
+        }
+        const target = isHome ? 0 : capturePages.length - 1;
+        if (target === activeIdx || target < 0) return;
+        e.preventDefault();
+        goToPage(target);
+        return;
+      }
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       if (e.metaKey || e.ctrlKey) return;
       if (presentationOpen || ocrOpen || filtersOpen) return;

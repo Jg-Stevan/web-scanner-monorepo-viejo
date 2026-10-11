@@ -62,6 +62,7 @@ const SHORTCUTS: { action: string; keys: string[]; hint?: string }[] = [
   { action: "Buscar en la biblioteca", keys: ["/"] },
   { action: "Página anterior · siguiente", keys: ["←", "→"] },
   { action: "Mover la página actual", keys: ["Alt", "←", "→"], hint: "Reordenar sin arrastre" },
+  { action: "Primera · última página", keys: ["Inicio", "Fin"], hint: "Editor y presentación" },
   { action: "Navegar y zoom en presentación", keys: ["←", "→", "+", "−"] },
   { action: "Presentación automática", keys: ["Espacio"], hint: "Avanza sola cada 5 s" },
   { action: "Salir de presentación", keys: ["Esc"] },

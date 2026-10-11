@@ -260,6 +260,21 @@ export function PresentationView({
         if (totalPages < 2) return;
         e.preventDefault();
         setAutoPlay((v) => !v);
+      } else if (e.key === "Home" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // v13-post-28 — Inicio/Fin: salto directo a la primera/última
+        // página (misma guarda de zoom 1× que ←/→: ampliado, las flechas
+        // son pan). preventDefault: Inicio/Fin también scrollean la página.
+        if (scale.get() !== 1) return;
+        if (index > 0) {
+          e.preventDefault();
+          goTo(0);
+        }
+      } else if (e.key === "End" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (scale.get() !== 1) return;
+        if (index < totalPages - 1) {
+          e.preventDefault();
+          goTo(totalPages - 1);
+        }
       } else if (e.key === "ArrowRight" && scale.get() === 1) {
         goTo(index + 1);
       } else if (e.key === "ArrowLeft" && scale.get() === 1) {
