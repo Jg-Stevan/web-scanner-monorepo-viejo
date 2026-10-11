@@ -10,13 +10,14 @@
  *   desplazamiento (≥80 px) o velocidad (fling) — antes el swipe era a ciegas
  *   (la página no seguía el dedo hasta el cambio).
  * · Toque simple alterna el chrome (barras con degradado estilo iOS).
- * · Teclado: ←/→ páginas, +/- zoom, Escape cierra. El zoom se reinicia al
- *   cambiar de página y la panorámica se acota a los bordes de la imagen.
+ * · Teclado: ←/→ páginas, +/- zoom, Espacio activa la presentación
+ *   automática, Escape cierra. El zoom se reinicia al cambiar de página y
+ *   la panorámica se acota a los bordes de la imagen.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useMotionValue, type PanInfo } from "framer-motion";
-import { ChevronLeft, ChevronRight, Eye, X } from "lucide-react";
+import { AnimatePresence, motion, useMotionValue, useReducedMotion, type PanInfo } from "framer-motion";
+import { ChevronLeft, ChevronRight, Eye, Pause, Play, X } from "lucide-react";
 
 import type { ScanPage } from "@jg-stevan/scanner-core/types";
 
@@ -41,6 +42,11 @@ const DRAG_THRESHOLD_PX = 80;
 /** FIX v5 (5.7): umbral de velocidad (px/s) — un fling rápido navega aunque
  *  el recorrido sea corto (mismo lenguaje que el pager nativo de iOS). */
 const DRAG_VELOCITY_PX = 500;
+
+/** v13-post-19 — Presentación automática: ms por página (patrón
+ *  diapositivas). 5 s: ritmo tranquilo para LEER un documento (las fotos
+ *  de iOS usan ~5 s; los documentos con texto piden lo mismo o más). */
+const AUTO_ADVANCE_MS = 5000;
 /** Umbral de movimiento (px) bajo el cual un pointerup cuenta como toque. */
 const TAP_SLOP = 8;
 
@@ -77,6 +83,15 @@ export function PresentationView({
   useEffect(() => {
     comparingRef.current = comparing;
   }, [comparing]);
+
+  /* v13-post-19 — Presentación automática (patrón diapositivas): avanza
+   * de página cada AUTO_ADVANCE_MS. Se PAUSA al hacer zoom o al comparar
+   * con el original (mirar una página con calma no debe saltar a la
+   * siguiente: el efecto se re-arma cuando zoomPct/comparing cambian, así
+   * la cuenta atrás vuelve a empezar al soltar) y al llegar a la última
+   * página se detiene sola (no bucle: un documento se lee una vez). */
+  const [autoPlay, setAutoPlay] = useState(false);
+  const reducedMotion = useReducedMotion();
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imgWrapRef = useRef<HTMLDivElement | null>(null);
@@ -213,12 +228,38 @@ export function PresentationView({
     [goTo, index]
   );
 
+  /* v13-post-19 — Cuenta atrás de la presentación automática. El efecto
+   * se re-arma al cambiar de página, al cambiar el zoom o al comparar:
+   * en cada tick, si el usuario está mirando con calma (zoom > 1× o
+   * comparación activa) el tick se consume sin avanzar y la cuenta vuelve
+   * a armarse cuando el estado cambia. En la última página se detiene
+   * sola (autoPlay=false). */
+  useEffect(() => {
+    if (!autoPlay) return;
+    const t = window.setTimeout(() => {
+      if (zoomPct > 100 || comparing) return;
+      if (index >= totalPages - 1) {
+        setAutoPlay(false);
+        return;
+      }
+      goTo(index + 1);
+    }, AUTO_ADVANCE_MS);
+    return () => window.clearTimeout(t);
+  }, [autoPlay, index, zoomPct, comparing, totalPages, goTo]);
+
   /* ── Teclado ─────────────────────────────────────────────────────────── */
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         onClose();
+      } else if (e.key === " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // v13-post-19 — Espacio: alterna la presentación automática (patrón
+        // reproductor de diapositivas). preventDefault: el espacio no debe
+        // hacer scroll del documento de fondo.
+        if (totalPages < 2) return;
+        e.preventDefault();
+        setAutoPlay((v) => !v);
       } else if (e.key === "ArrowRight" && scale.get() === 1) {
         goTo(index + 1);
       } else if (e.key === "ArrowLeft" && scale.get() === 1) {
@@ -231,7 +272,7 @@ export function PresentationView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [index, goTo, onClose, zoomAt, scale]);
+  }, [index, totalPages, goTo, onClose, zoomAt, scale]);
 
   /* ── Pointer events: tap / doble tap / swipe / pan / pinch ───────────── */
 
@@ -675,7 +716,51 @@ export function PresentationView({
                   {index + 1} de {totalPages}
                 </span>
               </div>
-              <span className="w-9 shrink-0" aria-hidden="true" />
+              {/* v13-post-19 — Presentación automática: play/pausa con anillo
+                  de progreso (cuenta atrás hasta la siguiente página — el
+                  anillo se reinicia en cada página y al cambiar el zoom,
+                  exactamente como el timer). Desactivado en documentos de
+                  una sola página (nada que avanzar). Con «Reducir movimiento»
+                  el anillo no gira/anima: solo el icono cambia. */}
+              <button
+                type="button"
+                onClick={() => setAutoPlay((v) => !v)}
+                disabled={totalPages < 2}
+                aria-label={`Reproducción automática: ${autoPlay ? "activada" : "desactivada"}`}
+                aria-pressed={autoPlay}
+                className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-transform active:scale-90 disabled:pointer-events-none disabled:opacity-35"
+              >
+                {autoPlay ? (
+                  <Pause className="size-4" strokeWidth={2.6} />
+                ) : (
+                  <Play className="size-4 translate-x-[0.5px]" strokeWidth={2.6} />
+                )}
+                {autoPlay && !reducedMotion && (
+                  <svg
+                    className="pointer-events-none absolute inset-0"
+                    viewBox="0 0 36 36"
+                    aria-hidden="true"
+                  >
+                    <motion.circle
+                      key={`${index}-${zoomPct}-${comparing}`}
+                      cx="18"
+                      cy="18"
+                      r="16.5"
+                      fill="none"
+                      stroke="rgba(255,255,255,0.9)"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      transform="rotate(-90 18 18)"
+                      initial={{ pathLength: 0 }}
+                      animate={{ pathLength: 1 }}
+                      transition={{
+                        duration: AUTO_ADVANCE_MS / 1000,
+                        ease: "linear",
+                      }}
+                    />
+                  </svg>
+                )}
+              </button>
             </div>
           </motion.header>
         )}

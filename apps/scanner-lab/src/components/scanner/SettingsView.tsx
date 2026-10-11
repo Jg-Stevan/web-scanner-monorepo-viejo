@@ -63,6 +63,7 @@ const SHORTCUTS: { action: string; keys: string[]; hint?: string }[] = [
   { action: "Página anterior · siguiente", keys: ["←", "→"] },
   { action: "Mover la página actual", keys: ["Alt", "←", "→"], hint: "Reordenar sin arrastre" },
   { action: "Navegar y zoom en presentación", keys: ["←", "→", "+", "−"] },
+  { action: "Presentación automática", keys: ["Espacio"], hint: "Avanza sola cada 5 s" },
   { action: "Salir de presentación", keys: ["Esc"] },
   { action: "Buscar en el texto del documento", keys: ["⌘F"], hint: "En el tab OCR" },
   { action: "Coincidencia anterior · siguiente", keys: ["⇧", "↩"] },
