@@ -19,6 +19,8 @@
  *     clases CSS que podrían no haber cargado).
  */
 
+import { getDeviceProfile, type DeviceTier } from "./device-profile";
+
 type CrashEventRecord = {
   /** ISO timestamp del evento. */
   ts: string;
@@ -37,6 +39,8 @@ type CrashEventRecord = {
   hardwareConcurrency?: number;
   /** performance.memory?.usedJSHeapSize / 1048576 (si existe — Chrome). */
   heapMB?: number;
+  /** FIX v13 (13.1) — tier de hardware del device-profile (aditivo). */
+  tier?: DeviceTier;
 };
 
 const RING_KEY = "scannerlab_crash_ring";
@@ -140,6 +144,7 @@ function buildRecord(
     hardwareConcurrency:
       typeof nav.hardwareConcurrency === "number" ? nav.hardwareConcurrency : undefined,
     heapMB,
+    tier: getDeviceProfile()?.tier,
   };
 }
 
@@ -193,6 +198,7 @@ function showBanner(rec: CrashEventRecord): void {
     meta.style.opacity = "0.85";
     meta.style.marginTop = "2px";
     const parts: string[] = [];
+    if (rec.tier !== undefined) parts.push(`tier=${rec.tier}`);
     if (rec.heapMB !== undefined) parts.push(`heap≈${rec.heapMB}MB`);
     if (rec.deviceMemory !== undefined) parts.push(`deviceMemory=${rec.deviceMemory}`);
     if (rec.source) parts.push(`${rec.source}:${rec.line ?? 0}:${rec.col ?? 0}`);
