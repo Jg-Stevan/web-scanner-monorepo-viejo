@@ -349,10 +349,18 @@ export function ReviewView() {
             ))}
         </div>
 
-        {/* §11 DEV-6 (cyber-neón): el banner flotante EN_RH (repetir-primero
-            y contingencia, absolute top-2) tapa la fila de chips — espaciador
-            condicional para que queden visibles debajo del banner. */}
-        {status === "EN_REVISION_HUMANA" && <div className="h-16 shrink-0" aria-hidden />}
+        {/* §11 DEV-6 (cyber-neón): el banner flotante EN_RH (absolute top-2)
+            tapa la fila de chips — espaciador condicional para que queden
+            visibles debajo del banner. QA M19-1: el banner «repetir-primero»
+            (subtítulo de 2 líneas) mide ~69px y el de contingencia ~54px
+            → espaciadores 76/64px respectivamente (mismo predicado que
+            elige el banner). */}
+        {status === "EN_REVISION_HUMANA" && (
+          <div
+            className={`${acta.intento < acta.maxIntentos ? "h-[76px]" : "h-16"} shrink-0`}
+            aria-hidden
+          />
+        )}
 
         {/* D3 Rev. 5 (dueño: «son diseños, la lógica sigue igual, los datos sí
             se pueden cambiar»): VALORES data-driven — el fallback «---» aparece

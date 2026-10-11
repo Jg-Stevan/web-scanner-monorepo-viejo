@@ -71,7 +71,7 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
         aria-label="Navegación principal"
         data-mode={mode}
       >
-        <div className="max-w-md mx-auto grid grid-cols-3 h-[70px]">
+        <div className="max-w-md mx-auto grid grid-cols-3 h-[73px]">
           {ITEMS.map(({ vista: v, label, Icon }) => {
             // §9: en REVISIÓN (mock ENVIADA) el anillo vive en ESCANEAR.
             const activo = vista === v || (vista === "revision" && v === "escanear");
