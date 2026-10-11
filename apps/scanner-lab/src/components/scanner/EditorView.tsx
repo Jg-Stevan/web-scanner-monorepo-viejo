@@ -681,6 +681,21 @@ export default function EditorView() {
     resetZoom();
   }, [page?.id, mode, resetZoom]);
 
+  // FIX v8 (8.1) — cinturón y tirantes (mismo patrón que el 6.3 de la
+  // presentación, que en el iPhone físico SÍ funciona): WebKit puede quedar
+  // con el gesto (rubber-band residual / heurística de doble toque) y
+  // disparar pointercancel a mitad del pan con zoom aunque toda la cadena
+  // tenga touch-none. Este listener no pasivo lo mata. Dentro del stage no
+  // hay nada scrollable → preventDefault es seguro. Depende de [mode] porque
+  // el stage se desmonta al entrar en recorte y remonta al volver.
+  useEffect(() => {
+    const stage = zoomStageRef.current;
+    if (!stage) return;
+    const onTouchMove = (e: TouchEvent) => e.preventDefault();
+    stage.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => stage.removeEventListener("touchmove", onTouchMove);
+  }, [mode]);
+
   /** Navegación de páginas (pill + carrusel + swipe F-SWIPE). Definida
    *  ANTES de los gestos del stage: los handlers la usan y la TS la exige. */
   const goToPage = useCallback(
