@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, FileText, Layers, Monitor, Moon, PlusSquare, ScanText, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
+import { Check, Copy, FileText, Layers, Monitor, Moon, PlusSquare, ScanText, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -24,6 +24,8 @@ import { PROCESSED_MAX_LONG_SIDE } from "@jg-stevan/scanner-core/image-processor
 import { storageAvailable } from "@jg-stevan/scanner-core/page-store";
 // FIX v13-post — diagnóstico del dispositivo (solo lectura) para Ajustes.
 import { getDeviceProfile, type DeviceProfileRecord } from "@/lib/device-profile";
+import { isSocialWebView } from "@/lib/webview";
+import { isStandalone } from "@jg-stevan/scanner-core/pwa";
 import {
   getPwaInstallState,
   promptInstall,
@@ -697,9 +699,17 @@ function SettingsRow({
  *  Muestra el perfil 13.1 (tier, plataforma, hardware, benchmark) en
  *  Ajustes para que el QA físico no requiera consola remota. Se relee a
  *  los 4,5 s para capturar el micro-benchmark idle (timeout 3 s). El tier
- *  es diagnóstico puro: NUNCA cambia captura ni análisis (4032 px siempre). */
+ *  es diagnóstico puro: NUNCA cambia captura ni análisis (4032 px siempre).
+ *
+ *  v13-post-5 — ampliado con el entorno de compatibilidad v13: WebView
+ *  social (13.4), cuota de almacenamiento (StorageManager.estimate) y
+ *  «Copiar diagnóstico» (protocolo §5 del informe: el QA físico reporta el
+ *  perfil sin consola remota pegando un único texto). Todo solo-lectura. */
 function DeviceSection() {
   const [profile, setProfile] = useState<DeviceProfileRecord | null>(null);
+  /** Cuota del navegador: null = cargando · "no" = API no expuesta. */
+  const [storage, setStorage] = useState<{ usage: number; quota: number } | null | "no">(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setProfile(getDeviceProfile());
@@ -709,6 +719,26 @@ function DeviceSection() {
     return () => window.clearTimeout(t);
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    const nav = navigator as Navigator & { storage?: { estimate?: () => Promise<{ usage?: number; quota?: number }> } };
+    if (typeof nav.storage?.estimate !== "function") {
+      setStorage("no");
+      return;
+    }
+    nav.storage
+      .estimate()
+      .then((e) => {
+        if (alive && typeof e.usage === "number" && typeof e.quota === "number" && e.quota > 0) {
+          setStorage({ usage: e.usage, quota: e.quota });
+        } else if (alive) setStorage("no");
+      })
+      .catch(() => alive && setStorage("no"));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const tier = profile?.tier;
   const platformLabel =
     profile?.platform === "ios"
@@ -716,6 +746,57 @@ function DeviceSection() {
       : profile?.platform === "android"
         ? `Android${profile.osMajor ? " " + profile.osMajor : ""}`
         : "Otro";
+  const socialWebView = profile ? isSocialWebView(profile.ua) : false;
+
+  /** % de la cuota usada (para el mini-medidor y el reporte). */
+  const storagePct =
+    storage && storage !== "no" ? Math.min(100, (storage.usage / storage.quota) * 100) : null;
+
+  /** Reporte compacto para pegar en el issue de QA físico (protocolo §5). */
+  const buildReport = () => {
+    const L: string[] = [];
+    L.push("ScannerLab · Diagnóstico v13");
+    if (tier) {
+      L.push(`· Rendimiento: ${tier === "alto" ? "Alto" : tier === "medio" ? "Medio" : "Bajo"}${profile?.benchMs != null ? ` · bench ${profile.benchMs} ms` : ""}`);
+      L.push(`· Plataforma: ${platformLabel}`);
+      L.push(
+        `· CPU: ${profile?.cores != null ? `${profile.cores} núcleos` : "no expuesta"} · RAM: ${profile?.memoryGB != null ? `${profile.memoryGB} GB` : "no expuesta"}`
+      );
+      L.push(`· Pantalla: ${profile?.dpr}× · ${profile?.secure ? "HTTPS" : "sin HTTPS"}`);
+      L.push(`· Entorno: ${socialWebView ? "WebView social (13.4)" : "navegador real"}`);
+      if (storage && storage !== "no") {
+        L.push(
+          `· Almacenamiento: ${formatBytes(storage.usage)} de ${formatBytes(storage.quota)} (${storagePct != null ? storagePct.toFixed(0) : "?"}%)`
+        );
+      }
+      L.push(`· Modo: ${isStandalone() ? "app instalada" : "navegador"}`);
+    }
+    return L.join("\n");
+  };
+
+  const onCopy = async () => {
+    const text = buildReport();
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Contexto no seguro: fallback clásico con textarea efímera.
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+      toast.success("Diagnóstico copiado", { description: "Pégalo en el issue de QA (protocolo §5)" });
+    } catch {
+      toast.error("No se pudo copiar", { description: "Consola remota: window.__deviceProfile" });
+    }
+  };
 
   return (
     <SettingsGroup label="Dispositivo" delay={0.2}>
@@ -789,6 +870,70 @@ function DeviceSection() {
           />
           {profile ? (profile.secure ? "HTTPS" : "Sin HTTPS") : "…"}
         </span>
+      </SettingsRow>
+      <SettingsRow
+        title="Entorno"
+        subtitle={socialWebView ? "WebView de red social: la cámara falla dentro de estas apps" : "Navegador real (la cámara puede funcionar)"}
+      >
+        {profile ? (
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold",
+              socialWebView
+                ? "bg-[#0a84ff]/12 text-[#0040dd] dark:bg-[#0a84ff]/15 dark:text-[#0a84ff]"
+                : "bg-[#34c759]/12 text-[#248a3d] dark:bg-[#30d158]/15 dark:text-[#30d158]"
+            )}
+            role="status"
+          >
+            <span
+              className={cn("h-1.5 w-1.5 rounded-full", socialWebView ? "bg-[#0a84ff]" : "bg-[#34c759]")}
+              aria-hidden="true"
+            />
+            {socialWebView ? "WebView social" : "Navegador"}
+          </span>
+        ) : (
+          <span className="shrink-0 text-[15px] text-[#8e8e93]">…</span>
+        )}
+      </SettingsRow>
+      <SettingsRow title="Almacenamiento" subtitle="Cuota estimada por el navegador para este origen">
+        {storage === null ? (
+          <span className="shrink-0 text-[15px] text-[#8e8e93]">…</span>
+        ) : storage === "no" ? (
+          <span className="shrink-0 text-[15px] text-[#8e8e93]">No expuesta</span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-2">
+            <span
+              className="h-1 w-12 overflow-hidden rounded-full bg-[#e9e9ea] dark:bg-[#39393d]"
+              aria-hidden="true"
+            >
+              <span
+                className={cn(
+                  "block h-full rounded-full transition-[width] duration-500",
+                  (storagePct ?? 0) >= 85
+                    ? "bg-[#ff3b30]"
+                    : (storagePct ?? 0) >= 60
+                      ? "bg-[#ff9500]"
+                      : "bg-[#34c759]"
+                )}
+                style={{ width: `${Math.max(storagePct ?? 0, 2)}%` }}
+              />
+            </span>
+            <span className="text-[15px] font-medium tabular-nums text-[#3c3c43] dark:text-white/85">
+              {formatBytes(storage.usage)} / {formatBytes(storage.quota)}
+            </span>
+          </span>
+        )}
+      </SettingsRow>
+      <SettingsRow
+        title={copied ? "Diagnóstico copiado" : "Copiar diagnóstico"}
+        subtitle="Texto listo para pegar en el issue de QA físico (protocolo §5)"
+        onClick={() => void onCopy()}
+      >
+        {copied ? (
+          <Check className="size-5 shrink-0 text-[#34c759]" strokeWidth={2.4} aria-hidden="true" />
+        ) : (
+          <Copy className="size-5 shrink-0 text-[#007aff]" strokeWidth={2.2} aria-hidden="true" />
+        )}
       </SettingsRow>
     </SettingsGroup>
   );
