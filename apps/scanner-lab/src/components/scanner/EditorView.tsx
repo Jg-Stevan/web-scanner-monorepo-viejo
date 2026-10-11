@@ -117,16 +117,17 @@ const LOUPE_GAP = 14;
 const COMPARE_HOLD_MS = 350;
 
 /** Preview procesado de la página en edición (modo review).
- *  FIX v5 (5.1): `url` es el DATO completo (PNG hasta 4032 px — fuente de
- *  verdad para rotación/export/guardado). `displayUrl` es la copia de
- *  PANTALLA (JPEG ≤ DISPLAY_MAX_LONG_SIDE — adaptativo v10-A) que
- *  consumen todos los <img> del editor: en
- *  dispositivos con poca RAM, decodificar un data URL PNG de 5–20 MB
- *  through una superficie de baja resolución → preview borroso aunque el
- *  dato esté intacto. Opcional: si falta, el <img> cae a `url`. */
+ *  `url` es el DATO completo (PNG hasta 4032 px — fuente de
+ *  verdad para rotación/export/guardado) y, desde el EXPERIMENTO
+ *  v11, es TAMBIÉN lo que consumen todos los <img> del editor y de
+ *  la presentación: fuente única, sin copia de pantalla.
+ *  EXPERIMENTO v11 (crash-test): `displayUrl` (la copia de PANTALLA
+ *  JPEG ≤ tope de v5/v10-A) queda APAGADA — nadie la escribe ni la
+ *  lee. El campo y `makeDisplayUrl` se conservan como SEAM para
+ *  revertir el experimento con un commit si el crash-test lo pide. */
 interface PreviewEntry {
   url: string;
-  /** Copia de display JPEG ≤ DISPLAY_MAX_LONG_SIDE (solo pantalla). */
+  /** EXPERIMENTO v11: APAGADO — seam sin uso (copia de display v5/v10-A). */
   displayUrl?: string;
   w: number;
   h: number;
@@ -240,35 +241,27 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return blob;
 }
 
-/** FIX v10-A — tope de DISPLAY adaptativo por capacidad del dispositivo.
- *  El dato de guardado sigue siendo el PNG completo (≤4032); esto solo
- *  escala la copia de pantalla que consumen los <img> del editor.
+/** EXPERIMENTO v11 (crash-test fuente única) — tope de DISPLAY apagado
+ *  por decisión del dueño: TODOS los dispositivos ven el mismo dato de
+ *  imagen (el de 4032 px), sin degradación por tier y sin red de
+ *  seguridad. Si el crash-test en gama baja NO crashea, esto se vuelve
+ *  permanente; si crashea, se reactiva la protección SOLO en el punto
+ *  exacto del fallo (restaurar los tiers v10-A: deviceMemory
+ *  4032/3200/2560, iOS 3200).
  *
- *  v5 fijaba 2560 para ahorrar RAM (evitar decodificar PNG de 5–20 MB en
- *  gama baja): correcto entonces, pero el editor quedaba más BLANDO que
- *  la presentación al hacer zoom (2560/2.5 ≈ 1024 px efectivos vs 2016
- *  de la presentación que usa el dato completo). Con deviceMemory se
- *  sube el tope donde la RAM lo permite — primer paso del plan de
- *  compatibilidad v8.
+ *  (Histórico v10-A: tope adaptativo 2560/3200/4032 por deviceMemory;
+ *  v5 fijaba 2560 para ahorrar RAM en gama baja. Memoria esperada por
+ *  imagen activa decodificada: 2560→~19 MB · 3200→~33 MB · 4032→~49 MB.)
  *
- *  Memoria esperada por imagen activa decodificada: 2560→~19 MB ·
- *  3200→~33 MB · 4032→~49 MB (el editor decodifica 1 activa a la vez;
- *  los dataURL JPEG en caché pesan ~1–3 MB por página). */
+ *  La telemetría `window.__displayMax` sigue viva y debe leer **4032**
+ *  en todos los entornos mientras dure el experimento. */
 function computeDisplayMaxLongSide(): number {
-  try {
-    const nav = navigator as Navigator & { deviceMemory?: number };
-    if (typeof nav.deviceMemory === "number" && nav.deviceMemory > 0) {
-      if (nav.deviceMemory >= 6) return 4032; // flagship/desktop: nitidez total
-      if (nav.deviceMemory >= 3) return 3200; // gama media
-      return 2560; // gama baja: protección RAM v5 intacta
-    }
-  } catch {
-    /* entorno sin navigator */
-  }
-  return 3200; // iOS/Safari no expone deviceMemory → equilibrio nitidez/RAM
+  // EXPERIMENTO v11: apagado por decisión del dueño — todos los dispositivos
+  // ven el dato completo; restaurar tiers solo si el crash-test lo justifica.
+  return 4032;
 }
 
-/** FIX v10-A — tope de DISPLAY adaptativo (computado al cargar el módulo). */
+/** FIX v10-A — tope de DISPLAY (EXPERIMENTO v11: constante 4032 — ver computeDisplayMaxLongSide). */
 const DISPLAY_MAX_LONG_SIDE = computeDisplayMaxLongSide();
 
 // Telemetría QA (patrón existente, solo dev/QA): tope efectivo en window.
@@ -276,24 +269,30 @@ if (typeof window !== "undefined") {
   (window as unknown as { __displayMax?: number }).__displayMax = DISPLAY_MAX_LONG_SIDE;
 }
 
-/** FIX v5 (5.1) — calidad JPEG de la copia de display (solo pantalla). */
+/** FIX v5 (5.1) — calidad JPEG de la copia de display (seam v11, sin uso activo). */
 const DISPLAY_JPEG_QUALITY = 0.92;
 
 /** FIX v5 (5.1) / v10-A — makeDisplayUrl: re-encode JPEG ≤ DISPLAY_MAX_LONG_SIDE px para PANTALLA.
  *
- *  El editor mostraba el data URL PNG completo del worker (4032 px →
- *  5–20 MB de cadena): en dispositivos con poca RAM el navegador lo
- *  decodifica/renderiza por una superficie de baja resolución → preview
- *  BORROSO aunque el dato esté intacto (al guardar se ve bien porque el
- *  store reprocesa desde page.original).
+ *  ⚠️ EXPERIMENTO v11 (crash-test fuente única): SIN LLAMADAS ACTIVAS —
+ *  la red de seguridad está APAGADA por decisión del dueño (todos los
+ *  dispositivos consumen el dato completo). Esta función queda como
+ *  SEAM para revertir el experimento con un commit; su única línea viva
+ *  es el contador de verificación `window.__displayUrlCalls`, que debe
+ *  permanecer en **0** durante el QA (prueba de que no corre).
  *
- *  Esta copia es SOLO de display: ligera, SIEMPRE JPEG (un PNG de 2560
- *  seguiría pesando) y re-encodeada incluso si la fuente ya es ≤ tope.
- *  El DATO no cambia → WYSIWYG conservado por construcción (el guardado
- *  re-procesa desde page.original con PROCESSED_MAX_LONG_SIDE=4032).
- *  Ante cualquier fallo se devuelve la url original (mejor borrosa que
- *  pantalla en blanco). */
+ *  (Histórico v5 5.1: el editor mostraba el data URL PNG completo del
+ *  worker (4032 px → 5–20 MB de cadena): en gama baja el navegador lo
+ *  decodificaba por una superficie de baja resolución → preview BORROSO
+ *  aunque el dato estuviera intacto. La copia era SOLO de display:
+ *  ligera, SIEMPRE JPEG, re-encodeada incluso si la fuente ya era ≤ tope;
+ *  el DATO no cambiaba. Ante cualquier fallo devolvía la url original.) */
 async function makeDisplayUrl(dataUrl: string): Promise<string> {
+  // EXPERIMENTO v11 — contador de verificación QA: debe quedar en 0
+  // (la red de seguridad NO corre; makeDisplayUrl es solo el seam de
+  // reversión).
+  (window as unknown as { __displayUrlCalls?: number }).__displayUrlCalls =
+    ((window as unknown as { __displayUrlCalls?: number }).__displayUrlCalls ?? 0) + 1;
   const img = await loadImage(dataUrl);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
@@ -543,8 +542,9 @@ export default function EditorView() {
    *  (data URL PNG) pesa ~el doble (10-25 MB como cadena JS, ×2 en heap):
    *  mismo presupuesto TOTAL de memoria que antes, mitades entradas → sin
    *  riesgo de jetsam en iOS con sesiones largas (runOcrAll incluido).
-   *  FIX v5 (5.1): cada entrada lleva ADEMÁS su copia de display JPEG
-   *  ≤ DISPLAY_MAX_LONG_SIDE (~0,3-3 MB) — +5-10 % por entrada, dentro del presupuesto. */
+   *  EXPERIMENTO v11: la entrada es SOLO el dato completo (sin copia de
+   *  display) — el LRU de 6 NO se toca (medir la presión real ES el
+   *  experimento). */
   const cachePreviewEntry = useCallback((key: string, entry: PreviewEntry) => {
     previewCache.current.set(key, entry);
     if (previewCache.current.size > 6) {
@@ -576,26 +576,9 @@ export default function EditorView() {
     if (cached) {
       setPreview(cached);
       setPreviewLoading(false);
-      // FIX v5 (5.1): entrada sin copia de display (semilla desde
-      // page.processed, rotación rápida o siembra de runOcrAll) → se pinta
-      // YA con la url completa y la copia ligera se genera en 2º plano
-      // (al terminar se intercambia en cache + preview si sigue vigente).
-      if (!cached.displayUrl) {
-        const entry = cached;
-        void (async () => {
-          try {
-            const display = await makeDisplayUrl(entry.url);
-            if (cancelled) return;
-            if (previewCache.current.get(cacheKey) === entry) {
-              const updated = { ...entry, displayUrl: display };
-              previewCache.current.set(cacheKey, updated);
-              setPreview(updated);
-            }
-          } catch {
-            /* sin copia de display: se queda la url completa */
-          }
-        })();
-      }
+      // EXPERIMENTO v11: sin copia de display — se consume el DATO
+      // completo directamente (la generación en 2º plano de displayUrl
+      // de v5 5.1 está APAGADA; la entrada se pinta YA con su url).
       return () => {
         cancelled = true;
       };
@@ -615,14 +598,12 @@ export default function EditorView() {
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
         if (cancelled) return;
-        // FIX v5 (5.1): el DATO (res.processed) se guarda intacto como
-        // fuente de verdad; la copia de DISPLAY (JPEG ≤ tope adaptativo v10-A) se genera
-        // aquí — los <img> del editor nunca decodifican el PNG gigante.
-        const display = await makeDisplayUrl(res.processed);
-        if (cancelled) return;
+        // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
+        // con el DATO completo (url/w/h/engine); los <img> del editor
+        // decodifican directamente el PNG ≤4032 (red de seguridad
+        // APAGADA — el re-encode de v5 5.1/v10-A no corre).
         const entry: PreviewEntry = {
           url: res.processed,
-          displayUrl: display,
           w: res.precision?.width ?? 0,
           h: res.precision?.height ?? 0,
           engine: res.precision?.engine === "worker" ? "worker" : "canvas",
@@ -1827,27 +1808,24 @@ export default function EditorView() {
       if (!item) return;
       void (async () => {
         try {
-          const display = await makeDisplayUrl(item.source);
-          const entry = previewCache.current.get(item.key);
-          if (entry && !entry.displayUrl) {
-            previewCache.current.set(item.key, { ...entry, displayUrl: display });
-          }
+          // EXPERIMENTO v11: SIN re-encode — swap directo al DATO completo
+          // (entry?.url ?? p.original). La red de seguridad está apagada:
+          // ya NO se escriben displayUrl en la caché.
+          const resolved = item.source;
           setPresentationPages((prev) =>
             prev.map((pg) =>
               pg.id === item.page.id
-                ? { ...pg, processed: display, displayPending: false }
+                ? { ...pg, processed: resolved, displayPending: false }
                 : pg
             )
           );
-        } catch {
-          /* sin copia de display: la página conserva el placeholder */
         } finally {
           runNext();
         }
       })();
     };
     runNext();
-    runNext(); // concurrencia 2
+    runNext(); // concurrencia 2 — EXPERIMENTO v11: SE MANTIENE (evita decodificar N PNG de 4032 px a la vez en la apertura)
   }, []);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
