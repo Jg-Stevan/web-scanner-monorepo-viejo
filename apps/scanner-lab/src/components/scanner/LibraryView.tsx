@@ -82,12 +82,44 @@ import {
 
 type SortMode = "recientes" | "favorites" | "az" | "manual";
 
+type LibraryViewMode = "grid" | "list";
+
 const SORT_CHIPS: { id: SortMode; label: string }[] = [
   { id: "recientes", label: "Recientes" },
   { id: "favorites", label: "Favoritos" },
   { id: "az", label: "A-Z" },
   { id: "manual", label: "Manual" },
 ];
+
+/* v13-post-24 — La biblioteca recuerda cómo la dejaste: orden y vista
+ * (cuadrícula/lista) persistidos en localStorage con validación estricta
+ * (un valor corrupto/manipulado cae al valor por defecto, nunca rompe).
+ * Lectura en useEffect post-mount: el SSR/hidratación renderiza siempre
+ * los valores por defecto (cero mismatch de hidratación) y el effect los
+ * corrige ANTES del primer paint percibido; escritura write-through con
+ * un effect por par { sort, viewMode } (cubre los dos puntos de cambio
+ * sin tocarlos). try/catch por modo privado/almacenamiento lleno. */
+const LIBRARY_PREFS_KEY = "scannerlab.libraryPrefs.v1";
+const LIBRARY_PREFS_DEFAULT = { sort: "recientes" as SortMode, viewMode: "grid" as LibraryViewMode };
+
+function readLibraryPrefs(): { sort: SortMode; viewMode: LibraryViewMode } {
+  if (typeof window === "undefined") return LIBRARY_PREFS_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem(LIBRARY_PREFS_KEY);
+    if (!raw) return LIBRARY_PREFS_DEFAULT;
+    const parsed = JSON.parse(raw) as { sort?: unknown; viewMode?: unknown };
+    const sort = SORT_CHIPS.some((c) => c.id === parsed.sort)
+      ? (parsed.sort as SortMode)
+      : LIBRARY_PREFS_DEFAULT.sort;
+    const viewMode =
+      parsed.viewMode === "grid" || parsed.viewMode === "list"
+        ? (parsed.viewMode as LibraryViewMode)
+        : LIBRARY_PREFS_DEFAULT.viewMode;
+    return { sort, viewMode };
+  } catch {
+    return LIBRARY_PREFS_DEFAULT;
+  }
+}
 
 /** Normaliza texto para búsqueda (minúsculas, sin tildes). */
 function normalizeText(s: string): string {
@@ -354,8 +386,26 @@ export default function LibraryView() {
     normCacheRef.current.set(pageKey, { src: text, norm });
     return norm;
   }, []);
-  const [sort, setSort] = useState<SortMode>("recientes");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [sort, setSort] = useState<SortMode>(LIBRARY_PREFS_DEFAULT.sort);
+  const [viewMode, setViewMode] = useState<LibraryViewMode>(LIBRARY_PREFS_DEFAULT.viewMode);
+  /* v13-post-24: restaurar tras la hidratación (ver nota del módulo) y
+   * persistir en cada cambio — dos effects para no escribir durante el
+   * propio restore (el write-through solo observa cambios del usuario). */
+  useEffect(() => {
+    const stored = readLibraryPrefs();
+    if (stored.sort !== LIBRARY_PREFS_DEFAULT.sort) setSort(stored.sort);
+    if (stored.viewMode !== LIBRARY_PREFS_DEFAULT.viewMode) setViewMode(stored.viewMode);
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LIBRARY_PREFS_KEY,
+        JSON.stringify({ sort, viewMode })
+      );
+    } catch {
+      /* modo privado o almacenamiento lleno: la preferencia solo vive en memoria */
+    }
+  }, [sort, viewMode]);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   // Filtro por etiqueta (null = "Todas") y diálogo de etiquetado (uno o lote).
