@@ -155,7 +155,12 @@ export default function Home() {
     // (p.ej. data-protocompass-form de asistentes de formularios) → mismatch
     // SSR/cliente cosmético que disparaba el overlay de hidratación.
     <div
-      className="flex min-h-dvh w-full items-stretch justify-center bg-[#e9e9ee] dark:bg-[#111111] sm:items-center sm:py-6"
+      // FIX v13-post-26: `sm:py-6` → clase semántica `app-frame-pad-y`
+      // (globals.css): en landscape corto (≥640px ∧ ≤520px de alto) el marco
+      // pasa a pegado a los cantos (padding 0) — el margen decorativo
+      // robaba 48 px y la página scrolleaba ~25 px (observación 13.6).
+      // Fuera de ese caso el padding es IDÉNTICO (1.5rem en ≥640 px).
+      className="flex min-h-dvh w-full items-stretch justify-center bg-[#e9e9ee] dark:bg-[#111111] sm:items-center app-frame-pad-y"
       suppressHydrationWarning
     >
       <div

@@ -252,10 +252,40 @@
  * Clase semántica propia (antes `sm:h-[min(880px,94dvh)]` inline en
  * page.tsx): misma altura, pero con fallback `vh` para navegadores sin
  * `dvh` (iOS ≤15.3, Chromium <108). Definida FUERA de @layer para ganarle
- * a la utilidad `h-dvh` del propio Tailwind en ≥640 px. */
+ * a la utilidad `h-dvh` del propio Tailwind en ≥640 px.
+ * `app-frame-pad-y` (v13-post-26) sustituye al `sm:py-6` inline por el
+ * mismo motivo: en landscape corto necesita anularse sin pelear de
+ * especificidad con la utilidad generada. */
 @media (min-width: 640px) {
   .app-frame-h {
     height: min(880px, 94dvh);
+  }
+  .app-frame-pad-y {
+    padding-top: 1.5rem;
+    padding-bottom: 1.5rem;
+  }
+}
+
+/* ── FIX v13-post-26 — Landscape corto: alto COMPLETO ────────────────────
+ * En un teléfono en horizontal (≥640 px de ancho, ≤520 px de alto: 667×375,
+ * 844×390, 568×320…) el marco decorativo robaba ~70 px: 48 px del `py-6`
+ * + 22 px del 6 % que se dejaba sin usar (94dvh) → y además la página
+ * SCROLLEABA verticalmente ~25 px (observación de la auditoría 13.6 que se
+ * arrastraba desde entonces). Consecuencia grave en el editor: su pila
+ * fija (header 64 + pill 48 + toggle 32 + carrusel 81 + toolbar/pie 148 ≈
+ * 373 px) consumía TODO el alto y el stage (flex-basis 0) colapsaba a
+ * 0 px — la imagen del documento quedaba INVISIBLE (bug preexistente
+ * invisible a los barridos de overflow-x de 13.6: 0 overflow ≠ 0 stage).
+ * Solución: en landscape corto el marco usa el 100 % del alto y sin
+ * margen — el marco «teléfono» se mantiene (bordes redondeados + sombra
+ * phone-frame), solo que pegado a los cantos, como una app real. */
+@media (min-width: 640px) and (max-height: 520px) {
+  .app-frame-h {
+    height: 100dvh;
+  }
+  .app-frame-pad-y {
+    padding-top: 0;
+    padding-bottom: 0;
   }
 }
 
@@ -276,6 +306,12 @@
   @media (min-width: 640px) {
     .app-frame-h {
       height: min(880px, 94vh);
+    }
+  }
+  /* v13-post-26 — mismo fallback para landscape corto (100vh). */
+  @media (min-width: 640px) and (max-height: 520px) {
+    .app-frame-h {
+      height: 100vh;
     }
   }
 }
