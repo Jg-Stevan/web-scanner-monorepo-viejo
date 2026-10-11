@@ -11,9 +11,12 @@
 /** Patrones UA de WebViews sociales conocidos.
  *  NOTA: `musical_ly` va FUERA del grupo con \b — el guion bajo es carácter
  *  de palabra, así que `\bmusical_ly\b` NO matchea «musical_ly_30.1.0»
- *  (TikTok iOS) ni «musical_ly_2022803» (TikTok Android). */
+ *  (TikTok iOS) ni «musical_ly_2022803» (TikTok Android).
+ *  `MicroMessenger` (v13-post-6): navegador integrado de WeChat (kernel
+ *  XWEB/X5 en Android) — también bloquea/degrada getUserMedia y el clipboard
+ *  moderno; siempre aparece en el UA con versión (`MicroMessenger/8.0.x`). */
 const SOCIAL_WEBVIEW_PATTERN =
-  /\b(?:FBAV|FBAN|FB_IAB|FBMD|Instagram|BytedanceWebview|TikTok|Line|LinkedIn|Snapchat)\b|musical_ly/i;
+  /\b(?:FBAV|FBAN|FB_IAB|FBMD|Instagram|BytedanceWebview|TikTok|Line|LinkedIn|Snapchat|MicroMessenger)\b|musical_ly/i;
 
 /**
  * ¿El UA parece el WebView de una red social (no un navegador real)?

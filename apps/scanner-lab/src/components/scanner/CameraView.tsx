@@ -141,7 +141,7 @@ const CAM_NOTICE_COPY: Record<
     icon: "🚫",
     accent: "#0a84ff", // azul iOS — contenedor social
     title: "Esta app no permite usar la cámara web",
-    body: "Abre el enlace en Safari (iPhone) o Chrome (Android) para escanear con cámara. Mientras tanto puedes importar fotos desde la galería con el botón de abajo.",
+    body: "Estás dentro del navegador de una red social (Instagram, Facebook, TikTok, WeChat…) que bloquea la cámara web. Abre el enlace en Safari (iPhone) o Chrome (Android) para escanear con cámara. Mientras tanto puedes importar fotos desde la galería con el botón de abajo.",
     retry: false,
   },
   insecure: {
