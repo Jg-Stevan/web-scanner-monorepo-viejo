@@ -156,7 +156,25 @@
 
 ---
 
-## 0-noveno. FIX v9 — Auto-captura invariante al FPS del dispositivo (rama `fix/auto-shutter-fps-v9`)
+## 0-noveno. E14 — Rediseño ENVIADA al mock del dueño + eliminación del flujo PDF (rama `feat/e14-rediseno-enviada`)
+
+**Base:** `main` en `8eb4434` (PR #17/#20/#21/#22 fusionados). SPEC-e14-rediseno-enviada Rev. 2 — la «spec compañera» que las sesiones de rediseño de REVISIÓN dejaron pendiente («ENVIADA mantiene su mock del zip»). Petición literal del dueño: «vamos a remodelar un poco, cambiemos al diseño que te comparto» + confirmación Rev. 2: «sip elimina el pdf». El SPEC se escribió contra `main@55a35f8`; los bloques se re-localizaron POR CONTENIDO (el archivo cambió con PR #20/#22).
+
+**Cambios (4 archivos de código):**
+
+- **D1 — TopBar dinámica: YA EXISTÍA** — PR #20 la implementó «heredada de SPEC-rediseno-enviada Rev. 2» con la enmienda documentada «ADVERTENCIA» > «MODERADA» (el mock de REVISIÓN manda) y las palabras «REVISIÓN HUMANA»/«ENVIADA CON ADVERTENCIA» (<8). Esta rama NO toca `TopBar.tsx` (se documentan las desviaciones de palabra heredadas).
+- **D2 — `ReviewView.tsx`: Pill flotante de ENVIADA ELIMINADA** («✓ score/10 ÓPTIMA • Enviado correctamente») — esa información vive ahora en la TopBar (D1) y en la fila de estado (D5). Pills de OPTIMA/GENERICO y banner EN_REVISION_HUMANA intactos.
+- **D3 — Tarjeta héroe limpia y tocable (SOLO ENVIADA):** `<button aria-label="Ver acta a pantalla completa">` → overlay existente; fondo `bg-white p-1.5 border border-line rounded-xl` (la imagen B/N llega al borde, como el papel del mock); SIN brackets (los estados editables los conservan idénticos). Placeholder «FOTO NO DISPONIBLE» conservado.
+- **D4 — Chips con MESA:** `[TRANSMISIÓN][MESA 001][PÁG 1 DE 2]` — `acta.ubicacion.mesa` canónica de 3 dígitos del pipeline (NO re-formateada), tipo real con acento.
+- **D5 — Fila de estado dedicada** (`data-testid="fila-estado"`, justify-between): `✓ ENVIADO AUTOMÁTICAMENTE` … hora a la derecha (`--:--:--` si es manual) + SHA-256 micro-caption (evidencia de transmisión — no se elimina funcionalidad).
+- **D6 — CTA único:** UN botón verde grande «SEGUIR ESCANEANDO» (h-13 = 52px); el branch `if (esReal)` de 2 botones desaparece (con y sin foto).
+- **D7 — Flujo de exportación a PDF eliminado de la cadena COMPLETA** (decisión del dueño Rev. 2, «sin código muerto»): botón + selector (ReviewView) → acción `exportarPdfActa` (store) → contrato y método del `CompositeBridge` (bridge, con comentarios de cabecera actualizados) → import `pdf-export` + método real (scanner-core-bridge). `packages/scanner-core/pdf-export` INTACTO (scanner-lab lo usa — regla de oro). **Nota de higiene:** los specifiers `excellentQuality`/`makeQuality`/`ScanDocument`/`nombreExportacion` tenían sus ÚNICOS usos dentro del método eliminado → también se retiran de los imports (el §7.7 del SPEC asumía que «se quedan»; verificado con rg — `defaultQuad`/`PageFilter`/`PageQuality`/`Quad` sí se conservan con usos reales). `clasificador.ts` INTACTO (comentario histórico — actualización OPCIONAL per SPEC, no aplicada).
+
+**NO cambiado:** BottomNav, Breadcrumb, overlay de pantalla completa (visorAbierto — existente, funciona para cualquier estado), QuadEditor, PanelClasificación, toolbar unificada de 3 (PR #22) y toolbar de 5 de OPTIMA-rescate, tarjeta ILEGIBLE, toasts, seed, `types.ts`, transmisión al 100 % (`enviarActa`, cola offline, SHA-256 — el PDF NUNCA fue parte del payload: solo alimentaba una descarga local), `apps/scanner-lab` y `packages/` (diff VACÍO).
+
+**Verificado:** `bun run lint` EXIT=0 · `bunx tsc --noEmit` EXIT=0 · build estático `BUILD_STATIC=1 NEXT_PUBLIC_BASE_PATH=/web-scanner` EXIT=0 (3/3 páginas) · `git diff main...HEAD -- apps/scanner-lab packages` VACÍO · vaciado `rg "exportarPdf|exportarPdfActa|buildDocPdf|EXPORTAR PDF" apps/digitalizador-e14/src` = **0** · `rg "pdf-export" apps/scanner-lab/src` = 2 (EditorView, LibraryView — el módulo vive) · bundle: «SEGUIR ESCANEANDO»/«Ver acta a pantalla completa»/«fila-estado» presentes, «EXPORTAR PDF»/«PDF GENERADO» ausentes, piso score-10 intacto (`identificada&&(r=Math.max(r,10))`) · QA navegador 390×844 (AC1-AC8) — ver worklog del repo.
+
+## 0-noveno-bis. FIX v9 — Auto-captura invariante al FPS del dispositivo (rama `fix/auto-shutter-fps-v9`)
 
 **Base:** `main` en `8eb4434` (PR #21 v8 fusionado y con QA físico confirmado). Reporte de campo: en dispositivos con video muy fluido la auto-captura NUNCA dispara, como si la app creyera que el usuario «se mueve muy rápido»; en equipos medios funciona normal.
 
