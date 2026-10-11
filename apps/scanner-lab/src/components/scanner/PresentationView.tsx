@@ -20,6 +20,7 @@ import { AnimatePresence, motion, useMotionValue, useReducedMotion, type PanInfo
 import { ChevronLeft, ChevronRight, Eye, Pause, Play, X } from "lucide-react";
 
 import type { ScanPage } from "@jg-stevan/scanner-core/types";
+import { cn } from "@/lib/utils";
 
 /** FIX v6 (6.4) — página de presentación con marcador de placeholder.
  *  displayPending=true mientras el src es el THUMBNAIL provisional
@@ -714,6 +715,46 @@ export function PresentationView({
             transition={{ duration: 0.22, ease: IOS_EASE }}
             className="pointer-events-none absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-safe"
           >
+            {/* v13-post-35 — Segmentos de progreso estilo Stories: una barra
+             *  fina por página bajo el borde superior (Instagram/WhatsApp):
+             *  las visitadas llenas, la actual en blanco puro y las futuras
+             *  al 30 %. TAP en un segmento = salto directo a esa página
+             *  (navegación precisa sin flechitas — en 10 págs el swipe o la
+             *  diana de flechas a la daga lejana es tedioso). Se ocultan con
+             *  el chrome (AnimatePresence del header) y NO se pintan en
+             *  docs de 1 página (nada que indicar) ni >12 (segmentos de
+             *  <20 px = diana inalcanzable — el contador «X de Y» cubre esos
+             *  casos). La BARRA es estática (posición): la cuenta atrás ya
+             *  vive en el anillo del botón play (v13-post-19) — doble
+             *  indicador sería ruido. aria-current marca la página activa. */}
+            {totalPages > 1 && totalPages <= 12 && (
+              <nav
+                aria-label="Progreso de páginas"
+                className="pointer-events-auto flex gap-1 pb-1"
+              >
+                {pages.map((p, i) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    aria-label={`Ir a la página ${i + 1} de ${totalPages}`}
+                    aria-current={i === index ? "true" : undefined}
+                    onClick={() => goTo(i)}
+                    className="flex h-3.5 flex-1 items-center justify-center outline-none"
+                  >
+                    <span
+                      className={cn(
+                        "h-[3px] w-full rounded-full transition-colors duration-300",
+                        i < index
+                          ? "bg-white/85"
+                          : i === index
+                            ? "bg-white"
+                            : "bg-white/30"
+                      )}
+                    />
+                  </button>
+                ))}
+              </nav>
+            )}
             <div className="pointer-events-auto flex h-11 items-center justify-between gap-2">
               <button
                 type="button"
