@@ -296,11 +296,15 @@ export function loadSettings(): ScannerSettings {
     const parsed = JSON.parse(raw) as Partial<ScannerSettings>;
     // Merge defensivo: defaults para claves nuevas/ausentes.
     const merged = { ...DEFAULT_SETTINGS, ...parsed };
-    // Migración one-time: instalaciones previas guardaron "alta" como
-    // default — se eleva a "máxima" una sola vez (después de esto el
-    // valor persistido vuelve a ser sagrado).
+    // Migración one-time (FIX v10-B): la app ya no ofrece selector de
+    // calidad en el EDITOR (chip «Se guardará…» y su drawer eliminados) —
+    // todo PDF del flujo principal se exporta SIEMPRE a máxima. La marca
+    // cubre TODO valor no-máximo persistido: "alta" (default antiguo) y
+    // "standard" (elegido en el drawer del editor, ya inexistente). Tras
+    // esta única pasada el valor persistido vuelve a ser sagrado (Ajustes
+    // › Exportación sigue ofreciendo el selector).
     if (!localStorage.getItem(SETTINGS_MIGRATION_KEY)) {
-      if (parsed.exportQuality === "alta") merged.exportQuality = "máxima";
+      if (parsed.exportQuality !== "máxima") merged.exportQuality = "máxima";
       localStorage.setItem(SETTINGS_MIGRATION_KEY, "1");
     }
     // Migración one-time v6.1: OCR automático → OFF (bajo demanda, botón
