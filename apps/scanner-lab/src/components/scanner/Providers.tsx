@@ -19,6 +19,7 @@
 
 import { ThemeProvider } from "next-themes";
 import { MotionConfig } from "framer-motion";
+import { ThemeColorSync } from "./ThemeColorSync";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -28,7 +29,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
       enableSystem
       disableTransitionOnChange
     >
-      <MotionConfig reducedMotion="user">{children}</MotionConfig>
+      <MotionConfig reducedMotion="user">
+        {/* v13-post-9 — meta theme-color viva: sigue al tema RESUELTO
+            (incluido el forzado por el usuario en Ajustes). */}
+        <ThemeColorSync />
+        {children}
+      </MotionConfig>
     </ThemeProvider>
   );
 }

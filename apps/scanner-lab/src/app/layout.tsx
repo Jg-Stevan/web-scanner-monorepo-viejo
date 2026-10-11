@@ -50,7 +50,15 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#007aff",
+  /* v13-post-9 — par claro/oscuro con media query (sin JS): la barra del
+   *  navegador Android/PWA-instalada tiñe del color REAL de la app en cada
+   *  esquema, en vez del azul fijo de marca que chocaba con la cabecera
+   *  gris estilo iOS. ThemeColorSync ajusta las metas en vivo cuando el
+   *  usuario fuerza el tema en Ajustes (la media query no lo ve). */
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f2f2f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+  ],
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
