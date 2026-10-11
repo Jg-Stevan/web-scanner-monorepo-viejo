@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Camera, Crop, FolderOpen, ScanSearch } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
+import { useIsShortLandscape } from "@/hooks/use-short-landscape";
 import { cn } from "@/lib/utils";
 
 interface OnboardingStep {
@@ -60,6 +61,19 @@ export default function OnboardingView() {
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState(1); // 1 = avanza (slide desde la derecha)
   const lastStepRef = useRef(0);
+
+  /* v13-post-33 — Landscape corto (≤520 px ∧ horizontal, hook v13-post-30
+   *  con init perezoso — esta vista solo se monta tras `hydrated`, nunca
+   *  en SSR): el contenido vertical de 317 px NO CABE en el área de
+   *  ~136-226 px de un teléfono horizontal — medido en 568×320: círculo
+   *  recortado 44 px por arriba y el párrafo ENTERO fuera del área visible
+   *  (el overflow-hidden lo recorta sin scroll de rescate; también ocurre
+   *  en 667×375 y 844×390 — r8 lo dio por «usable» porque el VLM no pilló
+   *  el recorte, la medición dura de r10 sí). En landscape el espacio
+   *  sobra a lo ANCHO: el paso pasa a FILA (ilustración + texto lado a
+   *  lado, el clásico onboarding apaisado) con todo compacto. Portrait y
+   *  desktop SIN cambios (columna original). */
+  const short = useIsShortLandscape();
 
   const isLast = step === STEPS.length - 1;
   const next = useCallback(() => {
@@ -132,18 +146,24 @@ export default function OnboardingView() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: dir * -72 }}
             transition={{ duration: 0.32, ease: [0.32, 0.72, 0, 1] }}
-            className="flex w-full max-w-[320px] cursor-grab select-none flex-col items-center gap-7 text-center active:cursor-grabbing"
+            className={cn(
+              "flex w-full max-w-[320px] cursor-grab select-none flex-col items-center gap-7 text-center active:cursor-grabbing",
+              short && "max-w-[480px] flex-row gap-6 text-left"
+            )}
           >
             {/* Ilustración: icono lucide sobre círculo degradado azul */}
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.05, duration: 0.3, ease: "easeOut" }}
-              className="flex h-[152px] w-[152px] items-center justify-center rounded-full bg-gradient-to-b from-[#007AFF]/15 to-[#007AFF]/5"
+              className={cn(
+                "flex h-[152px] w-[152px] shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#007AFF]/15 to-[#007AFF]/5",
+                short && "h-[88px] w-[88px]"
+              )}
               aria-hidden="true"
             >
               <Current.icon
-                className="h-[76px] w-[76px] text-[#007AFF]"
+                className={cn("h-[76px] w-[76px] text-[#007AFF]", short && "h-[44px] w-[44px]")}
                 strokeWidth={1.6}
               />
             </motion.div>
@@ -153,7 +173,10 @@ export default function OnboardingView() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.12, duration: 0.32, ease: "easeOut" }}
-                className="text-[24px] font-semibold leading-[1.2] tracking-[-0.01em] text-[#1c1c1e] dark:text-white"
+                className={cn(
+                  "text-[24px] font-semibold leading-[1.2] tracking-[-0.01em] text-[#1c1c1e] dark:text-white",
+                  short && "text-[19px]"
+                )}
               >
                 {Current.title}
               </motion.h2>
@@ -161,7 +184,10 @@ export default function OnboardingView() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.18, duration: 0.32, ease: "easeOut" }}
-                className="text-[15px] leading-[1.5] text-[#6d6d72] dark:text-[#8e8e93]"
+                className={cn(
+                  "text-[15px] leading-[1.5] text-[#6d6d72] dark:text-[#8e8e93]",
+                  short && "max-w-[340px] text-[13px] leading-[1.45]"
+                )}
               >
                 {Current.text}
               </motion.p>
@@ -172,7 +198,10 @@ export default function OnboardingView() {
 
       {/* ── PageDots iOS ─────────────────────────────────────────────── */}
       <div
-        className="flex shrink-0 items-center justify-center gap-2 pb-6"
+        className={cn(
+          "flex shrink-0 items-center justify-center gap-2 pb-6",
+          short && "pb-2"
+        )}
         role="tablist"
         aria-label="Pasos"
       >
@@ -208,13 +237,20 @@ export default function OnboardingView() {
           onClick={onContinue}
           whileTap={{ scale: 0.97 }}
           transition={{ duration: 0.12 }}
-          className="flex h-12 w-full items-center justify-center rounded-xl bg-[#007AFF] text-[17px] font-semibold text-white shadow-[0_4px_14px_rgba(0,122,255,0.28)]"
+          className={cn(
+            "flex h-12 w-full items-center justify-center rounded-xl bg-[#007AFF] text-[17px] font-semibold text-white shadow-[0_4px_14px_rgba(0,122,255,0.28)]",
+            short && "h-11 text-[16px]"
+          )}
         >
           {isLast ? "Comenzar a escanear" : "Continuar"}
         </motion.button>
-        <p className="mt-3 text-center text-[12px] text-[#6d6d72] dark:text-[#8e8e93]">
-          Desliza para explorar los pasos
-        </p>
+        {/* Pista de swipe fuera en landscape corto: compite por el vertical
+         *  que apenas existe — los puntos ya comunican que hay más pasos. */}
+        {!short && (
+          <p className="mt-3 text-center text-[12px] text-[#6d6d72] dark:text-[#8e8e93]">
+            Desliza para explorar los pasos
+          </p>
+        )}
       </div>
     </section>
   );

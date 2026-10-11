@@ -13,14 +13,23 @@ import { useEffect, useState } from "react";
  * breakpoint `sm` de Tailwind NO dispara; con orientation queda cubierto
  * cualquier teléfono horizontal.
  *
+ * v13-post-33 — init PEREZOSO sincrónico (typeof window + matchMedia en el
+ * inicializador de useState, el mismo patrón del editor v13-post-27): el
+ * primer render del cliente YA conoce la respuesta — sin flash de layout
+ * grande→compacto en el montaje. Seguro para SSR/hidratación SOLO en
+ * componentes que se montan del lado cliente (OnboardingView tras
+ * `hydrated`, SettingsView tras interacción — NUNCA durante el render del
+ * servidor); consumidores renderizados en SSR deben quedarse con el
+ * estado inicial false y confiar en el efecto.
+ *
  * matchMedia con listener en vivo: la rotación del dispositivo re-encaja
- * SIN recargar. Seguro para hidratación: el estado inicial (false) coincide
- * con el render del servidor — este hook solo se consume en vistas que se
- * montan del lado cliente (Ajustes y compañía viven tras la interacción,
- * nunca en el SSR de la página).
+ * SIN recargar.
  */
 export function useIsShortLandscape(): boolean {
-  const [short, setShort] = useState(false);
+  const [short, setShort] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-height: 520px) and (orientation: landscape)").matches
+  );
 
   useEffect(() => {
     const mq = window.matchMedia("(max-height: 520px) and (orientation: landscape)");
