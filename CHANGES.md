@@ -276,6 +276,8 @@
 
 **Verificado:** `bun run lint:e14` EXIT=0 · `bun run e14:check` (tsc) EXIT=0 · build estático `BUILD_STATIC=1` EXIT=0 (3/3 páginas) · diff confinado a §1 (7 archivos permitidos + manifest + CHANGES; `git diff -- apps/scanner-lab packages` = 0 líneas; `src/lib` = 0 líneas) · bundle CSS: tokens neón presentes (`#060a0d`/`#0e1319`/`#0bf282`×21/`#03df73`/green-bar triplete), 9 utilidades glow compiladas, radios 20/14/9/50%/9999 y barras 3.5px+34px · strings del chrome nuevo en el chunk de revisión («ACTA RECHAZADA», «barra-rechazo», «fila-estado», «SEGUIR»+«ESCANEANDO», «banner-revision») · SHA-256: 0 usos display en ReviewView (los 2 únicos hits del bundle = cálculo crypto del store + «HASH SHA-256 EN COLA» de ANALIZANDO, preexistente). Los 2 hits de «SHA-256» y 1 de «pulse» en ReviewView/TopBar son COMENTARIOS (los elimina el compilador — no llegan al DOM).
 
+**Post-QA (M19-1/M19-1-bis, navegador sobre build local 390×844/360×740):** AC2-AC12 ALL PASS (computed styles token por token + comparación visual 1:1 contra el mock con VLM + 0 errores de consola + escalación manual/auto E2E + contingencia del 4º rechazo intacta). Defecto menor AC11 corregido en `dea7b02`: el espaciador DEV-6 pasa de fijo 64px a CONDICIONAL 76px (banner repetir-primero de 2 líneas, 69px) / 64px (contingencia, 54px) — re-verificado con bounding boxes y elementFromPoint: holgura 8-11px, 0 solape en ambos estados EN_RH. Ajuste de precisión: grid del nav h-[73px] → barra computada 78px exactos (§9).
+
 ---
 
 ## Resumen de commits
