@@ -2015,7 +2015,13 @@ export default function EditorView() {
               if (reviewDocId) void exitReviewToLibrary();
               else setView("camera");
             }}
-            className="flex min-w-0 items-center gap-0.5 rounded-lg py-2 pr-2 text-white transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:opacity-60"
+            /* FIX v13-post-22: target táctil 44×44 (iOS HIG). Con el texto
+             * oculto por debajo de 380 px el botón medía ~30 px de ancho
+             * (chevrón 22 + pr-2) — el 13.2 engordó la ALTURA (py-2) pero no
+             * el ancho. min-w/min-h-44 + pl-1.5 compensado con -ml-1.5
+             * mantiene el chevrón EXACTAMENTE en su posición visual (el
+             * padding se come el margen negativo) sin tocar la cabecera. */
+            className="flex min-h-[44px] min-w-[44px] items-center gap-0.5 rounded-lg py-2 pl-1.5 -ml-1.5 pr-2 text-white transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 active:opacity-60"
           >
             <ChevronLeft className="h-[22px] w-[22px] shrink-0" strokeWidth={2.5} />
             <span className="hidden text-[17px] font-semibold tracking-tight min-[380px]:inline">
