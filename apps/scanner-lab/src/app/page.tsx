@@ -162,7 +162,10 @@ export default function Home() {
           "relative flex w-full flex-col overflow-hidden bg-[#f2f2f7] dark:bg-black",
           // F-MOBILE: dvh sigue la barra dinámica del navegador (svh dejaba
           // un hueco permanente al ocultarla) + height 100% en PWA instalada.
-          "h-dvh sm:h-[min(880px,94dvh)] sm:max-w-[420px]",
+          // FIX v13 (13.2): `app-frame-h` = clase semántica con el MISMO valor
+          // min(880px,94dvh) + fallback vh en @supports (globals.css) — antes
+          // `sm:h-[min(880px,94dvh)]` inline, sin red para navegadores sin dvh.
+          "h-dvh app-frame-h sm:max-w-[420px]",
           fullBleed ? "bg-black sm:rounded-[44px]" : "sm:rounded-[44px]",
           "sm:phone-frame",
         ].join(" ")}

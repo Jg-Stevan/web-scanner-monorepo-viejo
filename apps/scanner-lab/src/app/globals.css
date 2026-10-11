@@ -248,6 +248,55 @@
   }
 }
 
+/* ── FIX v13 (13.2) — Marco del teléfono en desktop ──────────────────────
+ * Clase semántica propia (antes `sm:h-[min(880px,94dvh)]` inline en
+ * page.tsx): misma altura, pero con fallback `vh` para navegadores sin
+ * `dvh` (iOS ≤15.3, Chromium <108). Definida FUERA de @layer para ganarle
+ * a la utilidad `h-dvh` del propio Tailwind en ≥640 px. */
+@media (min-width: 640px) {
+  .app-frame-h {
+    height: min(880px, 94dvh);
+  }
+}
+
+/* ── FIX v13 (13.2) — Fallback dvh → vh ──────────────────────────────────
+ * Tailwind 4 NO genera fallback para `dvh`: en iOS 15.3–/Chromium viejo
+ * `100dvh` se descarta como declaración inválida y el marco colapsaba.
+ * Solo aplica cuando el navegador NO soporta dvh (@supports), así el
+ * comportamiento dinámico de la barra queda intacto donde sí existe. */
+@supports not (height: 100dvh) {
+  .h-dvh {
+    height: 100vh;
+  }
+  .min-h-dvh {
+    min-height: 100vh;
+  }
+  /* El fallback del marco va DESPUÉS del .h-dvh para ganar el cascade
+   * en ≥640 px (misma especificidad, última declaración gana). */
+  @media (min-width: 640px) {
+    .app-frame-h {
+      height: min(880px, 94vh);
+    }
+  }
+}
+
+/* ── FIX v13 (13.2) — Reduced motion ────────────────────────────────────
+ * Bloque estándar: animaciones/transiciones casi instantáneas y sin
+ * scroll suave cuando el usuario lo pide (accesibilidad + gama baja:
+ * menos composición GPU). NOTA: las animaciones JS (framer-motion) no se
+ * ven afectadas por CSS — propuesta MotionConfig en docs v13 §13.2. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Animación del scanline de la cámara */
 @keyframes scan-pulse {
   0%,

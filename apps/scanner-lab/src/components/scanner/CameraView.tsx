@@ -2268,7 +2268,8 @@ export default function CameraView() {
           type="button"
           aria-label="Cerrar cámara y volver a la biblioteca"
           onClick={closeToLibrary}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/30 backdrop-blur-md transition-transform duration-150 active:scale-90"
+          // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black/30 backdrop-blur-md transition-transform duration-150 active:scale-90"
         >
           <X className="h-5 w-5 text-white" strokeWidth={2.2} />
         </button>
@@ -2386,7 +2387,8 @@ export default function CameraView() {
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
-            className="flex h-9 w-9 items-center justify-center rounded-full transition-transform duration-150 active:scale-90"
+            // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9 w-9 (36 px).
+            className="flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-150 active:scale-90"
           >
             <MoreVertical className="h-5 w-5 text-white" strokeWidth={2.2} />
           </button>
@@ -2592,14 +2594,16 @@ export default function CameraView() {
                     <button
                       type="button"
                       onClick={() => void retryRealCamera()}
-                      className="flex h-9 items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all active:scale-95"
+                      // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
+                      className="flex min-h-[44px] items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all active:scale-95"
                     >
                       Activar cámara
                     </button>
                     <button
                       type="button"
                       onClick={() => setCamNotice(null)}
-                      className="flex h-9 items-center justify-center rounded-full bg-white/10 px-4 text-[13.5px] font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-all active:scale-95"
+                      // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
+                      className="flex min-h-[44px] items-center justify-center rounded-full bg-white/10 px-4 text-[13.5px] font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-all active:scale-95"
                     >
                       Ocultar
                     </button>
