@@ -126,6 +126,15 @@ interface ScannerState {
   /** Abre un documento GUARDADO en el Editor (modo revisión, F-NOVIEW). */
   openDocument: (id: string) => void;
 
+  /** FIX v12b (12.5a) — captura pendiente: «hay un disparo en vuelo y el
+   *  editor debe mostrar pantalla de carga». La cámara sigue MONTADA
+   *  (oculta) mientras el stream termina la foto: page.tsx lo lee para no
+   *  desmontarla y EditorView para pintar «Abriendo editor…» (12.5f).
+   *  Solo lo marcan los caminos captureSmart (auto onTrigger y obturador
+   *  manual con stream) — galería, demo y cámara nativa iOS NO lo usan. */
+  capturePending: boolean;
+  setCapturePending: (v: boolean) => void;
+
   /** Consulta que la biblioteca “presta” al detalle para abrir el buscador
    *  de texto OCR ya relleno y saltar a la primera coincidencia. */
   pendingFindQuery: string | null;
@@ -179,6 +188,7 @@ interface ScannerState {
 
 export const useScannerStore = create<ScannerState>((set, get) => ({
   view: "library",
+  capturePending: false,
   documents: initialDocuments(),
   activeDocumentId: null,
   capturePages: [],
@@ -205,6 +215,10 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       batchSavedCount:
         view === "library" || view === "settings" ? 0 : s.batchSavedCount,
     })),
+  // FIX v12b (12.5a) — flag ADITIVO (ninguna action existente lo toca):
+  // lo marcan los disparos con stream y lo limpian el aterrizaje de la
+  // página (12.5d) y TODAS las salidas por fallo (12.5e, con época).
+  setCapturePending: (v) => set({ capturePending: v }),
   openDocument: (id) => {
     const doc = get().documents.find((d) => d.id === id);
     // Un documento de la papelera nunca se abre en el editor desde la UI;

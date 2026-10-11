@@ -587,6 +587,10 @@ declare global {
 export default function CameraView() {
   // ── Store ──
   const setView = useScannerStore((s) => s.setView);
+  // FIX v12b (12.5a) — «editor inmediato»: marca el disparo en vuelo para
+  // que page.tsx mantenga la cámara montada (oculta) y EditorView pinte la
+  // pantalla de carga (12.5f).
+  const setCapturePending = useScannerStore((s) => s.setCapturePending);
   const capturePages = useScannerStore((s) => s.capturePages);
   const addCapturePage = useScannerStore((s) => s.addCapturePage);
   const settings = useScannerStore((s) => s.settings);
@@ -609,6 +613,11 @@ export default function CameraView() {
    *  tras el editor. La importación por galería NO dispara captura → sin
    *  t0 → la telemetría no se sobrescribe con rutas ajenas. */
   const captureT0Ref = useRef(0);
+  /** FIX v12b (12.5e) — guard anti-carrera de la limpieza del pending:
+   *  cada disparo (auto u obturador con stream) incrementa la época y las
+   *  rutas de fallo solo limpian SI siguen siendo EL disparo en vuelo —
+   *  un cleanup tardío jamás cancela un disparo nuevo. */
+  const captureEpochRef = useRef(0);
   /** FIX v4 4.2 — UN solo flujo de captura a la vez: cierra la ventana de
    *  los hasta 5 s del disparo en la que el obturador seguía activo y N
    *  toques encolaban N takePhoto() simultáneos (cascada de
@@ -1022,6 +1031,17 @@ export default function CameraView() {
       rawDataUrl: string,
       probe?: ImageBitmap | HTMLCanvasElement | null
     ) => {
+      // FIX v12b (12.5e) — limpieza del pending SOLO si este disparo sigue
+      // siendo el en vuelo (época): sin página que aterrizar, el editor de
+      // carga se cierra y el usuario vuelve a la cámara CON el stream vivo
+      // (sin reabrir). Para galería/demo (sin disparo) es un no-op: ya están
+      // en cámara y el pending ya es false.
+      const myEpoch = captureEpochRef.current;
+      const abortPending = () => {
+        if (captureEpochRef.current !== myEpoch) return;
+        setCapturePending(false);
+        setView("camera");
+      };
       if (processingRef.current) {
         closeProbe(probe); // otro disparo en vuelo: el probe no se consume
         return;
@@ -1029,6 +1049,7 @@ export default function CameraView() {
       if (!rawDataUrl) {
         closeProbe(probe);
         toast.error("No se pudo capturar la imagen");
+        abortPending();
         return;
       }
       processingRef.current = true;
@@ -1095,15 +1116,12 @@ export default function CameraView() {
             quality,
           };
           addCapturePage(page);
+          // FIX v12b (12.5d) — aterrizaje (camino probe): la página YA está
+          // en el store → el editor deja de esperar. El setView("editor") de
+          // abajo SE QUEDA (idempotente aquí; es el que navega galería/demo).
+          setCapturePending(false);
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
-          // FIX v12 (12.4) — telemetría QA: ms disparo→editor (camino probe).
-          if (captureT0Ref.current > 0) {
-            window.__captureToEditor = Math.round(
-              performance.now() - captureT0Ref.current
-            );
-            captureT0Ref.current = 0;
-          }
           // FIX v12 (12.1c): el decode completo vuela en background. El
           // canvas del burst (≤1920 px) jamás excede 4032 → si además hubo
           // quad nato, NI el decode diferido corre (ahorro total).
@@ -1188,15 +1206,11 @@ export default function CameraView() {
             quality,
           };
           addCapturePage(page);
+          // FIX v12b (12.5d) — aterrizaje (fallback sin probe): igual que el
+          // camino probe — la página aterrizó, el editor deja de esperar.
+          setCapturePending(false);
           // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
           setView("editor");
-          // FIX v12 (12.4) — telemetría QA: ms disparo→editor (fallback).
-          if (captureT0Ref.current > 0) {
-            window.__captureToEditor = Math.round(
-              performance.now() - captureT0Ref.current
-            );
-            captureT0Ref.current = 0;
-          }
           // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
           // 2ª detección que cambiaba el recorte). Sin detección viva confiable
           // (o aspect distinto): la detección vuela en background como antes;
@@ -1209,6 +1223,9 @@ export default function CameraView() {
         }
       } catch (err) {
         console.error("handleCaptureDataUrl falló:", err);
+        // FIX v12b (12.5e) — decode/procesado falló SIN página: el editor de
+        // carga se cierra y se vuelve a la cámara (toast honesto intacto).
+        abortPending();
         toast.error("No se pudo procesar la imagen");
       } finally {
         // FIX v12 (12.1): el probe se libera SIEMPRE (bitmap o canvas).
@@ -1222,7 +1239,7 @@ export default function CameraView() {
         setOpeningEditor(false);
       }
     },
-    [addCapturePage, setView, applyAutoQuad, scheduleBackgroundResolve]
+    [addCapturePage, setView, setCapturePending, applyAutoQuad, scheduleBackgroundResolve]
   );
 
   /** Blob → data URL (para el takePhoto hi-res). */
@@ -1430,12 +1447,24 @@ export default function CameraView() {
    *  anti doble-disparo (capturingRef) y un try/finally SIMÉTRICO que
    *  SIEMPRE libera el obturador. */
   const runCaptureFlow = useCallback(async () => {
+    // FIX v12b (12.5e) — misma disciplina que handleCaptureDataUrl: las
+    // salidas SIN página limpian el pending SOLO si este disparo sigue
+    // siendo el en vuelo (época) y devuelven al usuario a la cámara con
+    // el stream VIVO (sin reabrir — la cámara nunca se desmontó).
+    const myEpoch = captureEpochRef.current;
+    const abortPending = () => {
+      if (captureEpochRef.current !== myEpoch) return;
+      setCapturePending(false);
+      setView("camera");
+    };
     if (processingRef.current) {
       setOpeningEditor(false); // FIX v12 (12.3): este disparo no procede
+      abortPending(); // FIX v12b (12.5e): el disparo de este trigger no corre
       return;
     }
     if (cooldownRef.current > Date.now()) {
       setOpeningEditor(false); // FIX v12 (12.3): dentro del cooldown post-captura
+      abortPending(); // FIX v12b (12.5e): idem — sin foto, sin editor que abrir
       return;
     }
     loopRef.current?.notifyCaptured();
@@ -1482,12 +1511,14 @@ export default function CameraView() {
         // quedaba negro para siempre — exactamente el final del síntoma
         // reportado por el propietario).
         setOpeningEditor(false); // FIX v12 (12.3): sin editor que abrir
+        abortPending(); // FIX v12b (12.5e): editor de carga fuera + cámara visible para el reinicio
         if (isStreamDead()) {
           recoverStream();
           return; // el toast de recoverStream ya informa al usuario
         }
         // B8: el disparo no debe perderse en silencio (stream vivo, frames
         // vacíos por otra causa).
+        abortPending();
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
         return;
       }
@@ -1529,6 +1560,7 @@ export default function CameraView() {
         // B8: encode falló → feedback en vez de descartar el disparo.
         releaseFrame(winner);
         setOpeningEditor(false); // FIX v12 (12.3): sin editor que abrir
+        abortPending(); // FIX v12b (12.5e)
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
       }
     };
@@ -1579,6 +1611,7 @@ export default function CameraView() {
         // FIX v12 (12.3): esta ruta NO llega a handleCaptureDataUrl → la
         // pill se libera aquí (el usuario se queda en la cámara).
         setOpeningEditor(false);
+        abortPending(); // FIX v12b (12.5e): vuelve a cámara para VER la reconexión
         recoverStream();
         return;
       }
@@ -1662,7 +1695,7 @@ export default function CameraView() {
       // de OFF y el modo lo pidió).
       if (flashAppliedByUs) void setTorchState(false);
     }
-  }, [snapshotVideo, takePhotoBlob, canvasToDataUrl, blobToDataUrl, handleCaptureDataUrl, status, isStreamDead, recoverStream, setTorchState, exitStandby]);
+  }, [snapshotVideo, takePhotoBlob, canvasToDataUrl, blobToDataUrl, handleCaptureDataUrl, status, isStreamDead, recoverStream, setTorchState, exitStandby, setCapturePending, setView]);
 
   /** Captura inteligente con el obturador BLOQUEADO durante TODO el
    *  disparo (FIX v4 4.2). Antes solo processingRef protegía — y se activa
@@ -1717,10 +1750,18 @@ export default function CameraView() {
       captureT0Ref.current = performance.now();
       if (canTakePhotoRef.current || status !== "live") {
         setOpeningEditor(true);
+        // FIX v12b (12.5b) — «editor inmediato»: la cámara DESAPARECE en el
+        // MISMO tick del disparo; la ventana de la HAL (0,5–3 s) se vive
+        // DENTRO del editor con pantalla de carga, no viendo el visor. La
+        // cámara sigue montada y OCULTA (page.tsx 12.5c) para que el stream
+        // termine la foto — y vuelva VIVA si algo falla (12.5e).
+        captureEpochRef.current += 1;
+        setCapturePending(true);
+        setView("editor");
         void captureSmart();
       } else {
         setOpeningEditor(true);
-        captureInputRef.current?.click(); // HQ-iOS: cámara nativa
+        captureInputRef.current?.click(); // HQ-iOS: cámara nativa — SIN pending (regla 5: la UI del SO cubre la pantalla)
       }
       return;
     }
@@ -1729,7 +1770,7 @@ export default function CameraView() {
       return;
     }
     captureInputRef.current?.click();
-  }, [hasStream, status, captureSmart, captureDemo]);
+  }, [hasStream, status, captureSmart, captureDemo, setCapturePending, setView]);
 
   // F-IMPORT (robusto) + F-HEIC: el File se decodifica con la cascada nativa
   // (createImageBitmap con EXIF → <img>) y, si el navegador no abre el formato
@@ -1740,7 +1781,13 @@ export default function CameraView() {
     (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       e.target.value = "";
-      if (!file) return;
+      // FIX v12b (12.5e, bonus) — cancelar la cámara NATIVA (HQ-iOS) dispara
+      // change SIN archivo: la rama nativa activó la pill antes del click y
+      // sin esto quedaba clavada hasta su tope duro de 12 s.
+      if (!file) {
+        setOpeningEditor(false);
+        return;
+      }
       const looksImage = file.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp|bmp|gif|avif)$/i.test(file.name);
       if (!looksImage) {
         toast.error("El archivo seleccionado no es una imagen");
@@ -2340,6 +2387,12 @@ export default function CameraView() {
         // (auto-captura): pill + t0 de la telemetría __captureToEditor.
         captureT0Ref.current = performance.now();
         setOpeningEditor(true);
+        // FIX v12b (12.5b) — «editor inmediato» (auto): misma navegación EN
+        // el disparo que el obturador manual — el gate v9 ya decidió DISPARAR
+        // (esto corre DESPUÉS de su decisión; gates intactos).
+        captureEpochRef.current += 1;
+        setCapturePending(true);
+        setView("editor");
         void captureSmartRef.current();
       },
       onNoDetectTimeout: () => {
@@ -2358,7 +2411,7 @@ export default function CameraView() {
       }
       bestShotRingRef.current = [];
     };
-  }, [precisionLive, feedRingFromVideo]);
+  }, [precisionLive, feedRingFromVideo, setCapturePending, setView]);
 
   /* ── FIX v5 (5.4) — MODO ESPERA (nivel 1) ────────────────────────────
    *  Entrada: sin corners (live.searching) de forma continua durante 30 s

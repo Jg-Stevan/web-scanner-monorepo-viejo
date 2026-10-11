@@ -49,6 +49,10 @@ export default function Home() {
   const view = useScannerStore((s) => s.view);
   const hydrated = useScannerStore((s) => s.hydrated);
   const onboardingDone = useScannerStore((s) => s.onboardingDone);
+  // FIX v12b (12.5c) — la cámara sobrevive OCULTA mientras un disparo está
+  // en vuelo: mantiene el <video> (y su stream) montado para que la HAL
+  // termine la foto sin reabrir la cámara al volver.
+  const capturePending = useScannerStore((s) => s.capturePending);
 
   // Onboarding de primera ejecución: el store arranca SIEMPRE con false
   // (server + primer render del cliente — sin mismatch de hidratación);
@@ -172,6 +176,10 @@ export default function Home() {
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (document.querySelector('[role="dialog"], [role="menu"], [data-radix-popper-content-wrapper]')) return;
       const s = useScannerStore.getState();
+      // FIX v12b (12.5) — durante un disparo en vuelo el editor es una
+      // pantalla de carga: no hay nada que dejar atrás todavía (la página
+      // puede aterrizar en cualquier instante y navegar de vuelta).
+      if (s.capturePending) return;
       if (s.view === "settings" || s.view === "camera") {
         e.preventDefault();
         s.setView("library");
@@ -233,21 +241,49 @@ export default function Home() {
           </AnimatePresence>
 
           {!showOnboarding && (
-            <AnimatePresence initial={false}>
-              <motion.div
-                key={view}
-                initial={{ opacity: 0, x: direction * 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: direction * -20 }}
-                transition={{ duration: 0.19, ease: [0.32, 0.72, 0, 1] }}
-                className="absolute inset-0 flex flex-col"
-              >
-                {view === "library" && <LibraryView />}
-                {view === "camera" && <CameraView />}
-                {view === "editor" && <EditorView />}
-                {view === "settings" && <SettingsView />}
-              </motion.div>
-            </AnimatePresence>
+            <>
+              {/* ── FIX v12b (12.5c) — CAPA ESTÁTICA DE CÁMERA ───────────────
+                  «Editor inmediato»: la cámara se monta cuando la vista es
+                  camera O hay un disparo pendiente, y se OCULTA con la clase
+                  `hidden` (display:none — instantáneo, sin animación de
+                  salida) mientras el editor cubre la pantalla. UNA sola
+                  instancia de CameraView en todo el DOM (jamás dos <video>:
+                  conflicto de stream). El stream NO se pausa — takePhoto
+                  vive en el track y el fallback ZSL lee el video; con
+                  display:none el latido rVFC puede congelarse, pero el
+                  watchdog v4/v6 está suprimido durante el disparo
+                  (capturingRef) y el pending termina antes de acumular
+                  strikes. Fuera del AnimatePresence: la capa keyed
+                  (editor/biblioteca/ajustes) entra/sale con la transición
+                  de siempre POR ENCIMA de esta capa. */}
+              {(view === "camera" || capturePending) && (
+                <div
+                  className={
+                    view === "camera"
+                      ? "absolute inset-0 flex flex-col"
+                      : "hidden"
+                  }
+                >
+                  <CameraView />
+                </div>
+              )}
+              <AnimatePresence initial={false}>
+                {view !== "camera" && (
+                  <motion.div
+                    key={view}
+                    initial={{ opacity: 0, x: direction * 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: direction * -20 }}
+                    transition={{ duration: 0.19, ease: [0.32, 0.72, 0, 1] }}
+                    className="absolute inset-0 flex flex-col"
+                  >
+                    {view === "library" && <LibraryView />}
+                    {view === "editor" && <EditorView />}
+                    {view === "settings" && <SettingsView />}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </>
           )}
         </main>
 
