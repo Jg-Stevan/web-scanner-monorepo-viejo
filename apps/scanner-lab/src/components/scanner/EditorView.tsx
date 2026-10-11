@@ -493,8 +493,43 @@ export default function EditorView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
-  /** F-THUMBS: carrusel de miniaturas visible (desplegable). */
-  const [thumbsOpen, setThumbsOpen] = useState(true);
+  /** F-THUMBS: carrusel de miniaturas visible (desplegable).
+   *  v13-post-27 — init perezoso: en landscape corto NACE CERRADO — la
+   *  altura es oro y 81 px de carrusel se comían el stage (el toggle sigue
+   *  a mano para abrirlo). OJO: la condición es por ORIENTACIÓN + alto
+   * (≤520 px ∧ landscape), NO por `min-width: 640` — el SE 1.ª gen en
+   * horizontal es 568×320: 568 < 640 y el breakpoint `sm` NO dispara;
+   * con orientation queda cubierto cualquier teléfono horizontal.
+   *  Seguro para hidratación: esta vista solo se monta del lado cliente
+   *  (nunca en el SSR de la página); el guard window es cinturón de
+   *  réplicas más que necesidad. */
+  const [thumbsOpen, setThumbsOpen] = useState(
+    () =>
+      typeof window === "undefined" ||
+      !window.matchMedia("(max-height: 520px) and (orientation: landscape)").matches
+  );
+  /** v13-post-27 — Landscape corto en vivo (≤520 px de alto ∧ horizontal:
+   *  667×375, 844×390, 568×320…): el marco de la app ya pasa a 100 % del
+   *  alto (v13-post-26); aquí se compacta el chrome fijo del editor
+   *  (toolbar sin labels, toggle integrado en la fila de la pill, botones
+   *  principales más finos) para que el documento respire. matchMedia con
+   *  listener: la rotación del dispositivo re-encaja SIN recargar. Al
+   *  ENTRAR en landscape corto el carrusel se recoge solo (si el usuario
+   *  lo tenía abierto, en horizontal 81 px se comerían el stage — puede
+   *  re-abrirlo con el toggle); al salir no se toca (elección del
+   *  usuario). En montaje la llamada inicial es no-op respecto del init
+   *  perezoso de thumbsOpen. */
+  const [shortViewport, setShortViewport] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-height: 520px) and (orientation: landscape)");
+    const sync = () => {
+      setShortViewport(mq.matches);
+      if (mq.matches) setThumbsOpen(false);
+    };
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
   /** v13-post-7 — fade dinámico de bordes del carrusel: solo aparece en el
    *  lado donde queda contenido por ver (máscara CSS recalculada al hacer
    *  scroll, al añadir páginas y al redimensionar la ventana). */
@@ -2008,6 +2043,32 @@ export default function EditorView() {
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
 
+  /** v13-post-27 — Toggle de miniaturas como VARILLA reutilizable: en
+   *  portrait vive en su fila propia (centrado, bajo la pill); en landscape
+   *  corto se integra al final de la fila de la pill (se ahorra una fila
+   *  entera de 32 px). Un solo JSX → cero divergencia de comportamiento
+   *  entre modos (aria-expanded/controls y el giro del chevrón idénticos). */
+  const thumbsToggle = (
+    <button
+      type="button"
+      aria-expanded={thumbsOpen}
+      aria-controls="thumbs-carousel"
+      aria-label={thumbsOpen ? "Ocultar miniaturas de páginas" : "Mostrar miniaturas de páginas"}
+      onClick={() => setThumbsOpen((v) => !v)}
+      className="flex h-7 items-center gap-1 rounded-full bg-white/10 px-3.5 text-[11px] font-semibold text-white/80 backdrop-blur-md transition-all active:scale-95"
+    >
+      Miniaturas
+      <ChevronDown
+        className={cn(
+          "size-3.5 transition-transform duration-200",
+          thumbsOpen && "rotate-180"
+        )}
+        strokeWidth={2.6}
+        aria-hidden="true"
+      />
+    </button>
+  );
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="relative flex h-full w-full flex-col bg-black" data-editor-mode={mode}>
@@ -2291,9 +2352,21 @@ export default function EditorView() {
             )}
           </div>
 
-          {/* Pill "Página X de Y" con navegación (estilo Adobe Scan) */}
+          {/* Pill "Página X de Y" con navegación (estilo Adobe Scan).
+              v13-post-27 — en landscape corto (shortViewport) la fila se
+              reparte: grupo de navegación a la izquierda + toggle de
+              miniaturas a la derecha (justify-between) — se ahorra la fila
+              de 32 px del toggle; en portrait la composición original
+              (todo centrado, toggle en fila propia abajo). El grupo interno
+              existe en ambos casos (flex anidado idéntico visualmente). */}
           {totalPages > 0 && (
-            <div className="relative z-10 flex shrink-0 items-center justify-center gap-1.5 py-2">
+            <div
+              className={cn(
+                "relative z-10 flex shrink-0 items-center gap-1.5",
+                shortViewport ? "justify-between px-4 py-1.5" : "justify-center py-2"
+              )}
+            >
+              <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 aria-label="Página anterior"
@@ -2337,30 +2410,17 @@ export default function EditorView() {
               >
                 <ChevronRight className="size-4" strokeWidth={2.6} />
               </button>
+              </div>
+              {shortViewport && totalPages > 0 && thumbsToggle}
             </div>
           )}
 
-          {/* F-THUMBS — desplegable para ocultar/mostrar las miniaturas */}
-          {totalPages > 0 && (
+          {/* F-THUMBS — desplegable para ocultar/mostrar las miniaturas.
+              v13-post-27 — en landscape corto el toggle vive DENTRO de la
+              fila de la pill (arriba); esta fila propia solo en portrait. */}
+          {!shortViewport && totalPages > 0 && (
             <div className="relative z-10 flex shrink-0 justify-center pb-1">
-              <button
-                type="button"
-                aria-expanded={thumbsOpen}
-                aria-controls="thumbs-carousel"
-                aria-label={thumbsOpen ? "Ocultar miniaturas de páginas" : "Mostrar miniaturas de páginas"}
-                onClick={() => setThumbsOpen((v) => !v)}
-                className="flex h-7 items-center gap-1 rounded-full bg-white/10 px-3.5 text-[11px] font-semibold text-white/80 backdrop-blur-md transition-all active:scale-95"
-              >
-                Miniaturas
-                <ChevronDown
-                  className={cn(
-                    "size-3.5 transition-transform duration-200",
-                    thumbsOpen && "rotate-180"
-                  )}
-                  strokeWidth={2.6}
-                  aria-hidden="true"
-                />
-              </button>
+              {thumbsToggle}
             </div>
           )}
 
@@ -2677,37 +2737,49 @@ export default function EditorView() {
         /* ── Bottom bar de REVIEW: toolbar + acciones principales ─────────── */
         <div className="relative z-10 shrink-0 bg-black pb-safe">
           {/* Toolbar de página (estilo Adobe Scan: con "Texto" = OCR,
-              como "Editar texto" del video de referencia) */}
+              como "Editar texto" del video de referencia).
+              v13-post-27 — landscape corto: ToolItems sin label visible
+              (aria-label conserva el nombre accesible) para regalarle
+              ~13 px de alto al stage. */}
           <nav className="grid grid-cols-7 gap-0.5 px-1.5 pt-1" aria-label="Acciones de la página">
-            <ToolItem icon={Camera} label="Repetir" danger onClick={handleRepeat} />
-            <ToolItem icon={Crop} label="Recortar" onClick={handleEnterCrop} />
-            <ToolItem icon={RotateCw} label="Rotar" onClick={handleRotate} />
+            <ToolItem icon={Camera} label="Repetir" danger onClick={handleRepeat} compact={shortViewport} />
+            <ToolItem icon={Crop} label="Recortar" onClick={handleEnterCrop} compact={shortViewport} />
+            <ToolItem icon={RotateCw} label="Rotar" onClick={handleRotate} compact={shortViewport} />
             <ToolItem
               icon={SlidersHorizontal}
               label="Filtros"
               onClick={() => setFiltersOpen(true)}
+              compact={shortViewport}
             />
             <ToolItem
               icon={ScanText}
               label="Texto"
               active={page?.ocrDone === true}
               onClick={() => setOcrOpen(true)}
+              compact={shortViewport}
             />
             <ToolItem
               icon={ImageIcon}
               label="Imagen"
               active={exportingImg}
               onClick={() => void handleSaveImage()}
+              compact={shortViewport}
             />
-            <ToolItem icon={Trash2} label="Eliminar" danger onClick={handleDeletePage} />
+            <ToolItem icon={Trash2} label="Eliminar" danger onClick={handleDeletePage} compact={shortViewport} />
           </nav>
 
-          {/* Botones principales: seguir escaneando/añadir página + Guardar PDF */}
+          {/* Botones principales: seguir escaneando/añadir página + Guardar PDF.
+              v13-post-27 — landscape corto: py-2 (50→42 px de target) —
+              siguen sobrando los 44 px HIG de ancho y el gesto sigue siendo
+              cómodo en horizontal. */}
           <div className="flex gap-3 px-5 pb-2 pt-2.5">
             <button
               type="button"
               onClick={() => setView("camera")}
-              className="flex-1 rounded-full bg-white/12 py-3 text-[15px] font-semibold text-white ring-1 ring-inset ring-white/15 transition-all active:scale-[0.97] active:bg-white/20"
+              className={cn(
+                "flex-1 rounded-full bg-white/12 text-[15px] font-semibold text-white ring-1 ring-inset ring-white/15 transition-all active:scale-[0.97] active:bg-white/20",
+                shortViewport ? "py-2" : "py-3"
+              )}
             >
               {reviewDocId ? "Añadir página" : "Seguir escaneando"}
             </button>
@@ -2716,7 +2788,10 @@ export default function EditorView() {
               whileTap={{ scale: 0.97 }}
               onClick={handleSave}
               disabled={saving}
-              className="flex flex-[1.25] items-center justify-center gap-1.5 rounded-full bg-[#007aff] py-3 text-[15px] font-semibold text-white shadow-[0_6px_20px_rgba(0,122,255,0.45)] disabled:opacity-60"
+              className={cn(
+                "flex flex-[1.25] items-center justify-center gap-1.5 rounded-full bg-[#007aff] text-[15px] font-semibold text-white shadow-[0_6px_20px_rgba(0,122,255,0.45)] disabled:opacity-60",
+                shortViewport ? "py-2" : "py-3"
+              )}
             >
               {saving ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -2988,17 +3063,23 @@ function ToolItem({
   active,
   danger,
   onClick,
+  compact,
 }: {
   icon: LucideIcon;
   label: string;
   active?: boolean;
   danger?: boolean;
   onClick: () => void;
+  /** v13-post-27 — landscape corto: sin label visible (la altura es oro)
+   *  pero CON nombre accesible: aria-label toma el relevo del texto
+   *  oculto para lectores de pantalla. */
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-pressed={active}
+      aria-label={compact ? label : undefined}
       onClick={onClick}
       className="group flex flex-col items-center gap-1 rounded-xl px-1 py-1.5 transition-all duration-200 active:opacity-60"
     >
@@ -3022,18 +3103,20 @@ function ToolItem({
           strokeWidth={active ? 2.2 : 1.8}
         />
       </span>
-      <span
-        className={cn(
-          "text-[11px] transition-colors duration-200",
-          danger
-            ? "text-[#ff3b30]/80"
-            : active
-              ? "font-medium text-[#007aff]"
-              : "text-[#8e8e93] group-hover:text-white/80"
-        )}
-      >
-        {label}
-      </span>
+      {!compact && (
+        <span
+          className={cn(
+            "text-[11px] transition-colors duration-200",
+            danger
+              ? "text-[#ff3b30]/80"
+              : active
+                ? "font-medium text-[#007aff]"
+                : "text-[#8e8e93] group-hover:text-white/80"
+          )}
+        >
+          {label}
+        </span>
+      )}
     </button>
   );
 }
