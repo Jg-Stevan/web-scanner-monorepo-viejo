@@ -13,6 +13,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
 import { useIsHydrated } from "@/hooks/use-is-hydrated";
+import { useIsShortLandscape } from "@/hooks/use-short-landscape";
 
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 import { type ScannerSettings } from "@jg-stevan/scanner-core/types";
@@ -205,6 +206,9 @@ function SettingsQuickNav({
   scrollerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const reduced = useReducedMotion();
+  /* v13-post-32 — landscape corto: la cola del raíl se afina (pb-2.5 →
+   *  pb-1.5) — en el SE 1.ª gen cada px de contenido cuenta. */
+  const short = useIsShortLandscape();
   const railRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(SETTINGS_SECTIONS[0].id);
   const [edges, setEdges] = useState({ left: false, right: true });
@@ -292,7 +296,10 @@ function SettingsQuickNav({
     <nav aria-label="Secciones de Ajustes" className="relative shrink-0">
       <div
         ref={railRef}
-        className="no-scrollbar flex items-center gap-1.5 overflow-x-auto px-5 pb-2.5"
+        className={cn(
+          "no-scrollbar flex items-center gap-1.5 overflow-x-auto px-5",
+          short ? "pb-1.5" : "pb-2.5"
+        )}
       >
         {SETTINGS_SECTIONS.map((s) => {
           const isActive = active === s.id;
@@ -360,6 +367,14 @@ export default function SettingsView() {
    *  (tracking del chip activo). */
   const scrollerRef = useRef<HTMLDivElement>(null);
 
+  /* v13-post-32 — landscape corto (≤520 px ∧ horizontal): cabecera
+   *  COMPACTA — 81 px de título grande + subtítulo + 42 de raíl se comían
+   *  el 38 % de los 320 px del SE 1.ª gen (el scroller se quedaba en 116
+   *  px). Título a 20 px (estilo barra de navegación), subtítulo fuera
+   *  (decorativo — en portrait vuelve) y raíl afinado → ~46 px más de
+   *  contenido. La rotación re-encaja en vivo (hook con listener). */
+  const short = useIsShortLandscape();
+
   /* F-TRASH: las estadísticas cuentan solo la biblioteca VIVA (la papelera
    *  se muestra aparte — es contenido distinto, como iOS Files). */
   const liveDocs = useMemo(() => documents.filter((d) => d.deletedAt === undefined), [documents]);
@@ -414,12 +429,17 @@ export default function SettingsView() {
 
   return (
     <div className="flex h-full w-full flex-col bg-[#f2f2f7] dark:bg-black">
-      {/* Header */}
-      <header className="shrink-0 px-5 pb-2 pt-safe">
-        <h1 className="text-[30px] font-semibold leading-tight tracking-[-0.4px] text-black dark:text-white">
+      {/* Header — compacto en landscape corto (v13-post-32) */}
+      <header className={cn("shrink-0 px-5 pt-safe", short ? "pb-1" : "pb-2")}>
+        <h1
+          className={cn(
+            "font-semibold tracking-[-0.4px] text-black dark:text-white",
+            short ? "text-[20px] leading-[26px]" : "text-[30px] leading-tight"
+          )}
+        >
           Ajustes
         </h1>
-        <p className="mt-1 text-[13px] text-[#8e8e93]">Personaliza tu escáner</p>
+        {!short && <p className="mt-1 text-[13px] text-[#8e8e93]">Personaliza tu escáner</p>}
       </header>
 
       {/* v13-post-30 — Raíl de navegación rápida entre secciones */}
