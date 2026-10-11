@@ -156,6 +156,22 @@
 
 ---
 
+## 0-decimo. FIX v10 — Calidad de vista del EDITOR adaptativa + chip «Se guardará…» eliminado (rama `fix/editor-display-quality-v10`)
+
+**Base:** `main` en `8eb4434` (PR #21 v8 fusionado). Reporte del propietario: «En pantalla completa se ve de mejor calidad que en el editor, ¿por qué?». Causa confirmada en código: la presentación consume `page.processed`/`page.original` (PNG hasta **4032 px**, dato completo) mientras el editor usa `preview.displayUrl` (FIX v5 5.1: JPEG ≤ **2560** px) — al hacer zoom 2.5× el editor queda con ~1024 px efectivos vs ~2016 de la presentación, más los artefactos del re-encode JPEG. **El dato de guardado SIEMPRE fue 4032 y permanece intacto** — solo mejora lo que se VE en pantalla.
+
+**Cambios:**
+
+- **10-A `EditorView.tsx` — tope de DISPLAY adaptativo por dispositivo**: `DISPLAY_MAX_LONG_SIDE` pasa de constante fija 2560 a `computeDisplayMaxLongSide()` computada al cargar el módulo: `deviceMemory ≥ 6` → **4032** (flagship/desktop, nitidez total) · `≥ 3` → **3200** (gama media) · `< 3` → **2560** (gama baja: protección RAM v5 intacta) · sin `deviceMemory` (iOS/Safari) → **3200** (equilibrio). `makeDisplayUrl` NO se toca (ya usa `Math.min(1, …)`; con fuente 4032 y tope 4032 el scale queda 1); `DISPLAY_JPEG_QUALITY` sigue 0.92. Telemetría QA silenciosa `window.__displayMax`. Memoria por imagen activa decodificada: 2560→~19 MB · 3200→~33 MB · 4032→~49 MB (1 activa a la vez).
+- **10-B `EditorView.tsx` — chip «Se guardará…» y su drawer ELIMINADOS** (−100 líneas): el chip sobre los botones principales (botón `aria-label="Calidad de guardado del PDF"`), el Sheet de calidad completo, el estado `qualitySheetOpen` y `exportQualityLabel`. Imports compartidos conservados (`DrawerPrimitive` filtros, `ChevronDown` carrusel, `Check` Guardar PDF); el selector `exportQuality` se conserva (lo consume `handleSave` → `buildDocPdf`). Resultado: sin elemento visual encima de «Guardar PDF».
+- **10-B `page-store.ts` — migración extendida**: la one-time existente subía solo `"alta"` → `"máxima"`; ahora cubre **TODO valor no-máximo** (`if (parsed.exportQuality !== "máxima") merged.exportQuality = "máxima"`) — p. ej. `"standard"` persistido por usuarios del drawer ya inexistente. Tras la pasada el valor persistido vuelve a ser sagrado (Ajustes › Exportación sigue ofreciendo el selector).
+
+**NO cambiado (lista dura):** `apps/digitalizador-e14/` (0 archivos), calidad de GUARDADO (`page.processed`/`page.url` PNG 4032, `PROCESSED_MAX_LONG_SIDE`, `sensor-profiler`, `buildDocPdf` — solo cambia el VALOR de display, jamás el dato), `PresentationView`, `CameraView`, worker de detección, todo v8/v7/v6/v5/v4/v3.
+
+**Verificado:** `tsc --noEmit` = 0 (core y lab) · `eslint` = 0. Unitario migración (bun, localStorage simulado): **7/7 PASS** — standard→máxima, alta→máxima, máxima intacta, sagrado tras 1ª pasada, instalación nueva default, región OCR v6.1 intacta. E2E sandbox (Playwright): **desktop deviceMemory 8 → `__displayMax=4032`** e import de página de prueba 4032×3024 → `<img>` del editor con `naturalWidth=4032` (display a resolución completa) · **iPhone UA sin deviceMemory → 3200** · **deviceMemory 2 → 2560** · chip y drawer ausentes del DOM (por aria-label y por texto) · «Guardar PDF» crea el documento con normalidad · Ajustes › Calidad PDF muestra **Máxima** tras migrar settings persistidos en `standard` · 0 errores de consola (el 404 de `qa/test-doc.jpg` es la sonda preexistente del SyntheticCamera en dev). Zoom 2.5× con nitidez comparable a la presentación: pendiente de QA físico por Vercel Preview. Diff limitado a `EditorView.tsx`, `page-store.ts` + este CHANGES.md.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
