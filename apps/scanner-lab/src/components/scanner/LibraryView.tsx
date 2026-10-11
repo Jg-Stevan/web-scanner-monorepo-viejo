@@ -1379,8 +1379,20 @@ export default function LibraryView() {
                     aria-label={sec.label || "Documentos"}
                     className={si === 0 ? "pt-0" : "pt-5"}
                   >
+                    {/* v13-post-25 — Cabecera de sección FIJA (patrón
+                     * Contactos de iOS): al hacer scroll la banda se pega
+                     * al borde superior del área de scroll con vidrio
+                     * (backdrop-blur + fondo translúcido de la MISMA
+                     * superficie de la app) y las filas pasan por debajo.
+                     * -mx-4 extiende la banda hasta los bordes del
+                     * contenedor de scroll (el padre aporta el px-4);
+                     * cada cabecera vive dentro de su <section> → la
+                     * siguiente la EMPUJA al llegar (comportamiento
+                     * nativo de listas agrupadas). Solo en vista de lista
+                     * con agrupación (A-Z / Hoy·Semana·Mes); grid y
+                     * filtros activos no cambian. */}
                     {sec.label && (
-                      <h2 className="mb-2 px-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6d6d72] dark:text-[#98989e]">
+                      <h2 className="sticky top-0 z-10 -mx-4 mb-2 bg-[#f2f2f7]/85 px-5 py-1.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6d6d72] backdrop-blur-md dark:bg-black/75 dark:text-[#98989e]">
                         {sec.label}
                         <span className="ml-1.5 text-[11px] font-medium normal-case tracking-normal text-[#8e8e93]/70 tabular-nums">
                           {sec.docs.length}
