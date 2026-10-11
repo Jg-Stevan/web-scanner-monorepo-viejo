@@ -38,28 +38,17 @@ import {
   processImage,
 } from "@jg-stevan/scanner-core/image-processor";
 import { ocrTextIsValid, requestOcr } from "@jg-stevan/scanner-core/ocr";
-import {
-  buildDocPdf,
-  downloadBlob,
-  sanitizeFileName,
-} from "@jg-stevan/scanner-core/pdf-export";
-import {
-  excellentQuality,
-  defaultQuad,
-  makeQuality,
-} from "@jg-stevan/scanner-core/types";
+import { defaultQuad } from "@jg-stevan/scanner-core/types";
 import type {
   PageFilter,
   PageQuality,
   Quad,
-  ScanDocument,
 } from "@jg-stevan/scanner-core/types";
 import { ACTA_MOCK } from "./seed";
 import { statusDeScore } from "./types";
 import { cargarDivipol } from "./divipol";
 import {
   clasificarCabecera,
-  nombreExportacion,
   PATRON_CABECERA,
   tituloYUbicacionDe,
   type ClasificacionE14,
@@ -776,55 +765,6 @@ export class RealCoreBridge implements E14Bridge {
       // archivada al envío; SUGERIDA/MANUAL → panel de corrección §5).
       clasificacion: campos.clasificacion ?? undefined,
     };
-  }
-
-  async exportarPdf(acta: Acta): Promise<void> {
-    // §6 — export real con el core tal cual: adaptador Acta→ScanDocument +
-    // buildDocPdf (solo lee pages[i].processed y filter; el resto es relleno
-    // compatible con la interfaz congelada) + downloadBlob.
-    const foto = acta.fotoProcesada;
-    if (!foto) {
-      throw new Error("SIN FOTO REAL PARA EXPORTAR");
-    }
-    const t = Date.now();
-    const calidad: PageQuality = acta.metricas
-      ? makeQuality(acta.metricas.sharpness, acta.metricas.brightness, acta.metricas.contrast)
-      : excellentQuality();
-    const doc: ScanDocument = {
-      id: acta.id,
-      title: `${acta.titulo} — MESA ${acta.ubicacion.mesa}`,
-      favorite: false,
-      createdAt: t,
-      updatedAt: t,
-      pages: [
-        {
-          id: `${acta.id}-p1`,
-          original: acta.fotoOriginal ?? foto,
-          processed: foto,
-          thumbnail: foto,
-          // F2/D36: el PDF se genera con el filtro del acta (default "bw").
-          filter: (acta.filtro ?? "bw") as PageFilter,
-          quad: [
-            { x: 0, y: 0 },
-            { x: 1, y: 0 },
-            { x: 1, y: 1 },
-            { x: 0, y: 1 },
-          ],
-          rotation: ((acta.rotation ?? 0) % 360) as 0 | 90 | 180 | 270,
-          quality: calidad,
-          ocrDone: Boolean(acta.ocrTexto),
-          createdAt: t,
-        },
-      ],
-    };
-    const { pdf } = await buildDocPdf(doc, "standard");
-    const blob = pdf.output("blob");
-    // Nombre de salida §6/§G.4.5: E14_{KIT}_{dep}_{mun}_{zon}_{puesto}_{mesa}_{TIPO}-{pag}
-    // cuando hay clasificación guardada (extensión .pdf — el export real es
-    // PDF; el análisis definió la plantilla para el archivo de salida).
-    const nombreBase = acta.clasificacion ? nombreExportacion(acta.clasificacion) : null;
-    const nombreSalida = nombreBase ?? `${acta.titulo} — MESA ${acta.ubicacion.mesa}`;
-    downloadBlob(blob, `${sanitizeFileName(nombreSalida)}.pdf`);
   }
 
   horaEnvio(): string {

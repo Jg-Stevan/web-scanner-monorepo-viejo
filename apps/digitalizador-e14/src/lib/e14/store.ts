@@ -85,8 +85,6 @@ interface E14Store {
    * de envío (ADVERTENCIA-equivalente).
    */
   guardarUbicacion: (clasificacion: ClasificacionE14) => void;
-  /** L4 §6: exporta el acta REAL (fotoProcesada) a PDF vía buildDocPdf del core. */
-  exportarPdfActa: () => Promise<void>;
   /**
    * L5 §7.5 (rescate D20): aplica el recorte manual del QuadEditor —
    * bridge.recortar re-ejecuta el pipeline con el quad manual (F5-MANUAL) y
@@ -510,20 +508,6 @@ export const useE14Store = create<E14Store>((set, get) => {
         notificar("warn", "HUECO REEMPLAZADO", `${titulo} — la foto anterior queda sustituida.`);
       } else {
         notificar("ok", "UBICACIÓN GUARDADA", `${titulo} — lista para envío.`);
-      }
-    },
-
-    exportarPdfActa: async () => {
-      const { actaActual } = get();
-      if (!actaActual?.fotoProcesada) {
-        notificar("warn", "SIN FOTO REAL", "Solo las actas escaneadas se exportan.");
-        return;
-      }
-      try {
-        await bridge.exportarPdf(actaActual);
-        notificar("ok", "PDF GENERADO", "Acta exportada y descargada.");
-      } catch {
-        notificar("crit", "ERROR DE EXPORTACIÓN", "No se pudo generar el PDF del acta.");
       }
     },
 

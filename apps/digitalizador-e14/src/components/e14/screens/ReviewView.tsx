@@ -31,7 +31,7 @@ import type { PageFilter } from "@jg-stevan/scanner-core/types";
 import { QuadEditor } from "../QuadEditor";
 import { PanelClasificacion } from "../PanelClasificacion";
 import { Chip, PrimaryBtn, ScoreBadge, ToolbarBtn } from "../primitives";
-import { CopyIcon, CropIcon, DownloadIcon, FullscreenIcon, LoaderIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, WarnTriangleIcon } from "../icons";
+import { CopyIcon, CropIcon, FullscreenIcon, LoaderIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, WarnTriangleIcon } from "../icons";
 
 // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L89-L93
 // (CSS_FILTERS — aproximación CSS de cada filtro para las previews en vivo:
@@ -310,19 +310,11 @@ export function ReviewView() {
       <main className="flex-1 relative overflow-hidden flex flex-col items-center px-4 py-2 max-w-md mx-auto w-full min-h-0">
         {/* Banner flotante superpuesto (no desplaza el visor) */}
         <div className="absolute top-2 inset-x-0 z-30 flex justify-center pointer-events-none">
-          {status === "ENVIADA" && (
-            <Pill tone="ok">
-              <span className="w-2 h-2 rounded-full bg-ok-tint animate-pulse-sync" />
-              <span className="text-[10px] font-bold text-ok-tint font-mono tracking-wide">
-                ✓ {acta.score.toFixed(1)}/10{" "}
-                {acta.score >= 8 ? "ÓPTIMA" : "ENVIADA CON ADVERTENCIA"}
-              </span>
-              <span className="text-ink-faint text-[10px]">•</span>
-              <span className="text-[10px] font-semibold text-white tracking-wide uppercase">
-                Enviado correctamente
-              </span>
-            </Pill>
-          )}
+          {/* D2 (SPEC-rediseno-enviada §2): la Pill flotante de ENVIADA se
+              ELIMINÓ — esa información vive ahora en la TopBar (D1: score +
+              palabra por estado) y en la fila de estado (D5: ✓ ENVIADO +
+              hora). Las pills de OPTIMA/GENERICO y el banner
+              EN_REVISION_HUMANA NO se tocan. */}
 
           {status === "OPTIMA" && (
             <Pill tone="ok">
@@ -416,57 +408,101 @@ export function ReviewView() {
             ))}
         </div>
 
-        {/* Visor con brackets — F3: la FOTO REAL es el visor ÚNICO (el papel
-            sintético se retiró — petición del dueño). El placeholder (solo
-            posible si el pipeline agotó el timeout sin procesar) es la MISMA
-            caja con brackets y texto centrado font-data. F5: la tarjeta es SOLO
-            visual (flex-1) — sin toolbar dentro (barra fija abajo, D38). */}
-        <section className="relative bg-surface-1 rounded-xl border border-line p-3 flex items-center justify-center w-full flex-1 min-h-0">
-          <div className="w-full h-full relative flex items-center justify-center py-2 px-1 min-h-0">
-            <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
-              <div className={`absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 ${tonoBrackets(status)}`} />
-              <div className={`absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 ${tonoBrackets(status)}`} />
-              <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
-              <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 ${tonoBrackets(status)}`} />
+        {/* Visor — F3: la FOTO REAL es el visor ÚNICO (el papel sintético se
+            retiró — petición del dueño). El placeholder (solo posible si el
+            pipeline agotó el timeout sin procesar) es la MISMA caja con texto
+            centrado font-data. F5: la tarjeta es SOLO visual (flex-1) — sin
+            toolbar dentro (barra fija abajo, D38).
+            D3 (SPEC-rediseno-enviada §3): ENVIADA estrena la tarjeta héroe del
+            mock — LIMPIA (SIN brackets: no es editable) y TOCABLE (tap →
+            pantalla completa; el overlay ya existe y funciona para cualquier
+            estado). El resto de estados conserva la tarjeta con brackets
+            (editables), idéntica a la de siempre. */}
+        {status === "ENVIADA" ? (
+          <button
+            type="button"
+            aria-label="Ver acta a pantalla completa"
+            onClick={() => (acta.fotoProcesada ? setVisorAbierto(true) : undefined)}
+            className="relative bg-white p-1.5 border border-line rounded-xl flex items-center justify-center w-full flex-1 min-h-0"
+          >
+            <div className="w-full h-full relative flex items-center justify-center min-h-0">
+              {hayFoto ? (
+                <img
+                  src={acta.fotoProcesada}
+                  alt="Foto real del acta procesada por el core"
+                  className="w-full h-full object-contain rounded-sm"
+                />
+              ) : (
+                <div className="flex items-center justify-center w-full h-full">
+                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
+                    FOTO NO DISPONIBLE
+                  </span>
+                </div>
+              )}
             </div>
-            {hayFoto ? (
-              <img
-                src={acta.fotoProcesada}
-                alt="Foto real del acta procesada por el core"
-                className="w-full h-full object-contain rounded-sm"
-              />
-            ) : (
-              <div className="flex items-center justify-center w-full h-full">
-                <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
-                  FOTO NO DISPONIBLE
-                </span>
+          </button>
+        ) : (
+          <section className="relative bg-surface-1 rounded-xl border border-line p-3 flex items-center justify-center w-full flex-1 min-h-0">
+            <div className="w-full h-full relative flex items-center justify-center py-2 px-1 min-h-0">
+              <div className="absolute inset-x-1 inset-y-1 pointer-events-none z-10" aria-hidden>
+                <div className={`absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 ${tonoBrackets(status)}`} />
+                <div className={`absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 ${tonoBrackets(status)}`} />
+                <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
+                <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-2 border-l-2 ${tonoBrackets(status)}`} />
               </div>
-            )}
-          </div>
-        </section>
+              {hayFoto ? (
+                <img
+                  src={acta.fotoProcesada}
+                  alt="Foto real del acta procesada por el core"
+                  className="w-full h-full object-contain rounded-sm"
+                />
+              ) : (
+                <div className="flex items-center justify-center w-full h-full">
+                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
+                    FOTO NO DISPONIBLE
+                  </span>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
-        {/* Chips de envío automático (§7.4) — F5: quedan como están (ENVIADA
-            no tiene barra: los CTAs de abajo ya dan EXPORTAR PDF/SEGUIR). */}
+        {/* D4/D5 (SPEC-rediseno-enviada §4-§5): chips en el ORDEN del mock con
+            MESA nueva (canónica de 3 dígitos del pipeline — NO se re-formatea;
+            el tipo es el real del acta, con acento) + fila de estado DEDICADA
+            fuera de los chips (justify-between: ✓ ENVIADO a la izquierda,
+            hora a la derecha — el «✓ ENVIADO AUTOMÁTICAMENTE» salió de la
+            fila de chips) + SHA-256 micro-caption (evidencia de transmisión
+            — no se elimina funcionalidad). ENVIADA no tiene toolbar: el
+            ÚNICO CTA es SEGUIR ESCANEANDO (D6). */}
         {status === "ENVIADA" && (
-          <div className="w-full max-w-sm flex items-center justify-center gap-1.5 pt-2 flex-wrap">
-            <Chip tone="ok" solid>
-              {tipo}
-            </Chip>
-            <Chip tone="neutral">
-              PÁG {paginaIdx} DE {paginaTotal}
-            </Chip>
-            {acta.enviadoAutomaticamente && (
-              <span className="flex items-center gap-1.5 font-data text-[9px]">
-                <span className="text-ok-tint font-bold">✓ ENVIADO AUTOMÁTICAMENTE</span>
-                <span className="text-ink-dim">{acta.enviadoAutomaticamente}</span>
+          <>
+            <div className="w-full max-w-sm flex items-center justify-center gap-1.5 pt-2 flex-wrap">
+              <Chip tone="ok" solid>
+                {tipo}
+              </Chip>
+              <Chip tone="neutral">MESA {acta.ubicacion.mesa}</Chip>
+              <Chip tone="neutral">
+                PÁG {paginaIdx} DE {paginaTotal}
+              </Chip>
+            </div>
+            <div
+              className="w-full max-w-sm flex items-center justify-between pt-2"
+              data-testid="fila-estado"
+            >
+              <span className="flex items-center gap-1.5 font-data text-[10px] font-bold text-ok-tint tracking-wide">
+                ✓ ENVIADO {acta.enviadoAutomaticamente ? "AUTOMÁTICAMENTE" : "CORRECTAMENTE"}
               </span>
-            )}
+              <span className="font-data text-[11px] text-ink-dim">
+                {acta.enviadoAutomaticamente ?? "--:--:--"}
+              </span>
+            </div>
             {acta.hashSha256 && (
               <span className="font-data text-[8px] text-ink-faint">
                 SHA-256: {acta.hashSha256}
               </span>
             )}
-          </div>
+          </>
         )}
 
         {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor,
@@ -814,40 +850,23 @@ export function ReviewCtas() {
   const navegar = useE14Store((s) => s.navegar);
   const enviarActa = useE14Store((s) => s.enviarActa);
   const repetirFoto = useE14Store((s) => s.repetirFoto);
-  const exportarPdfActa = useE14Store((s) => s.exportarPdfActa);
 
   if (!acta) return null;
   const status = acta.status;
-  // D35: SIMULACIÓN produce fotos reales (pipeline real) — el gate es la foto, no la fuente.
-  const esReal = Boolean(acta.fotoProcesada);
 
   if (status === "ENVIADA") {
-    // L4 §6: EXPORTAR PDF junto a SEGUIR ESCANEANDO — actas con foto real
-    // (D35: SIMULACIÓN incluida — el gate es la foto, no la fuente).
-    if (esReal) {
-      return (
-        <div className="flex flex-row items-center gap-2 w-full">
-          <PrimaryBtn variant="outline" onClick={() => void exportarPdfActa()}>
-            <DownloadIcon className="w-4 h-4" />
-            <span>EXPORTAR PDF</span>
-          </PrimaryBtn>
-          <button
-            type="button"
-            onClick={() => navegar("escanear")}
-            className="flex-1 h-12 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98]"
-          >
-            <span>seguir escaneando</span>
-          </button>
-        </div>
-      );
-    }
+    // D6 (SPEC-rediseno-enviada Rev. 2, §6): UN solo CTA — el mock no dibuja
+    // botón de exportación y el dueño lo confirmó («sip elimina el pdf»). El
+    // branch `if (esReal)` de dos botones DESAPARECE: ENVIADA devuelve este
+    // botón único con y sin foto (§7 eliminó la exportación de la cadena
+    // completa — sin código muerto).
     return (
       <button
         type="button"
         onClick={() => navegar("escanear")}
-        className="w-full h-12 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98]"
+        className="w-full h-13 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98]"
       >
-        <span>seguir escaneando</span>
+        <span>SEGUIR ESCANEANDO</span>
       </button>
     );
   }
