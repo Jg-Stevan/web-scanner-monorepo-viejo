@@ -1927,7 +1927,13 @@ export default function EditorView() {
             onPointerDown={onStagePointerDown}
             onPointerMove={onStagePointerMove}
             onPointerUp={onStagePointerUp}
-            onPointerLeave={onStagePointerUp}
+            /* FIX v8 (8.2): leave SOLO para mouse — iOS dispara pointerleave espurios
+             * a mitad del pan (recomposite del chip de zoom / capa will-change) y el
+             * handler lo interpretaba como fin de gesto, matando el paneo. La
+             * presentación no tiene este handler y por eso ahí el pan sobrevive. */
+            onPointerLeave={(e) => {
+              if (e.pointerType === "mouse") onStagePointerUp(e);
+            }}
             onPointerCancel={onStagePointerUp}
             onContextMenu={(e) => e.preventDefault()}
           >
