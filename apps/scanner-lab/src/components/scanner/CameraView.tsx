@@ -40,6 +40,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+// FIX v13 (13.4) — detección de WebViews sociales (Instagram/Facebook/
+// TikTok/…) para dar salida real al usuario cuando la app contenedora
+// bloquea la cámara web.
+import { isSocialWebView } from "@/lib/webview";
 import { nextId, useScannerStore } from "@jg-stevan/scanner-core/store";
 import {
   defaultQuad,
@@ -70,6 +74,79 @@ import {
 } from "@jg-stevan/scanner-core/sensor-profiler";
 
 type CameraStatus = "idle" | "live" | "synthetic" | "simulated";
+
+/** FIX v13 (13.4) — causa concreta del aviso de cámara (antes solo "denied").
+ *  Cada causa tiene copy con pasos REALES en el banner (B2 enriquecido). */
+type CamNoticeKind =
+  | "denied" // NotAllowedError/SecurityError: permiso denegado → cómo concederlo
+  | "notfound" // NotFoundError: sin cámara o bloqueada por el sistema
+  | "notreadable" // NotReadableError: cámara ocupada por otra app
+  | "webview" // WebView social: la app contenedora no permite cámara web
+  | "insecure"; // Sin HTTPS: getUserMedia requiere contexto seguro
+
+/** FIX v13 (13.4) — elige el aviso según el ÚLTIMO error de la cascada de
+ *  apertura. null = sin banner (comportamiento previo en errores raros). */
+function resolveCamNotice(
+  errName: string | null,
+  permissionDenied: boolean
+): CamNoticeKind | null {
+  if (permissionDenied || errName === "NotAllowedError" || errName === "SecurityError") {
+    return "denied";
+  }
+  if (errName === "NotFoundError" || errName === "DevicesNotFoundError") return "notfound";
+  if (
+    errName === "NotReadableError" ||
+    errName === "TrackStartError" ||
+    errName === "NotReadable"
+  ) {
+    return "notreadable";
+  }
+  // Error desconocido en WebView social → la causa más probable es el
+  // contenedor (no el permiso): dar la salida real (Safari/Chrome nativo).
+  if (typeof navigator !== "undefined" && isSocialWebView(navigator.userAgent)) {
+    return "webview";
+  }
+  return null;
+}
+
+/** FIX v13 (13.4) — copy ACCIONABLE por causa (pasos reales por plataforma).
+ *  `retry` = mostrar el CTA «Activar cámara» (en WebView social no sirve de
+ *  nada reintentar: la salida es abrir en el navegador real). */
+const CAM_NOTICE_COPY: Record<
+  CamNoticeKind,
+  { icon: string; title: string; body: string; retry: boolean }
+> = {
+  denied: {
+    icon: "📷",
+    title: "Sin acceso a la cámara",
+    body: "Permiso denegado — lo que ves es un modo simulado. iPhone: candado 🔒 en la barra de direcciones › Permisos › Cámara (o Ajustes › Safari › Cámara). Android: candado 🔒 junto a la dirección › Permisos › Cámara › Permitir. Luego vuelve a intentarlo.",
+    retry: true,
+  },
+  notfound: {
+    icon: "🔍",
+    title: "No se detecta cámara",
+    body: "El dispositivo no tiene cámara disponible o está bloqueada a nivel del sistema (restricciones/control parental). Puedes importar fotos desde la galería con el botón de abajo.",
+    retry: true,
+  },
+  notreadable: {
+    icon: "⛔",
+    title: "Cámara ocupada",
+    body: "Otra app está usando la cámara en este momento. Ciérrala (o cierra las pestañas que la usan) y toca «Activar cámara» de nuevo.",
+    retry: true,
+  },
+  webview: {
+    icon: "🚫",
+    title: "Esta app no permite usar la cámara web",
+    body: "Abre el enlace en Safari (iPhone) o Chrome (Android) para escanear con cámara. Mientras tanto puedes importar fotos desde la galería con el botón de abajo.",
+    retry: false,
+  },
+  insecure: {
+    icon: "🔒",
+    title: "Conexión no segura",
+    body: "La cámara requiere una conexión cifrada (HTTPS). Abre la app desde su dirección https:// y el escáner funcionará con normalidad.",
+    retry: true,
+  },
+};
 
 /** FIX v5 (5.5) — umbral de exposición (0-1, fracción de píxeles bien
  *  expuestos) por debajo del cual el modo Auto enciende el torch para el
@@ -603,7 +680,7 @@ export default function CameraView() {
   // B2: aviso persistente cuando el permiso de cámara fue DENEGADO — la app
   // cae al modo simulado (como siempre), pero ahora con overlay + CTA
   // «Activar cámara» en vez de dejar al usuario creer que escanea de verdad.
-  const [camNotice, setCamNotice] = useState<null | "denied">(null);
+  const [camNotice, setCamNotice] = useState<null | CamNoticeKind>(null);
   // B3: nonce para re-arrancar el efecto de arranque cuando el track muere
   // (permiso revocado, otra app roba la cámara) — antes el preview quedaba
   // congelado sin recuperación.
@@ -1521,6 +1598,13 @@ export default function CameraView() {
     let cancelled = false;
     const media = navigator.mediaDevices;
     if (!media || typeof media.getUserMedia !== "function" || !window.isSecureContext) {
+      // FIX v13 (13.4): sin getUserMedia/contexto seguro → aviso ACCIONABLE
+      // (WebView social o HTTP) en vez de caer al simulado sin explicación.
+      // El fallback de importación (botón galería) sigue visible abajo.
+      if (!cancelled) {
+        if (!window.isSecureContext) setCamNotice("insecure");
+        else if (isSocialWebView(navigator.userAgent)) setCamNotice("webview");
+      }
       void startSynthetic();
       return;
     }
@@ -1580,6 +1664,15 @@ export default function CameraView() {
     const isPermError = (e: unknown): boolean =>
       e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError");
     let permissionDenied = false;
+    // FIX v13 (13.4) — registro OBSERVACIONAL del último error.name de la
+    // cascada: alimenta el copy del banner (NotFound/NotReadable/…). No
+    // altera el flujo: se sobreescribe en cada intento fallido igual que
+    // `permissionDenied`.
+    let openErrorName: string | null = null;
+    const noteOpenError = (e: unknown): void => {
+      const name = e instanceof DOMException ? e.name : null;
+      if (name) openErrorName = name;
+    };
 
     /** E3 + DUAL PIPELINE: cascada de apertura — el PREVIEW pide 960×540
      *  ideal + 30 FPS (fluido en gama baja; la captura hi-res va por
@@ -1615,6 +1708,7 @@ export default function CameraView() {
           return await media.getUserMedia(c);
         } catch (err) {
           if (isPermError(err)) permissionDenied = true;
+          noteOpenError(err); // FIX v13 (13.4): observación del causa
           /* siguiente nivel */
         }
       }
@@ -1723,6 +1817,7 @@ export default function CameraView() {
           // permiso revocado → borrar y sondear completo como antes.
           clearMainCameraCache();
           if (isPermError(err)) permissionDenied = true;
+          noteOpenError(err); // FIX v13 (13.4)
         }
       }
       // 1) Desbloqueo de etiquetas (F1-a de codigo-test): sin permiso previo
@@ -1732,6 +1827,7 @@ export default function CameraView() {
         unlock.getTracks().forEach((t) => t.stop());
       } catch (err) {
         if (isPermError(err)) permissionDenied = true;
+        noteOpenError(err); // FIX v13 (13.4)
         /* sin permiso: los probes fallarán y se cae al cascade */
       }
       // 2) Sondeo secuencial: cada cámara se ABRE, se MIDE y se CIERRA.
@@ -1779,6 +1875,7 @@ export default function CameraView() {
           return await polishStream(stream, main, probes, false);
         } catch (err) {
           if (isPermError(err)) permissionDenied = true;
+          noteOpenError(err); // FIX v13 (13.4)
           /* siguiente nivel */
         }
       }
@@ -1791,9 +1888,13 @@ export default function CameraView() {
       let stream = await openMainCamera();
       if (!stream) stream = await openWithCascade();
       if (!stream) {
-        // B2: permiso denegado explícitamente → aviso con CTA (el modo
-        // simulado sigue activo debajo para no dejar la pantalla muerta).
-        if (!cancelled && permissionDenied) setCamNotice("denied");
+        // B2 + FIX v13 (13.4): sin cámara real → aviso ACCIONABLE según la
+        // causa real (permiso / sin cámara / ocupada / WebView social); el
+        // modo simulado sigue activo debajo para no dejar la pantalla muerta.
+        if (!cancelled) {
+          const notice = resolveCamNotice(openErrorName, permissionDenied);
+          if (notice) setCamNotice(notice);
+        }
         if (!cancelled) void startSynthetic();
         return;
       }
@@ -1955,10 +2056,13 @@ export default function CameraView() {
         if (streamRef.current !== stream) return;
         upgradeStreamResolution(stream.getVideoTracks()[0]);
       }, STREAM_UPGRADE_DELAY_MS);
-    } catch {
-      toast.error("Sigue sin permiso", {
-        description:
-          "Toca el candado 🔒 en la barra de direcciones › Permisos › Cámara › Permitir, y vuelve a intentar.",
+    } catch (err) {
+      // FIX v13 (13.4): el reintento también explica la CAUSA real del
+      // fallo (mismo mapa de copy que el banner) en vez de asumir permiso.
+      const name = err instanceof DOMException ? err.name : null;
+      const kind = resolveCamNotice(name, false) ?? "denied";
+      toast.error(CAM_NOTICE_COPY[kind].title, {
+        description: CAM_NOTICE_COPY[kind].body,
         duration: 9000,
       });
     }
@@ -2568,11 +2672,14 @@ export default function CameraView() {
           )}
         </AnimatePresence>
 
-        {/* B2 — aviso de permiso de cámara denegado (modo simulado debajo) */}
+        {/* B2 + FIX v13 (13.4) — aviso de cámara con CAUSA y salida accionable
+            (permiso / sin cámara / ocupada / WebView social / sin HTTPS).
+            El modo simulado sigue activo debajo y el botón de importar de
+            galería (barra inferior) permanece como fallback visible. */}
         <AnimatePresence>
-          {camNotice === "denied" && (
+          {camNotice && (
             <motion.div
-              key="cam-denied"
+              key={`cam-${camNotice}`}
               initial={{ opacity: 0, y: -12, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -12, scale: 0.97 }}
@@ -2581,24 +2688,27 @@ export default function CameraView() {
               className="absolute inset-x-4 top-[calc(env(safe-area-inset-top)+60px)] z-40 rounded-2xl bg-[#1c1c1e]/95 p-4 shadow-[0_8px_32px_rgba(0,0,0,0.45)] ring-1 ring-white/10 backdrop-blur-md"
             >
               <div className="flex items-start gap-3">
-                <span aria-hidden="true" className="text-[22px] leading-none">📷</span>
+                <span aria-hidden="true" className="text-[22px] leading-none">
+                  {CAM_NOTICE_COPY[camNotice].icon}
+                </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[15px] font-semibold text-white">
-                    Sin acceso a la cámara
+                    {CAM_NOTICE_COPY[camNotice].title}
                   </p>
                   <p className="mt-1 text-[13px] leading-snug text-white/70">
-                    Permiso denegado: lo que ves es un modo simulado. Toca el candado
-                    🔒 en la barra de direcciones › Permisos › Cámara › Permitir.
+                    {CAM_NOTICE_COPY[camNotice].body}
                   </p>
                   <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void retryRealCamera()}
-                      // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
-                      className="flex min-h-[44px] items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all active:scale-95"
-                    >
-                      Activar cámara
-                    </button>
+                    {CAM_NOTICE_COPY[camNotice].retry && (
+                      <button
+                        type="button"
+                        onClick={() => void retryRealCamera()}
+                        // FIX v13 (13.2): target táctil 44 px (iOS HIG) — antes h-9.
+                        className="flex min-h-[44px] items-center justify-center rounded-full bg-[#007aff] px-4 text-[13.5px] font-semibold text-white transition-all active:scale-95"
+                      >
+                        Activar cámara
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setCamNotice(null)}
