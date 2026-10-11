@@ -392,13 +392,40 @@ function quadDrift(a: Quad, b: Quad): number {
 /** FIX v5 (5.2) — dimensiones NATURALES de una fuente de captura (imagen
  *  o canvas). Helpers separados: el narrowing de instanceof solo es fiable
  *  sobre un parámetro fresco tipado como la unión (en el scope de captura,
- *  el CFA ya estrecha `source` a HTMLImageElement). */
-function sourceNaturalWidth(src: HTMLImageElement | HTMLCanvasElement): number {
+ *  el CFA ya estrecha `source` a HTMLImageElement).
+ *  FIX v12 (12.1a): la unión acepta TAMBIÉN el PROBE ImageBitmap (el
+ *  bitmap diminuto conserva el ASPECT exacto de la foto → sirve para la
+ *  puerta del quad nato ±2 % y para evaluateQuality sin decode completo). */
+function sourceNaturalWidth(
+  src: HTMLImageElement | HTMLCanvasElement | ImageBitmap
+): number {
   return src instanceof HTMLImageElement ? src.naturalWidth : src.width;
 }
 
-function sourceNaturalHeight(src: HTMLImageElement | HTMLCanvasElement): number {
+function sourceNaturalHeight(
+  src: HTMLImageElement | HTMLCanvasElement | ImageBitmap
+): number {
   return src instanceof HTMLImageElement ? src.naturalHeight : src.height;
+}
+
+/** FIX v12 (12.1) — libera el backing store del PROBE cuando la captura ya
+ *  no lo necesita (finally del handler o rama que no lo consume): el
+ *  ImageBitmap con close(), el canvas del burst a 0×0 (disciplina R-14).
+ *  Idempotente y tolerante a null/undefined. */
+function closeProbe(
+  probe: ImageBitmap | HTMLCanvasElement | null | undefined
+): void {
+  if (!probe) return;
+  if (probe instanceof HTMLCanvasElement) {
+    probe.width = 0;
+    probe.height = 0;
+  } else {
+    try {
+      probe.close();
+    } catch {
+      /* ya cerrado */
+    }
+  }
 }
 
 /** Trapecio con jitter leve — fallback simulado mientras no hay worker. */
@@ -876,16 +903,95 @@ export default function CameraView() {
     []
   );
 
-  /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2):
-   *  flash → decode → downscale → calidad → store → EDITOR INMEDIATO.
-   *  El editor abre con un marco provisional y la detección de bordes
-   *  aterriza en background (pill «Ajustando recorte…» → preview se
-   *  re-procesa solo). En gama baja esto convierte una espera de segundos
-   *  frente a la cámara en una revisión instantánea. */
+  /** FIX v12 (12.1c) — UN decode completo EN BACKGROUND que lo resuelve
+   *  todo, tras navegar al editor (setTimeout ~2500 ms para no competir
+   *  con el primer processImage del editor en gama baja):
+   *   · si el original supera 4032 px (raro: el sensor-profiler ya pidió
+   *     ≤4032 a la HAL y clampBlobToSafeCap es la 2ª red) → downscaleImage
+   *     + updateCapturePage({ original: capado }) — el usuario YA está en
+   *     el editor, no en la cámara;
+   *   · si autoQuadPending → detectDocumentEdges full-res y parchear el
+   *     quad (mismo applyAutoQuad de hoy, ahora alimentado por ESTE decode);
+   *   · si ni cap ni pendiente → no hacer nada (ahorro total).
+   *  Guard: la página puede haber sido eliminada (Repetir/limpiar la
+   *  eliminan) → re-verificar existencia antes de cada updateCapturePage
+   *  (patrón existente en applyAutoQuad). `mayExceedCap=false` (canvas del
+   *  burst, ≤1920 px) permite el ahorro TOTAL cuando además hubo quad
+   *  nato: ni el decode diferido corre. */
+  const scheduleBackgroundResolve = useCallback(
+    (
+      pageId: string,
+      originalUrl: string,
+      needAutoQuad: boolean,
+      mayExceedCap = true
+    ) => {
+      if (!needAutoQuad && !mayExceedCap) return; // ahorro total (12.1c)
+      window.setTimeout(() => {
+        void (async () => {
+          try {
+            const decoded = await loadImage(originalUrl);
+            const big = Math.max(
+              decoded.naturalWidth || 0,
+              decoded.naturalHeight || 0
+            );
+            let source: HTMLImageElement = decoded;
+            if (big > PROCESSED_MAX_LONG_SIDE) {
+              const capped = await downscaleImage(
+                decoded,
+                PROCESSED_MAX_LONG_SIDE
+              );
+              if (capped) {
+                const still = useScannerStore
+                  .getState()
+                  .capturePages.find((p) => p.id === pageId);
+                if (still) {
+                  useScannerStore
+                    .getState()
+                    .updateCapturePage(pageId, { original: capped });
+                }
+                // La detección (si toca) corre sobre el elemento capado —
+                // mismo criterio que el camino síncrono de siempre.
+                source = await loadImage(capped);
+              }
+            }
+            if (needAutoQuad) {
+              const page = useScannerStore
+                .getState()
+                .capturePages.find((p) => p.id === pageId);
+              if (page?.autoQuadPending) {
+                await applyAutoQuad(pageId, source);
+              }
+            }
+          } catch {
+            /* silencioso: el marco provisional sigue ajustable a mano */
+          }
+        })();
+      }, 2500);
+    },
+    [applyAutoQuad]
+  );
+
+  /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2
+   *  + FIX v12 «editor primero»): flash → [probe ≤400 px] → calidad →
+   *  store → EDITOR INMEDIATO. Con probe (foto del sensor o canvas del
+   *  burst) NO hay ningún decode completo ni re-encode en el camino
+   *  crítico: la página nace con el original intacto y el decode que
+   *  falta (cap raro >4032 + detección de bordes si no hubo quad nato)
+   *  vuela en background (12.1c) YA con el editor abierto. Sin probe
+   *  (createImageBitmap no disponible/falló, galería o demo) el camino es
+   *  EXACTO el de siempre: decode → downscale → calidad (red de
+   *  compatibilidad). */
   const handleCaptureDataUrl = useCallback(
-    async (rawDataUrl: string) => {
-      if (processingRef.current) return;
+    async (
+      rawDataUrl: string,
+      probe?: ImageBitmap | HTMLCanvasElement | null
+    ) => {
+      if (processingRef.current) {
+        closeProbe(probe); // otro disparo en vuelo: el probe no se consume
+        return;
+      }
       if (!rawDataUrl) {
+        closeProbe(probe);
         toast.error("No se pudo capturar la imagen");
         return;
       }
@@ -896,99 +1002,165 @@ export default function CameraView() {
         navigator.vibrate(30);
       }
       try {
-        // Decode ÚNICO de la captura (antes: downscale + detect + quality
-        // decodificaban la misma foto de 12 MP tres veces). El elemento se
-        // reutiliza en las etapas; solo se re-decodifica si hubo que
-        // re-escalar una imagen de galería más grande que el sensor.
-        const decoded = await loadImage(rawDataUrl);
-        // FIX v3 (fix-editor-quality): el ORIGINAL se capa al tope técnico
-        // ÚNICO (4032 px) — NUNCA al de una gama (antes: safeCapPx del
-        // benchmark → 3200 en medium/low degradaba la FUENTE para siempre).
-        // Los sensores ≤12 MP pasan intactos (4032×3024 ≈ 12.2 MP decodifica
-        // bien en iOS); los gigantes siguen protegidos por las 2 capas del
-        // sensor-profiler + este downscale como tercera red.
-        const scaledUrl = await downscaleImage(decoded, PROCESSED_MAX_LONG_SIDE);
-        const dataUrl = scaledUrl ?? rawDataUrl;
-        const source: HTMLImageElement | HTMLCanvasElement = scaledUrl
-          ? await loadImage(scaledUrl)
-          : decoded;
-        // F-DEFER-CROP v6.2: la detección de bordes SALE del camino crítico
-        // (corre en background tras abrir el editor). La calidad sí se mide
-        // aquí: es barata (canvas de ≤400 px) y alimenta el badge de calidad.
-        const quality = await evaluateQuality(source);
-        // FIX v5 (5.2) — FIN DEL «DOBLE RECORTE»: lo que se vio EN VIVO es lo
-        // que llega al editor. Si al disparar había detección confiable, su
-        // quad (normalizado al frame del video) se usa DIRECTAMENTE para
-        // nacer la página — la re-detección full-res de applyAutoQuad podía
-        // entregar OTRO recorte distinto al del overlay (distinta resolución
-        // de análisis → distinto ajuste fino) y el usuario veía como si se
-        // recortara dos veces. Requisito de mapeo: los corners viven en el
-        // espacio del frame de ANÁLISIS del video (normalizados 0-1); la
-        // captura (foto full-sensor o snapshot) debe tener el MISMO aspect
-        // (±2 %) para que el mapeo directo sea fiel — si difiere (p. ej.
-        // foto 16:9 de un preview 4:3), el mapeo mentiría → background.
-        const t = liveRef.current;
-        let bornQuad: Quad | null = null;
-        if (
-          t.corners &&
-          t.score !== null &&
-          t.score >= LIVE_QUAD_MIN_SCORE
-        ) {
-          const vw = videoRef.current?.videoWidth ?? 0;
-          const vh = videoRef.current?.videoHeight ?? 0;
-          const iw = sourceNaturalWidth(source);
-          const ih = sourceNaturalHeight(source);
+        if (probe) {
+          // ── FIX v12 (12.1b) — camino rápido «editor primero» ──────────
+          // Cero decodes completos y cero re-encodes entre el disparo y
+          // setView("editor"): el único trabajo post-takePhoto es el probe
+          // ≤400 px (quality mide sobre un canvas de 120 px — firma
+          // ImageSource ampliada) y la puerta del quad nato usa el ASPECT
+          // del probe (exacto al de la foto).
+          const quality = await evaluateQuality(probe);
+          const t = liveRef.current;
+          let bornQuad: Quad | null = null;
           if (
-            vw > 0 &&
-            vh > 0 &&
-            iw > 0 &&
-            ih > 0 &&
-            Math.abs(vw / vh - iw / ih) <= 0.02
+            t.corners &&
+            t.score !== null &&
+            t.score >= LIVE_QUAD_MIN_SCORE
           ) {
-            const c = t.corners;
-            bornQuad = [
-              { x: c[0]!.x, y: c[0]!.y },
-              { x: c[1]!.x, y: c[1]!.y },
-              { x: c[2]!.x, y: c[2]!.y },
-              { x: c[3]!.x, y: c[3]!.y },
-            ];
+            const vw = videoRef.current?.videoWidth ?? 0;
+            const vh = videoRef.current?.videoHeight ?? 0;
+            const iw = sourceNaturalWidth(probe);
+            const ih = sourceNaturalHeight(probe);
+            if (
+              vw > 0 &&
+              vh > 0 &&
+              iw > 0 &&
+              ih > 0 &&
+              Math.abs(vw / vh - iw / ih) <= 0.02
+            ) {
+              const c = t.corners;
+              bornQuad = [
+                { x: c[0]!.x, y: c[0]!.y },
+                { x: c[1]!.x, y: c[1]!.y },
+                { x: c[2]!.x, y: c[2]!.y },
+                { x: c[3]!.x, y: c[3]!.y },
+              ];
+            }
           }
-        }
-        const page: CapturePage = {
-          id: nextId("page"),
-          original: dataUrl,
-          // Marco provisional (vista completa): el quad real llega en
-          // background vía applyAutoQuad, sin bloquear la revisión.
-          quad: bornQuad ?? defaultQuad(),
-          autoQuadPending: bornQuad === null,
-          // F-DEFAULT-BW: «Mejora automática» (Ajustes › Procesamiento) decide
-          // el filtro por defecto de cada captura — ON = B/N adaptativo (lo que
-          // pidió el usuario), OFF = Original puro. Cambiable en el editor.
-          filter: useScannerStore.getState().settings.enhance ? "bw" : "original",
-          rotation: 0,
-          quality,
-        };
-        addCapturePage(page);
-        // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
-        setView("editor");
-        // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
-        // 2ª detección que cambiaba el recorte). Sin detección viva confiable
-        // (o aspect distinto): la detección vuela en background como antes;
-        // cuando aterrice, el preview se re-procesa solo (cambia el quad →
-        // capturePageKey → cache miss) y la pill «Ajustando recorte…» cubre
-        // la espera.
-        if (bornQuad === null) {
-          void applyAutoQuad(page.id, source);
+          const isCanvasProbe = probe instanceof HTMLCanvasElement;
+          const page: CapturePage = {
+            id: nextId("page"),
+            // Foto del sensor SIN cap sincrónico (el cap, si alguna vez
+            // hace falta, es el decode diferido de 12.1c).
+            original: rawDataUrl,
+            quad: bornQuad ?? defaultQuad(),
+            autoQuadPending: bornQuad === null,
+            filter: useScannerStore.getState().settings.enhance
+              ? "bw"
+              : "original",
+            rotation: 0,
+            quality,
+          };
+          addCapturePage(page);
+          // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
+          setView("editor");
+          // FIX v12 (12.1c): el decode completo vuela en background. El
+          // canvas del burst (≤1920 px) jamás excede 4032 → si además hubo
+          // quad nato, NI el decode diferido corre (ahorro total).
+          scheduleBackgroundResolve(
+            page.id,
+            page.original,
+            bornQuad === null,
+            !isCanvasProbe
+          );
+        } else {
+          // ── Fallback SIN probe (12.1b): camino ACTUAL intacto ─────────
+          // Decode ÚNICO de la captura (antes: downscale + detect + quality
+          // decodificaban la misma foto de 12 MP tres veces). El elemento se
+          // reutiliza en las etapas; solo se re-decodifica si hubo que
+          // re-escalar una imagen de galería más grande que el sensor.
+          const decoded = await loadImage(rawDataUrl);
+          // FIX v3 (fix-editor-quality): el ORIGINAL se capa al tope técnico
+          // ÚNICO (4032 px) — NUNCA al de una gama (antes: safeCapPx del
+          // benchmark → 3200 en medium/low degradaba la FUENTE para siempre).
+          // Los sensores ≤12 MP pasan intactos (4032×3024 ≈ 12.2 MP decodifica
+          // bien en iOS); los gigantes siguen protegidos por las 2 capas del
+          // sensor-profiler + este downscale como tercera red.
+          const scaledUrl = await downscaleImage(decoded, PROCESSED_MAX_LONG_SIDE);
+          const dataUrl = scaledUrl ?? rawDataUrl;
+          const source: HTMLImageElement | HTMLCanvasElement = scaledUrl
+            ? await loadImage(scaledUrl)
+            : decoded;
+          // F-DEFER-CROP v6.2: la detección de bordes SALE del camino crítico
+          // (corre en background tras abrir el editor). La calidad sí se mide
+          // aquí: es barata (canvas de ≤400 px) y alimenta el badge de calidad.
+          const quality = await evaluateQuality(source);
+          // FIX v5 (5.2) — FIN DEL «DOBLE RECORTE»: lo que se vio EN VIVO es lo
+          // que llega al editor. Si al disparar había detección confiable, su
+          // quad (normalizado al frame del video) se usa DIRECTAMENTE para
+          // nacer la página — la re-detección full-res de applyAutoQuad podía
+          // entregar OTRO recorte distinto al del overlay (distinta resolución
+          // de análisis → distinto ajuste fino) y el usuario veía como si se
+          // recortara dos veces. Requisito de mapeo: los corners viven en el
+          // espacio del frame de ANÁLISIS del video (normalizados 0-1); la
+          // captura (foto full-sensor o snapshot) debe tener el MISMO aspect
+          // (±2 %) para que el mapeo directo sea fiel — si difiere (p. ej.
+          // foto 16:9 de un preview 4:3), el mapeo mentiría → background.
+          const t = liveRef.current;
+          let bornQuad: Quad | null = null;
+          if (
+            t.corners &&
+            t.score !== null &&
+            t.score >= LIVE_QUAD_MIN_SCORE
+          ) {
+            const vw = videoRef.current?.videoWidth ?? 0;
+            const vh = videoRef.current?.videoHeight ?? 0;
+            const iw = sourceNaturalWidth(source);
+            const ih = sourceNaturalHeight(source);
+            if (
+              vw > 0 &&
+              vh > 0 &&
+              iw > 0 &&
+              ih > 0 &&
+              Math.abs(vw / vh - iw / ih) <= 0.02
+            ) {
+              const c = t.corners;
+              bornQuad = [
+                { x: c[0]!.x, y: c[0]!.y },
+                { x: c[1]!.x, y: c[1]!.y },
+                { x: c[2]!.x, y: c[2]!.y },
+                { x: c[3]!.x, y: c[3]!.y },
+              ];
+            }
+          }
+          const page: CapturePage = {
+            id: nextId("page"),
+            original: dataUrl,
+            // Marco provisional (vista completa): el quad real llega en
+            // background vía applyAutoQuad, sin bloquear la revisión.
+            quad: bornQuad ?? defaultQuad(),
+            autoQuadPending: bornQuad === null,
+            // F-DEFAULT-BW: «Mejora automática» (Ajustes › Procesamiento) decide
+            // el filtro por defecto de cada captura — ON = B/N adaptativo (lo que
+            // pidió el usuario), OFF = Original puro. Cambiable en el editor.
+            filter: useScannerStore.getState().settings.enhance ? "bw" : "original",
+            rotation: 0,
+            quality,
+          };
+          addCapturePage(page);
+          // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
+          setView("editor");
+          // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
+          // 2ª detección que cambiaba el recorte). Sin detección viva confiable
+          // (o aspect distinto): la detección vuela en background como antes;
+          // cuando aterrice, el preview se re-procesa solo (cambia el quad →
+          // capturePageKey → cache miss) y la pill «Ajustando recorte…» cubre
+          // la espera.
+          if (bornQuad === null) {
+            void applyAutoQuad(page.id, source);
+          }
         }
       } catch (err) {
         console.error("handleCaptureDataUrl falló:", err);
         toast.error("No se pudo procesar la imagen");
       } finally {
+        // FIX v12 (12.1): el probe se libera SIEMPRE (bitmap o canvas).
+        closeProbe(probe);
         processingRef.current = false;
         setProcessing(false);
       }
     },
-    [addCapturePage, setView, applyAutoQuad]
+    [addCapturePage, setView, applyAutoQuad, scheduleBackgroundResolve]
   );
 
   /** Blob → data URL (para el takePhoto hi-res). */
@@ -1272,12 +1444,21 @@ export default function CameraView() {
           return b.m!.lapVar > a.m!.lapVar ? b : a;
         });
       }
-      const url = await canvasToDataUrl(winner.canvas);
-      for (const f of frames) releaseFrame(f);
+      // FIX v12 (12.1b) — el canvas del GANADOR pasa como fuente del camino
+      // rápido (dims conocidas, ≤1920 px → sin cap posible): la página nace
+      // SIN re-decodificar el data URL que acabamos de codificar. Su
+      // backing store se libera en el finally de handleCaptureDataUrl
+      // (closeProbe) — los PERDEDORES se sueltan aquí como siempre (R-14).
+      const winnerCanvas = winner.canvas;
+      const url = await canvasToDataUrl(winnerCanvas);
+      for (const f of frames) {
+        if (f.canvas !== winnerCanvas) releaseFrame(f);
+      }
       if (url) {
-        void handleCaptureDataUrl(url);
+        void handleCaptureDataUrl(url, winnerCanvas);
       } else {
         // B8: encode falló → feedback en vez de descartar el disparo.
+        releaseFrame(winner);
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
       }
     };
@@ -1364,6 +1545,28 @@ export default function CameraView() {
     // NÍTIDO pero de 720p/1080p → texto ilegible. La resolución es
     // intocable: una foto algo blanda a 3264 px siempre supera a un frame
     // perfecto de 720p (el enhance afina; retomar cuesta un toque).
+
+    // FIX v12 (12.1a) — PROBE rápido en vez de decode completo: bitmap
+    // diminuto (≤400 px, aspect EXACTO de la foto) creado ANTES del data
+    // URL. Alimenta la puerta del quad nato (±2 %), evaluateQuality y el
+    // aspect del marco provisional SIN decodificar los 12 MP en el camino
+    // crítico. Si createImageBitmap no existe o falla → probe null → el
+    // fallback de handleCaptureDataUrl corre el camino de siempre (red
+    // de compatibilidad). Flag QA: window.__disableProbe = true lo fuerza.
+    let probe: ImageBitmap | null = null;
+    try {
+      const qaNoProbe =
+        (window as unknown as { __disableProbe?: boolean }).__disableProbe ===
+        true;
+      if (typeof createImageBitmap === "function" && !qaNoProbe) {
+        probe = await createImageBitmap(photoBlob, {
+          resizeWidth: 400,
+          resizeQuality: "low",
+        });
+      }
+    } catch {
+      probe = null;
+    }
     let photoUrl: string | null = null;
     try {
       photoUrl = await blobToDataUrl(photoBlob);
@@ -1373,9 +1576,11 @@ export default function CameraView() {
     if (photoUrl) {
       releaseFrame(snapA);
       releaseFrame(snapB);
-      void handleCaptureDataUrl(photoUrl);
+      void handleCaptureDataUrl(photoUrl, probe);
       return;
     }
+    // La foto no llegó a data URL → el burst de frames no usa probe.
+    closeProbe(probe);
     await dispatchBestFrame([snapA, snapB]);
     } finally {
       // FIX v5 (5.5): retirar el torch que NOSOTROS encendimos para ESTE

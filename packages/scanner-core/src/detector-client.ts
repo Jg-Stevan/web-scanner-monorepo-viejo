@@ -366,7 +366,7 @@ export class ScannerWorkerClient {
    * Devuelve null si el worker no está listo o falla (→ fallback del llamador).
    */
   async detect(
-    source: HTMLImageElement | HTMLCanvasElement,
+    source: HTMLImageElement | HTMLCanvasElement | ImageBitmap,
     w: number,
     h: number
   ): Promise<DetectOutcome | null> {

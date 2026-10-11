@@ -255,21 +255,28 @@ export async function fileToCaptureDataUrl(file: File): Promise<string> {
 /** Fuente de imagen para el pipeline: data URL o elemento YA decodificado
  *  (HTMLImageElement/HTMLCanvasElement). Pasar el elemento evita re-decodificar
  *  la foto de 12 MP en cada etapa de la captura (downscale→detect→quality).
- *  La ruta crítica pasa de 3 decodes a 1 (2 solo si hubo que re-escalar). */
-export type ImageSource = string | HTMLImageElement | HTMLCanvasElement;
+ *  La ruta crítica pasa de 3 decodes a 1 (2 solo si hubo que re-escalar).
+ *  FIX v12 (12.1a): también acepta ImageBitmap — el PROBE ≤400 px del
+ *  camino rápido «editor primero» (createImageBitmap del blob de la foto)
+ *  alimenta evaluateQuality y la puerta del quad nato SIN decode completo. */
+export type ImageSource =
+  | string
+  | HTMLImageElement
+  | HTMLCanvasElement
+  | ImageBitmap;
 
 /** Decodifica solo si hace falta (string); el elemento pasa tal cual. */
 function ensureDecoded(
   src: ImageSource
-): Promise<HTMLImageElement | HTMLCanvasElement> {
+): Promise<HTMLImageElement | HTMLCanvasElement | ImageBitmap> {
   return typeof src === "string" ? loadImage(src) : Promise.resolve(src);
 }
 
-function sourceWidth(el: HTMLImageElement | HTMLCanvasElement): number {
+function sourceWidth(el: HTMLImageElement | HTMLCanvasElement | ImageBitmap): number {
   return el instanceof HTMLImageElement ? el.naturalWidth || el.width : el.width;
 }
 
-function sourceHeight(el: HTMLImageElement | HTMLCanvasElement): number {
+function sourceHeight(el: HTMLImageElement | HTMLCanvasElement | ImageBitmap): number {
   return el instanceof HTMLImageElement ? el.naturalHeight || el.height : el.height;
 }
 
