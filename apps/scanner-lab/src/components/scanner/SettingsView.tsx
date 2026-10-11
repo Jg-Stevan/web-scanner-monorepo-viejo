@@ -92,6 +92,7 @@ const SETTINGS_SECTIONS: { id: string; label: string }[] = [
   { id: "ajustes-exportacion", label: "Exportación" },
   { id: "ajustes-almacenamiento", label: "Almacenamiento" },
   { id: "ajustes-dispositivo", label: "Dispositivo" },
+  { id: "ajustes-atajos", label: "Atajos" },
   { id: "ajustes-acerca", label: "Acerca de" },
 ];
 
@@ -665,12 +666,14 @@ export default function SettingsView() {
             ⛔ No altera captura ni análisis (invariante de la spec v13). */}
         <DeviceSection />
 
-        <SettingsGroup label="Acerca de" id="ajustes-acerca" delay={0.2}>
-          <SettingsRow title="Versión">
-            <span className="shrink-0 text-[15px] text-[#8e8e93]">2.0.0</span>
-          </SettingsRow>
-          <div className="border-t border-[#f2f2f7] dark:border-[#38383a] px-4 py-3">
-            <p className="text-[15px] text-[#1c1c1e] dark:text-white">Atajos de teclado</p>
+        {/* v13-post-31 — Atajos y gestos: sección PROPIA (antes anidados al
+            fondo de «Acerca de» — la documentación útil más consultada era
+            también la más escondida; con el raíl de v13-post-30 pasa a ser
+            destino de primer nivel con chip «Atajos»). Teclado primero: es
+            la referencia que se busca con la app abierta en el escritorio. */}
+        <SettingsGroup label="Atajos y gestos" id="ajustes-atajos" delay={0.18}>
+          <div className="px-4 py-3">
+            <p className="text-[15px] text-[#1c1c1e] dark:text-white">Teclado</p>
             <div className="mt-2 flex flex-col gap-1.5">
               {SHORTCUTS.map((s) => (
                 <div key={s.action} className="flex items-center justify-between gap-3">
@@ -707,6 +710,12 @@ export default function SettingsView() {
               ))}
             </div>
           </div>
+        </SettingsGroup>
+
+        <SettingsGroup label="Acerca de" id="ajustes-acerca" delay={0.2}>
+          <SettingsRow title="Versión">
+            <span className="shrink-0 text-[15px] text-[#8e8e93]">2.0.0</span>
+          </SettingsRow>
           <div className="flex min-h-[44px] items-center border-t border-[#f2f2f7] dark:border-[#38383a] px-4 py-3">
             <p className="text-[15px] text-[#8e8e93]">Hecho con precisión</p>
           </div>
