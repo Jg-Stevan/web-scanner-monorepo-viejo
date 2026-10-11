@@ -169,9 +169,13 @@ export function ReviewView() {
   // D2/D3 Rev. 2 (SPEC-rediseno-chrome-3-estados): «---» = fallback SOLO
   // cuando el sistema NO logra identificar (veto del dueño: «solo si el
   // sistema no puede llegar identificar… mejor prevenir») — con
-  // clasificación (cualquier nivel) los datos son REALES en cualquier
-  // estado. UN solo predicado compartido por banner (D2) + chips (D3).
-  const hayClasificacion = Boolean(acta.clasificacion);
+  // clasificación resuelta (AUTO/SUGERIDA) los datos son REALES en
+  // cualquier estado. UN solo predicado compartido por banner (D2) + chips (D3).
+  // AC4 (resolución M17-4, defecto 2 del QA): nivel MANUAL = nada resuelto
+  // por el clasificador → cuenta como NO identificada (banner CLASIFICACIÓN
+  // PENDIENTE + chips fallback); RECHAZADA lleva clasificacion:null (ídem).
+  const hayClasificacion =
+    acta.clasificacion != null && acta.clasificacion.nivel !== "MANUAL";
   // D3: tono del chip 1 por estado — identidad visual del mock, dato aparte.
   const toneEstado =
     status === "RECHAZADA"

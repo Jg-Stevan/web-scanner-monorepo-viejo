@@ -241,6 +241,8 @@
 
 **Verificado:** `bun run lint:e14` EXIT=0 · `bun run e14:check` EXIT=0 · build estático `BUILD_STATIC=1` EXIT=0 (3/3 páginas) · diff limitado a los 6 archivos permitidos (TopBar/ReviewView/primitives/icons/store/CHANGES.md) · `git diff main...HEAD --numstat -- lib/e14/store.ts` = 25 adiciones 0 eliminaciones · `rg "Breadcrumb|detalleUbicacion|CONFIRMAR Y ENVIAR|SEGUIR ESCANEANDO MESA|E-14</span>"` en componentes = **0** («ACTA NO RECONOCIDA» sobrevive SOLO en 2 literales preexistentes PROHIBIDOS de tocar por §11: el título del toast de RECHAZADA de `store.ts` y un comentario de `scanner-core-bridge.ts`) · `rg "escalarRevisionHumana"` = interfaz + acción + selector + 2 usos (ReviewCtas) · `rg "enviarActa"` conserva auto + OPTIMA.
 
+**Post-QA (M17-4, defecto 2 — AC4):** el predicado compartido `hayClasificacion` de ReviewView pasa de `Boolean(acta.clasificacion)` a exigir además `nivel !== "MANUAL"` — el gate adjunta SIEMPRE el objeto clasificación en EN_RH y nivel MANUAL = nada resuelto por el clasificador → cuenta como NO identificada (banner «CLASIFICACIÓN PENDIENTE» ámbar + chips `[---][MESA ---][PÁG - DE -]`); AUTO/SUGERIDA (incl. escalada desde ADVERTENCIA con AUTO) y RECHAZADA (`clasificacion:null`) sin cambio. AC4 (del spec) gana sobre el literal D2/D3.
+
 ---
 
 ## Resumen de commits
