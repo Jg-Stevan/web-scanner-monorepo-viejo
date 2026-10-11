@@ -1451,11 +1451,17 @@ export default function LibraryView() {
           <form onSubmit={submitRename} className="flex flex-col gap-4">
             <Input
               autoFocus
+              /* v13-post-12 — patrón iOS Archivos: al renombrar, el nombre
+               *  existente queda SELECCIONADO al abrir (escribir reemplaza;
+               * una pulsación en el texto coloca el cursor para editar fino). */
+              onFocus={(e) => e.currentTarget.select()}
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               placeholder="Nombre del documento"
               aria-label="Nombre del documento"
               maxLength={60}
+              /* Teclado móvil: Enter = confirmar (en vez de «return» genérico). */
+              enterKeyHint="done"
               className="h-11 rounded-xl text-[15px]"
             />
             <DialogFooter className="flex-row gap-2">

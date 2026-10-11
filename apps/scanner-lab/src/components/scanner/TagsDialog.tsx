@@ -291,6 +291,9 @@ export function TagsDialog({
             maxLength={MAX_TAG_LEN}
             placeholder="Nueva etiqueta…"
             aria-label="Nueva etiqueta"
+            /* v13-post-12 — teclado móvil: Enter = añadir (en vez de
+               «return» genérico que confunde en campos de un solo valor). */
+            enterKeyHint="done"
             className="h-10 flex-1 rounded-xl border-[#e5e5ea] bg-[#f2f2f7] dark:border-[#3a3a3c] dark:bg-[#2c2c2e] dark:text-white text-[14px]"
           />
           <button
