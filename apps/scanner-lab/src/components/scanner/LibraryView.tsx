@@ -1086,13 +1086,25 @@ export default function LibraryView() {
               aria-pressed={active}
               onClick={() => setSort(chip.id)}
               className={cn(
-                "flex h-8 shrink-0 items-center rounded-full px-4 text-[13px] font-semibold transition-all duration-150 active:scale-95",
+                "relative flex h-8 shrink-0 items-center rounded-full px-4 text-[13px] font-semibold transition-colors duration-150 active:scale-95",
                 active
-                  ? "bg-black text-white dark:bg-white dark:text-black"
-                  : "border border-[#e5e5ea] bg-white text-[#3c3c43] dark:border-[#3a3a3c] dark:bg-[#1c1c1e] dark:text-white active:opacity-70"
+                  ? "text-white dark:text-black"
+                  : "border border-[#e5e5ea] bg-white text-[#3c3c43] hover:border-[#d1d1d6] dark:border-[#3a3a3c] dark:bg-[#1c1c1e] dark:text-white dark:hover:border-[#48484a] active:opacity-70"
               )}
             >
-              {chip.label}
+              {/* v13-post-13 — píldora activa deslizante (patrón segmented
+               *  control de iOS): la misma capa física viaja de chip en chip
+               *  vía layoutId; muelle corto. Con «Reducir movimiento»
+               *  MotionConfig apaga las layout animations (salto seco). */}
+              {active && (
+                <motion.span
+                  layoutId="sort-chip-active"
+                  transition={{ type: "spring", stiffness: 480, damping: 38 }}
+                  className="absolute inset-0 rounded-full bg-black shadow-[0_2px_8px_rgba(0,0,0,0.22)] dark:bg-white dark:shadow-[0_2px_10px_rgba(255,255,255,0.18)]"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="relative z-10">{chip.label}</span>
             </button>
           );
         })}
