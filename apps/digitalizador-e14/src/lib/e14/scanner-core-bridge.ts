@@ -385,7 +385,13 @@ export class RealCoreBridge implements E14Bridge {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
     });
-    const gate = this.evaluarGate(score, texto, clasificacion);
+    const gate = this.evaluarGate(
+      score,
+      texto,
+      clasificacion,
+      opciones.intento,
+      opciones.maxIntentos,
+    );
 
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
@@ -528,7 +534,13 @@ export class RealCoreBridge implements E14Bridge {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
     });
-    const gate = this.evaluarGate(score, texto, clasificacion);
+    const gate = this.evaluarGate(
+      score,
+      texto,
+      clasificacion,
+      acta.intento,
+      acta.maxIntentos,
+    );
 
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
@@ -576,15 +588,16 @@ export class RealCoreBridge implements E14Bridge {
   }
 
   /**
-   * Gate §4.2 REVISADO (SPEC-cabecera-clasificacion §4) — helper ÚNICO para
-   * AMBOS pipelines (escaneo y recorte, §4.4):
+   * Gate §4.2 REVISADO (SPEC-cabecera-clasificacion §4 + §7.2 SPEC-rediseno-
+   * revision) — helper ÚNICO para AMBOS pipelines (escaneo y recorte, §4.4):
    *  1. RECHAZADA SOLO por CALIDAD (score < 6.5 vía statusDeScore, §4.1) —
-   *     la tarjeta «ACTA NO RECONOCIDA» queda reservada a este caso.
+   *     la tarjeta «ACTA NO RECONOCIDA» queda reservada a este caso. Al
+   *     AGOTAR intentos la contingencia es AUTOMÁTICA (C4, sin botón manual).
    *  2. Calidad suficiente + clasificación AUTO → status por score (OPTIMA/
    *     ADVERTENCIA) como hoy + clasificación persistida (Fase B al envío).
    *  3. Calidad suficiente + SUGERIDA/MANUAL (incluye OCR sin texto, §4.3) →
-   *     EN_REVISION_HUMANA con el panel de corrección (§5) precargado con
-   *     la sugerencia. PROHIBIDO RECHAZADA por cabecera (§4.2).
+   *     EN_REVISION_HUMANA: la pantalla distingue por intento (§7.3 — «repetir-
+   *     primero» antes de agotar; contingencia con panel al agotar).
    * PATRON_CABECERA ya NO decide el estado (§4.5) — solo traza en el log.
    * §X (SPEC-score-legible): la clasificación llega calculada desde el
    * pipeline — alimenta el score (piso por identificación).
@@ -593,16 +606,29 @@ export class RealCoreBridge implements E14Bridge {
     score: number,
     ocrTexto: string,
     clasificacion: ClasificacionE14,
+    intento: number,
+    maxIntentos: number,
   ): ResultadoGate {
     if (score >= 6.5) {
       if (clasificacion.nivel === "AUTO") {
         return { status: statusDeScore(score), rechazo: null, clasificacion };
       }
+      // SUGERIDA/MANUAL: la CONTINGENCIA (panel) llega SOLO al agotar intentos;
+      // antes, el acta viaja como EN_REVISION_HUMANA «repetir-primero» (§7.3 —
+      // la pantalla distingue por intento; el estado no cambia).
       return { status: "EN_REVISION_HUMANA", rechazo: null, clasificacion };
     }
-    // RECHAZADA por CALIDAD — la única (§4.1). Tipo como hoy (AC4 «igual que
-    // hoy»): sin texto válido → ILEGIBLE (tarjeta ACTA NO RECONOCIDA);
-    // con texto → GENERICO (pill de score insuficiente).
+    // score < 6.5 — rechazo por CALIDAD. Al AGOTAR intentos: contingencia
+    // automática (C4) — el sistema escala solo, sin botón manual.
+    if (intento >= maxIntentos) {
+      return {
+        status: "EN_REVISION_HUMANA",
+        rechazo: ocrTextIsValid(ocrTexto)
+          ? { tipo: "GENERICO", detalle: DETALLE_GENERICO }
+          : { tipo: "ILEGIBLE", detalle: DETALLE_ILEGIBLE },
+        clasificacion: null,
+      };
+    }
     return {
       status: "RECHAZADA",
       rechazo: ocrTextIsValid(ocrTexto)

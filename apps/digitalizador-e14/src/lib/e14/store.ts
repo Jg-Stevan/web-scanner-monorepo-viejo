@@ -70,11 +70,14 @@ interface E14Store {
   /** Toast flotante genérico (L2: aviso CÁMARA→L3 del chip de fuente; L3 lo reusa para permisos). */
   notificar: (tone: Notificacion["tone"], titulo: string, descripcion?: string) => void;
   alternarConexion: () => void;
+  /** §7 (SPEC-rediseno-revision): sin `intento` explícito, una captura
+   *  CONTINÚA el ciclo de repetición si el acta previa sigue sin resolver
+   *  (RECHAZADA o EN_REVISION_HUMANA «repetir-primero») — el contador cuenta
+   *  CAPTURAS; ciclo nuevo (ENVIADA/OPTIMA/ADVERTENCIA/agotada) → 1. */
   dispararEscaneo: (intento?: number) => Promise<void>;
   analisisCompletado: () => void;
   enviarActa: () => void;
   repetirFoto: () => void;
-  enviarRevisionHumana: () => void;
   /**
    * Panel de corrección (SPEC-cabecera-clasificacion §5): persiste la
    * ubicación corregida por el operador como nivel AUTO-manual, archiva su
@@ -325,8 +328,21 @@ export const useE14Store = create<E14Store>((set, get) => {
       }
     },
 
-    dispararEscaneo: async (intento = 1) => {
-      const { mesas, fuente, archivoPendiente, framePendiente } = get();
+    dispararEscaneo: async (intentoParam?) => {
+      const { mesas, fuente, archivoPendiente, framePendiente, actaActual: previa } = get();
+      // §7 (SPEC-rediseno-revision): el conteo cuenta CAPTURAS del ciclo de
+      // repetición. Una captura SIN intento explícito (importar/disparo del
+      // scanner) continúa el ciclo si el acta previa sigue sin resolver
+      // (RECHAZADA, o EN_REVISION_HUMANA «repetir-primero» antes de agotar);
+      // ciclo nuevo (ENVIADA/OPTIMA/ADVERTENCIA/contingencia agotada) → 1.
+      // REPETIR FOTO (repetirFoto) siempre pasa el intento explícito +1.
+      const intento =
+        intentoParam ??
+        (previa &&
+        (previa.status === "RECHAZADA" ||
+          (previa.status === "EN_REVISION_HUMANA" && previa.intento < previa.maxIntentos))
+          ? previa.intento + 1
+          : 1);
       // L2: en fuente ARCHIVO el disparo necesita imagen (REPETIR FOTO vuelve
       // al picker en vez de reventar el pipeline sin archivo).
       if (fuente === "ARCHIVO" && !archivoPendiente) {
@@ -353,7 +369,7 @@ export const useE14Store = create<E14Store>((set, get) => {
         const acta = await bridge.escanearActa({
           objetivo,
           intento,
-          maxIntentos: 2,
+          maxIntentos: 4,
           fuente,
           archivo: archivoPendiente ?? undefined,
           frameActual: fuente === "CAMARA" ? framePendiente : undefined,
@@ -366,6 +382,24 @@ export const useE14Store = create<E14Store>((set, get) => {
           analisisResuelto: true,
           archivoPendiente: null,
         });
+        // D7 (SPEC-rediseno-revision §7.5): contingencia automática al
+        // AGOTAR intentos — el sistema escala solo (C4), sin botón manual:
+        // fila de historial + toast. Con intento < max NO hay historial ni
+        // toast (aún es «repetir-primero»).
+        if (acta.status === "EN_REVISION_HUMANA" && intento >= acta.maxIntentos) {
+          const fila: HistorialRow = {
+            id: `h-${Date.now()}`,
+            titulo: tituloPaginaActual(),
+            estado: "REVISION_HUMANA",
+            hora: bridge.horaHistorial(),
+          };
+          set({ historial: [fila, ...get().historial] });
+          notificar(
+            "warn",
+            "ENVIADA A CONTINGENCIA",
+            "Tras el máximo de repeticiones, un auditor validará esta acta.",
+          );
+        }
       } catch {
         // Manejo de error del pipeline (§7 store): nunca quedar en analizando.
         notificar("crit", "ERROR DE PROCESADO", "No se pudo analizar la imagen.");
@@ -441,22 +475,6 @@ export const useE14Store = create<E14Store>((set, get) => {
       const { actaActual } = get();
       const intento = (actaActual?.intento ?? 0) + 1;
       void get().dispararEscaneo(intento);
-    },
-
-    enviarRevisionHumana: () => {
-      const { actaActual } = get();
-      if (!actaActual) return;
-      const fila: HistorialRow = {
-        id: `h-${Date.now()}`,
-        titulo: tituloPaginaActual(),
-        estado: "REVISION_HUMANA",
-        hora: bridge.horaHistorial(),
-      };
-      set({
-        actaActual: { ...actaActual, status: "EN_REVISION_HUMANA" },
-        historial: [fila, ...get().historial],
-      });
-      notificar("warn", "ENVIADA A REVISIÓN HUMANA", "Un auditor validará esta acta.");
     },
 
     guardarUbicacion: (clasificacion) => {

@@ -105,6 +105,26 @@
 
 ---
 
+## 0-sexto. E14 — Rediseño REVISIÓN (ADVERTENCIA) + automatización del flujo de rechazos (rama `feat/e14-rediseno-revision`)
+
+**Base:** `main` en `55a35f8` (PR #17 mergeado — score 10/10 activo). SPEC: `SPEC-e14-rediseno-revision-automatizada.md` (subida por el dueño). Petición literal: «cambiemos el diseño por este [mock ADVERTENCIA] · no envies una captura directamente a revisión humana si tiene un score bajo, pedir que se repita · la idea es automatizar la mayor parte del trabajo · solo me manda a contingencia cuando se repite la foto más de 3 veces».
+
+**Cambios (6 archivos: TopBar / ReviewView / BottomNav / store / scanner-core-bridge §7.2 / types comentarios §7.1):**
+
+- **D1 TopBar dinámica:** título por estado `[● ⚠ 7.8/10 ADVERTENCIA · ROMA CONSULADO]` — score real + palabra por estado (ADVERTENCIA=«ADVERTENCIA» ámbar, enmienda sobre el «MODERADA» de Rev. 1) + título truncado + fallback «REVISIÓN DE ACTA»; pill de conexión intacta.
+- **D2:** TarjetaRica de ADVERTENCIA ELIMINADA — la info se redistribuye: score+palabra → TopBar, ubicación → breadcrumb, tipo/MESA/PÁG → chips, razón → banner.
+- **D3 chips:** `[TRANSMISIÓN][MESA 001][PÁG 1 DE 2]` (tipo real con acento, MESA canónica sin re-formatear). **D4 banner:** «REVISIÓN REQUERIDA (LEVE DESFOQUE|CONTRASTE|LUMINOSIDAD)» — razón display-only por métrica más baja, gate intacto.
+- **D5 toolbar de 3 (solo ADVERTENCIA):** Recortar · Rotar 90° · Pantalla completa (Filtros y Texto salen del mock — los sheets siguen para RECHAZADA/OPTIMA). **D6 CTAs en pila:** verde «✓ CONFIRMAR Y ENVIAR DE TODOS MODOS» (h-13) + outline «REPETIR CAPTURA (FOTO MÁS NÍTIDA)».
+- **§7 FLUJO AUTOMATIZADO — maxIntentos 2→4:** SUGERIDA/MANUAL con calidad OK → «repetir-primero» (banner «CLASIFICACIÓN PENDIENTE» + REPETIR CAPTURA, panel OCULTO) hasta agotar; al agotar → CONTINGENCIA (panel + toast «ENVIADA A CONTINGENCIA» + fila historial + VOLVER AL ESCÁNER). score <6.5 → RECHAZADA con SOLO «OBLIGATORIO REPETIR FOTO (INTENTO X DE 4)» (botón manual «⚠ ENVIAR A REVISIÓN HUMANA» ELIMINADO — prohibición 4) y contingencia automática (C4) al intento 4. `evaluarGate` firma nueva con (intento, maxIntentos) en ambos pipelines; el recorte NO consume intento (intacto). El conteo cuenta CAPTURAS: una captura sin intento explícito continúa el ciclo si el acta previa sigue sin resolver (importar/disparo) — AC3/AC4 alcanzables re-importando.
+- **D8 badge ACTAS:** pill roja con las contingencias del turno (historial REVISION_HUMANA), oculta en 0, `aria-label="Contingencias pendientes"`.
+- **§7.6 higiene:** acción huérfana `enviarRevisionHumana` ELIMINADA (store + interfaz) — `rg` → 0 resultados.
+
+**Intactos:** gate AUTO (OPTIMA 10/10 auto-enviada), tarjeta ILEGIBLE, pill GENERICO, panel de corrección, QuadEditor, recorte-rescate, rotación, OCR, transmisión, historial de envíos, ADVERTENCIA nunca auto-escala.
+
+**Verificado:** `bun run lint` 0 · `bunx tsc --noEmit` 0 · build estático 0 · `git diff main...HEAD -- apps/scanner-lab packages` VACÍO · QA navegador 390×844 (AC1-AC8 del SPEC) · cero errores de consola.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |

@@ -4,6 +4,12 @@
  * REVISIÓN (§7.4–§7.5) — documento + banner por estado + CTAs.
  * Estados: ENVIADA · ADVERTENCIA · RECHAZADA (ILEGIBLE rica / GENERICO pill)
  * · EN_REVISION_HUMANA.
+ * SPEC-rediseno-revision-automatizada (D1–D6 + §7): ADVERTENCIA remodelada
+ * al mock — TarjetaRica ELIMINADA (info redistribuida: TopBar D1 + breadcrumb
+ * + chips D3 + banner D4), toolbar de 3 (D5, sin Filtros/Texto) y CTAs en
+ * PILA «CONFIRMAR Y ENVIAR DE TODOS MODOS» + «REPETIR CAPTURA» (D6). El flujo
+ * AUTOMATIZA los rechazos: repetir primero, contingencia SOLO al agotar los
+ * 4 intentos (§7 — banner partido por intento, botón manual fuera).
  * UX-REAL F1/F3 (SPEC-ux-real-bn-editor, D35–D37): el visor es ÚNICO y es la
  * FOTO REAL del core (el papel sintético/ActaDocument se retiró — petición
  * del dueño: «no la quiero volver a ver»). VER FOTO dejó de existir: la foto
@@ -280,8 +286,13 @@ export function ReviewView() {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* Breadcrumb bajo el header (solo cuando el banner NO lo incluye) */}
-      {status === "ENVIADA" || status === "EN_REVISION_HUMANA" || acta.rechazo?.tipo === "GENERICO" ? (
+      {/* Breadcrumb bajo el header — D2 (SPEC-rediseno-revision): la
+          ubicación de ADVERTENCIA se redistribuye aquí (la TarjetaRica salió);
+          el resto de estados que ya lo mostraban siguen intactos. */}
+      {status === "ENVIADA" ||
+      status === "ADVERTENCIA" ||
+      status === "EN_REVISION_HUMANA" ||
+      acta.rechazo?.tipo === "GENERICO" ? (
         <Breadcrumb
           mesa={mesa}
           tipo={tipo}
@@ -324,37 +335,11 @@ export function ReviewView() {
             </Pill>
           )}
 
-          {status === "ADVERTENCIA" && (
-            <TarjetaRica
-              tone="warn"
-              titulo={acta.titulo}
-              badge={
-                <ScoreBadge tone="warn">
-                  <span>⚠️</span>
-                  <span>
-                    {acta.score.toFixed(1)}/10 MODERADA
-                  </span>
-                </ScoreBadge>
-              }
-              detalle={detalleUbicacion}
-              chips={
-                <>
-                  <Chip tone="warn" solid>
-                    {tipo}
-                  </Chip>
-                  <Chip tone="neutral">
-                    PÁG {paginaIdx} DE {paginaTotal}
-                  </Chip>
-                </>
-              }
-              nota={
-                <span className="flex items-center gap-1 text-warn font-medium shrink-0">
-                  <span>⚠️</span>
-                  <span className="font-bold tracking-tight">REVISIÓN REQUERIDA (CONTRASTE)</span>
-                </span>
-              }
-            />
-          )}
+          {/* D2 (SPEC-rediseno-revision): la TarjetaRica de ADVERTENCIA se
+              ELIMINÓ completa — su información se redistribuye: score+palabra
+              → TopBar (D1), ubicación → breadcrumb (arriba), tipo/MESA/PÁG →
+              chips (D3), razón → banner (D4). Las TarjetaRica de
+              RECHAZADA-ILEGIBLE y las pills GENERICO/OPTIMA NO se tocan. */}
 
           {status === "RECHAZADA" && acta.rechazo?.tipo === "ILEGIBLE" && (
             <TarjetaRica
@@ -397,19 +382,36 @@ export function ReviewView() {
             </Pill>
           )}
 
-          {status === "EN_REVISION_HUMANA" && (
-            <div className="pointer-events-auto rounded-xl bg-warn-ink/95 backdrop-blur-xl border border-warn/40 ring-1 ring-warn/25 px-3.5 py-2.5 shadow-2xl shadow-black/80 max-w-md w-full mx-4 flex items-center gap-2.5">
-              <WarnTriangleIcon className="w-4 h-4 text-warn shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
-                  ENVIADA A REVISIÓN HUMANA
-                </span>
-                <span className="text-[10px] text-ink-dim font-mono">
-                  Un auditor validará esta acta
-                </span>
+          {status === "EN_REVISION_HUMANA" &&
+            (acta.intento < acta.maxIntentos ? (
+              // §7.3 (SPEC-rediseno-revision) PEDIR REPETIR — SUGERIDA/MANUAL
+              // con calidad OK ANTES de agotar intentos: banner warn «repetir-
+              // primero», SIN panel (mismo estilo del bloque de contingencia).
+              <div className="pointer-events-auto rounded-xl bg-warn-ink/95 backdrop-blur-xl border border-warn/40 ring-1 ring-warn/25 px-3.5 py-2.5 shadow-2xl shadow-black/80 max-w-md w-full mx-4 flex items-center gap-2.5">
+                <WarnTriangleIcon className="w-4 h-4 text-warn shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
+                    CLASIFICACIÓN PENDIENTE
+                  </span>
+                  <span className="text-[10px] text-ink-dim font-mono">
+                    Repita la foto para clasificarla automáticamente · INTENTO {acta.intento} DE {acta.maxIntentos}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
+            ) : (
+              // §7.3 CONTINGENCIA (intento ≥ max): hoy exacto.
+              <div className="pointer-events-auto rounded-xl bg-warn-ink/95 backdrop-blur-xl border border-warn/40 ring-1 ring-warn/25 px-3.5 py-2.5 shadow-2xl shadow-black/80 max-w-md w-full mx-4 flex items-center gap-2.5">
+                <WarnTriangleIcon className="w-4 h-4 text-warn shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
+                    ENVIADA A REVISIÓN HUMANA
+                  </span>
+                  <span className="text-[10px] text-ink-dim font-mono">
+                    Un auditor validará esta acta
+                  </span>
+                </div>
+              </div>
+            ))}
         </div>
 
         {/* Visor con brackets — F3: la FOTO REAL es el visor ÚNICO (el papel
@@ -465,16 +467,34 @@ export function ReviewView() {
           </div>
         )}
 
-        {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor, shrink-0,
-            alto CONSTANTE, anclada al borde inferior (justo encima de los
-            CTAs/BottomNav que renderiza page.tsx). Al girar el documento
-            RETRATO↔APAISADO la tarjeta absorbe el cambio (flex-1) — la barra
-            NO se mueve ni un píxel. F2 (§F2.2): FILTROS → grid-cols-4.
-            F-OCR (§F1, D39): TEXTO en 4ª posición (orden del lab L2200-2216:
-            … Filtros · Texto · …) → grid-cols-5. */}
-        {(status === "ADVERTENCIA" ||
-          status === "RECHAZADA" ||
-          (status === "OPTIMA" && esReal)) && (
+        {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor,
+            shrink-0, alto CONSTANTE, anclada al borde inferior (justo
+            encima de los CTAs/BottomNav que renderiza page.tsx). D5
+            (SPEC-rediseno-revision): ADVERTENCIA pasa a toolbar de 3
+            (Recortar · Rotar 90° · Pantalla completa — Filtros y Texto
+            SALEN del mock; los sheets quedan para RECHAZADA/OPTIMA).
+            RECHAZADA y OPTIMA-real: grid-cols-5 intocado (el recorte es la
+            vía de rescate F4/D37). */}
+        {status === "ADVERTENCIA" && (
+          <div className="w-full grid grid-cols-3 gap-2 pt-2 shrink-0 z-20">
+            <ToolbarBtn
+              icon={<CropIcon />}
+              label="Recortar"
+              onClick={esReal && acta.fotoOriginal ? () => setEditando(true) : undefined}
+            />
+            <ToolbarBtn
+              icon={<RotateIcon />}
+              label="Rotar 90°"
+              onClick={esReal ? () => void rotarFoto() : undefined}
+            />
+            <ToolbarBtn
+              icon={<FullscreenIcon />}
+              label="Pantalla completa"
+              onClick={esReal && acta.fotoProcesada ? () => setVisorAbierto(true) : undefined}
+            />
+          </div>
+        )}
+        {(status === "RECHAZADA" || (status === "OPTIMA" && esReal)) && (
           <div className="w-full grid grid-cols-5 gap-2 pt-2 shrink-0 z-20">
             <ToolbarBtn
               icon={<CropIcon />}
@@ -517,14 +537,54 @@ export function ReviewView() {
             />
           </div>
         )}
+
+        {/* D3 (SPEC-rediseno-revision §3): fila de chips bajo la tarjeta
+            (SOLO ADVERTENCIA) — tipo real con acento, MESA canónica de 3
+            dígitos (acta.ubicacion.mesa, NO se re-formatea) y página. */}
+        {status === "ADVERTENCIA" && (
+          <div className="w-full max-w-sm flex items-center justify-center flex-wrap gap-2 pt-2">
+            <Chip tone="ok">{tipo}</Chip>
+            <Chip tone="neutral">MESA {acta.ubicacion.mesa}</Chip>
+            <Chip tone="neutral">PÁG {paginaIdx} DE {paginaTotal}</Chip>
+          </div>
+        )}
+
+        {/* D4: razón display-only derivada de las métricas — el gate NO se
+            toca. La métrica MÁS BAJA define la razón (el mock muestra LEVE
+            DESFOQUE = caso sharpness). Sin métricas → banner sin paréntesis. */}
+        {status === "ADVERTENCIA" &&
+          (() => {
+            const m = acta.metricas;
+            const razon = !m
+              ? null
+              : m.sharpness <= m.contrast && m.sharpness <= m.brightness
+                ? "LEVE DESFOQUE"
+                : m.contrast <= m.brightness
+                  ? "CONTRASTE"
+                  : "LUMINOSIDAD";
+            return (
+              <div
+                className="w-full max-w-sm flex items-center justify-center gap-1.5 pt-2"
+                data-testid="banner-revision"
+              >
+                <WarnTriangleIcon className="w-3.5 h-3.5 text-warn shrink-0" />
+                <span className="font-data text-[10px] font-bold tracking-wide text-warn uppercase">
+                  REVISIÓN REQUERIDA{razon ? ` (${razon})` : ""}
+                </span>
+              </div>
+            );
+          })()}
       </main>
 
       {/* ── PANEL DE CORRECCIÓN §5 (SPEC-cabecera-clasificacion): SOLO cuando
           el acta está EN_REVISION_HUMANA con clasificación PENDIENTE (§4.2:
-          calidad OK pero cabecera SUGERIDA/MANUAL — la foto era buena). El
-          camino C4 (RECHAZADA → revisión humana) no lleva clasificación → el
+          calidad OK pero cabecera SUGERIDA/MANUAL — la foto era buena). §7.3
+          (SPEC-rediseno-revision): además SOLO al AGOTAR intentos — antes es
+          «repetir-primero» (banner + REPETIR CAPTURA), el panel espera. El
+          camino C4 (RECHAZADA → contingencia) no lleva clasificación → el
           panel no aparece. Encima de las acciones actuales, sin quitar nada. */}
       {status === "EN_REVISION_HUMANA" &&
+        acta.intento >= acta.maxIntentos &&
         acta.clasificacion &&
         acta.clasificacion.nivel !== "AUTO" && <PanelClasificacion />}
 
@@ -742,7 +802,6 @@ export function ReviewCtas() {
   const navegar = useE14Store((s) => s.navegar);
   const enviarActa = useE14Store((s) => s.enviarActa);
   const repetirFoto = useE14Store((s) => s.repetirFoto);
-  const enviarRevisionHumana = useE14Store((s) => s.enviarRevisionHumana);
   const exportarPdfActa = useE14Store((s) => s.exportarPdfActa);
 
   if (!acta) return null;
@@ -798,48 +857,64 @@ export function ReviewCtas() {
   }
 
   if (status === "ADVERTENCIA") {
+    // D6 (SPEC-rediseno-revision §6): PILA — verde primario «CONFIRMAR Y
+    // ENVIAR DE TODOS MODOS» (h-13 = 52px, Tailwind 4 dinámico) + outline
+    // «REPETIR CAPTURA (FOTO MÁS NÍTIDA)». Semántica intacta: enviarActa
+    // (envío con advertencia, historial «ENVIADO CON ADVERTENCIA»).
     return (
-      <div className="flex flex-row items-center gap-2 w-full">
-        <PrimaryBtn variant="warn" onClick={enviarActa}>
-          <span>⚠ ENVIAR A TRANSMISIÓN</span>
-        </PrimaryBtn>
+      <div className="flex flex-col gap-2 w-full">
+        <button
+          type="button"
+          onClick={enviarActa}
+          className="w-full h-13 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98]"
+        >
+          <span>✓ CONFIRMAR Y ENVIAR DE TODOS MODOS</span>
+        </button>
         <PrimaryBtn variant="outline" onClick={repetirFoto}>
-          <span>REPETIR</span>
+          <RefreshIcon className="w-4 h-4" />
+          <span>REPETIR CAPTURA (FOTO MÁS NÍTIDA)</span>
         </PrimaryBtn>
       </div>
     );
   }
 
   if (status === "RECHAZADA") {
+    // §7.4 (SPEC-rediseno-revision): RECHAZADA automatizada — SOLO repetir
+    // (el botón manual «⚠ ENVIAR A REVISIÓN HUMANA» se ELIMINÓ: la escalación
+    // es automática al agotar intentos, §7.2/§7.5). El maxIntentos imprime
+    // «DE 4». La tarjeta ILEGIBLE y la pill GENERICO no se tocan.
     return (
-      <div className="flex items-center gap-2 w-full">
-        <PrimaryBtn
-          variant="crit"
-          onClick={repetirFoto}
-          icon={<RefreshIcon className="w-3.5 h-3.5" />}
-        >
-          <span>
-            OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})
-          </span>
-        </PrimaryBtn>
-        <PrimaryBtn
-          variant="outline-crit"
-          onClick={enviarRevisionHumana}
-          icon={<WarnTriangleIcon className="w-3.5 h-3.5 text-crit" />}
-        >
-          <span>⚠ ENVIAR A REVISIÓN HUMANA</span>
-        </PrimaryBtn>
-      </div>
+      <PrimaryBtn
+        variant="crit"
+        onClick={repetirFoto}
+        icon={<RefreshIcon className="w-3.5 h-3.5" />}
+      >
+        <span>
+          OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})
+        </span>
+      </PrimaryBtn>
     );
   }
 
   if (status === "EN_REVISION_HUMANA") {
-    return (
-      <div className="flex items-center gap-2 w-full">
-        <PrimaryBtn variant="outline" onClick={() => navegar("escanear")}>
-          <span>VOLVER AL ESCÁNER</span>
+    // §7.3 (SPEC-rediseno-revision): la pantalla parte por intento —
+    // «repetir-primero» (intento < max): REPETIR CAPTURA; contingencia
+    // (intento ≥ max): VOLVER AL ESCÁNER (hoy exacto).
+    if (acta.intento < acta.maxIntentos) {
+      return (
+        <PrimaryBtn
+          variant="outline"
+          onClick={repetirFoto}
+          icon={<RefreshIcon className="w-3.5 h-3.5" />}
+        >
+          <span>REPETIR CAPTURA (FOTO MÁS NÍTIDA)</span>
         </PrimaryBtn>
-      </div>
+      );
+    }
+    return (
+      <PrimaryBtn variant="outline" onClick={() => navegar("escanear")}>
+        <span>VOLVER AL ESCÁNER</span>
+      </PrimaryBtn>
     );
   }
 

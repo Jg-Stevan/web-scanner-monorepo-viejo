@@ -6,6 +6,8 @@
  *    + borde) con icono verde — pie negro translúcido + slot de CTA encima.
  *  · modo "app" (ACTAS/RESUMEN): bloque verde sólido con icono oscuro y
  *    borde superior verde — pie surface-container-lowest (como el zip).
+ * D8 (SPEC-rediseno-revision §8): badge rojo (bg-crit) en ACTAS con las
+ * contingencias del turno (historial REVISION_HUMANA) — oculto en 0.
  */
 import type { ReactNode } from "react";
 import { useE14Store, type Vista } from "@/lib/e14/store";
@@ -17,10 +19,26 @@ const ITEMS: { vista: Vista; label: string; Icon: typeof CameraNavIcon }[] = [
   { vista: "resumen", label: "RESUMEN", Icon: GridNavIcon },
 ];
 
+/** D8: pill roja de contingencias pendientes del turno (oculta en 0). */
+function BadgeContingencias({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return (
+    <span
+      aria-label="Contingencias pendientes"
+      className="absolute -top-1 -right-2 h-4 min-w-4 px-1 rounded-full bg-crit text-[9px] font-bold text-white flex items-center justify-center"
+    >
+      {n}
+    </span>
+  );
+}
+
 export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; children?: ReactNode }) {
   const vista = useE14Store((s) => s.vista);
   const navegar = useE14Store((s) => s.navegar);
   const actasSesion = useE14Store((s) => s.actasSesion);
+  const contingencias = useE14Store(
+    (s) => s.historial.filter((f) => f.estado === "REVISION_HUMANA").length,
+  );
 
   if (mode === "dark") {
     return (
@@ -36,7 +54,7 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
                   type="button"
                   onClick={() => navegar(v)}
                   aria-current={activo ? "page" : undefined}
-                  className="flex flex-col items-center py-1 group"
+                  className="relative flex flex-col items-center py-1 group"
                 >
                   <div
                     className={`w-10 h-7 rounded-lg flex items-center justify-center mb-0.5 transition-colors ${
@@ -54,6 +72,7 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
                   >
                     {v === "actas" ? `Actas (${actasSesion})` : label}
                   </span>
+                  {v === "actas" && <BadgeContingencias n={contingencias} />}
                 </button>
               );
             })}
@@ -75,7 +94,7 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
               type="button"
               onClick={() => navegar(v)}
               aria-current={activo ? "page" : undefined}
-              className={`flex flex-col items-center justify-center h-full w-full transition-colors duration-100 ${
+              className={`relative flex flex-col items-center justify-center h-full w-full transition-colors duration-100 ${
                 activo
                   ? "bg-ok-tint text-ok-ink border-t-2 border-ok-tint -mt-[2px]"
                   : "text-ink-dim hover:bg-surface-5"
@@ -85,6 +104,7 @@ export function BottomNav({ mode = "dark", children }: { mode?: "dark" | "app"; 
               <span className="label-caps mt-1">
                 {v === "actas" ? `ACTAS (${actasSesion})` : label}
               </span>
+              {v === "actas" && <BadgeContingencias n={contingencias} />}
             </button>
           );
         })}
