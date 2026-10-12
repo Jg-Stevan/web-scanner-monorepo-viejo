@@ -488,11 +488,16 @@ interface BurstFrame {
 
 /** FIX v4 4.1 — resultado de UN intento de takePhoto: blob, error y si
  *  expiró por TIMEOUT. Un timeout = sensor colgado → NO se reintenta y se
- *  activa la lista negra temporal (takePhotoBrokenRef). */
+ *  activa la lista negra temporal (takePhotoBrokenRef).
+ *  PERF/burst-budget — `wallCapped`: true si la carrera la ACORTÓ el
+ *  presupuesto global (raceMs < 5000): distingue «timeout orgánico de 5 s"
+ *  (foto rota → camino clásico sin foto) de «corte de muro» (foto lenta →
+ *  el llamador lo reclasifica como time_cap, sin toast engañoso). */
 interface TakePhotoAttempt {
   blob: Blob | null;
   err: unknown;
   timedOut: boolean;
+  wallCapped?: boolean;
 }
 
 /** Laplaciano 3×3 (varianza) + histograma de exposición (under < 30,
@@ -1100,7 +1105,9 @@ export default function CameraView() {
    *  cada disparo. Devuelve el blob y el flag timedOut (el llamador evalúa
    *  la salud del stream tras un timeout — fix 4.3). */
   const takePhotoBlob = useCallback(
-    async (deadlineAt?: number): Promise<{ blob: Blob | null; timedOut: boolean }> => {
+    async (
+      deadlineAt?: number
+    ): Promise<{ blob: Blob | null; timedOut: boolean; wallCapped?: boolean }> => {
     // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
     // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
     // disparo). Fuera de Android/Chrome ni se intenta.
@@ -1151,6 +1158,7 @@ export default function CameraView() {
             blob: null,
             err,
             timedOut: err instanceof Error && err.message.includes("timeout"),
+            wallCapped: raceMs < 5000,
           };
         }
       };
@@ -1173,7 +1181,13 @@ export default function CameraView() {
       // respondió (un takePhoto que vuelve a funcionar vuelve a usarse).
       if (res.blob) takePhotoBrokenRef.current = false;
       else if (res.timedOut) takePhotoBrokenRef.current = true;
-      if (!res.blob) return { blob: null, timedOut: res.timedOut };
+      if (!res.blob) {
+        return {
+          blob: null,
+          timedOut: res.timedOut,
+          ...(res.wallCapped ? { wallCapped: true } : {}),
+        };
+      }
       // Capa 2 — red de seguridad post-decode (solo recorta si el blob
       // excede el tope; si no, el blob original pasa intacto).
       // PERF/burst-budget — con presupuesto, el tope se lee de la CABECERA
@@ -1470,7 +1484,8 @@ export default function CameraView() {
      *  FileReader de la conversión SÍ se aborta de verdad. Cooldown,
      *  estabilidad del shutter y photoSettings: INTACTOS. */
     const canPhoto = canTakePhotoRef.current && !takePhotoBrokenRef.current;
-    let shot: { blob: Blob | null; timedOut: boolean } | null = null;
+    let shot: { blob: Blob | null; timedOut: boolean; wallCapped?: boolean } | null =
+      null;
     let bail: "time_cap" | "stable" | null = null;
     let burstSamples = 0;
     let burstSampleCost: number | null = null;
@@ -1493,8 +1508,9 @@ export default function CameraView() {
         burstSampleCost = w.lastSampleCostMs;
         if (w.settled === "value") {
           shot =
-            (w.value as { blob: Blob | null; timedOut: boolean } | null) ??
-            { blob: null, timedOut: false };
+            (w.value as
+              | { blob: Blob | null; timedOut: boolean; wallCapped?: boolean }
+              | null) ?? { blob: null, timedOut: false };
         } else {
           bail = w.settled;
         }
@@ -1523,6 +1539,21 @@ export default function CameraView() {
 
     const photoBlob = shot?.blob ?? null;
     if (!photoBlob) {
+      // PERF/burst-budget — si la carrera del takePhoto la cortó el MURO
+      // (wallCapped: raceMs < 5000, no un timeout orgánico de 5 s), es un
+      // corte de presupuesto: mismo dispatch de frames PERO con razón
+      // time_cap y SIN el toast «la foto no respondió» (no falló: llegó
+      // tarde). Determinista: gane la carrera interna o el interval del
+      // muro, el resultado es SIEMPRE time_cap.
+      if (burstDeadline !== undefined && shot?.timedOut === true && shot.wallCapped === true) {
+        const cands = [takeZslFallback(), snapA, snapshotVideo()];
+        const n = cands.filter((f): f is BurstFrame => f !== null).length;
+        pendingBurstRef.current = recordBurst("time_cap", n, performance.now() - burstT0, burstExtra);
+        if (!(await dispatchBestFrame(cands))) {
+          pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
+        }
+        return;
+      }
       // FIX v4 4.3 — chequeo post-timeout: un takePhoto colgado puede dejar
       // el track muted/en silencio (readyState "live", sin frames). Si el
       // stream murió, recuperar YA — no disparamos el burst contra un video
