@@ -29,6 +29,19 @@ export interface OpcionesEscaneo {
   fuente: FuenteCaptura;
   archivo?: File; // fuente ARCHIVO (y SIMULACIÓN si el store inyecta el acta incluida)
   frameActual?: HTMLVideoElement | null; // fuente CAMARA
+  /**
+   * §D3 (SPEC-e14-simulacion-scores): true SOLO cuando el disparo viene de un
+   * chip de simulación (store.simularScore). Con `simular` el pipeline corre
+   * NORMAL sobre el asset FIJO de la banda (resuelto por `scoreSimulado`) y
+   * OMITE la verificación de completitud (la acta cortada del dueño es a
+   * propósito — un chip jamás cae INCOMPLETA, AC6). El recorte manual NUNCA
+   * simula (re-evaluación real, §D4).
+   */
+  simular?: boolean;
+  /** §D3: score INYECTADO del chip (8.2 | 7.0 | 4.3) — reemplaza el calculado
+   *  DESPUÉS de scoreDeCalidad y ANTES del gate; el desenlace real (ÓPTIMA
+   *  enviada / EN_REVISION_HUMANA / RECHAZADA) lo decide `evaluarGate`. */
+  scoreSimulado?: number;
   onProgreso?: (p: ProgresoAnalisis) => void;
 }
 

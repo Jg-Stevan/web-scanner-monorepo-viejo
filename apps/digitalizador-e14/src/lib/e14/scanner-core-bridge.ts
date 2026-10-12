@@ -167,6 +167,32 @@ async function fetchActaSimulada(): Promise<File> {
   return file;
 }
 
+/**
+ * §D3 (SPEC-e14-simulacion-scores): asset FIJO por score de chip — mapeo
+ * determinista dueño (la completa = óptima · la cortada = intermedio · la
+ * borrosa = bajo): 8.2 → acta-e14-real.jpg · 7.0 → acta-sim-intermedia.jpg ·
+ * 4.3 → acta-sim-baja.jpg. Reutiliza la MISMA caché por índice del ciclo
+ * rotativo (§G del PR #33, que queda INTACTO — esta vía solo cambia QUÉ
+ * índice se sirve: el del chip, nunca el contador rotativo).
+ */
+function indiceActaPorScore(score: number): number {
+  if (score >= 8) return 0; // ÓPTIMA [8.2] → la acta completa, nítida
+  if (score >= 6.5) return 1; // MEDIO [7.0] → la acta cortada abajo, nítida
+  return 2; // BAJA [4.3] → la acta borrosa, rotada, cortada
+}
+async function fetchActaSimPorScore(score: number): Promise<File> {
+  const idx = indiceActaPorScore(score);
+  const cache = actasSimCache[idx];
+  if (cache) return cache;
+  const res = await fetch(ACTAS_SIM[idx].src);
+  if (!res.ok) throw new Error("SIMULACIÓN: no se pudo cargar la imagen incluida");
+  const file = new File([await res.blob()], NOMBRES_ACTAS_SIM[idx], {
+    type: "image/jpeg",
+  });
+  actasSimCache[idx] = file;
+  return file;
+}
+
 function dosDigitos(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -294,7 +320,15 @@ export class RealCoreBridge implements E14Bridge {
     } else if (opciones.fuente === "SIMULACION") {
       // SIMULACIÓN = pipeline real sobre el acta E-14 incluida (D35).
       // Mismo camino que IMPORTAR: File → fileToCaptureDataUrl (F-IMPORT: EXIF/12MP).
-      entrada = { archivo: await fetchActaSimulada() };
+      // §D3 (SPEC-e14-simulacion-scores): con `simular` el asset es el FIJO de
+      // la banda del chip (determinista) — el ciclo rotativo §G queda intacto
+      // para el disparo normal de la fuente.
+      entrada = {
+        archivo:
+          opciones.simular && opciones.scoreSimulado != null
+            ? await fetchActaSimPorScore(opciones.scoreSimulado)
+            : await fetchActaSimulada(),
+      };
     } else {
       throw new Error("SIN IMAGEN PARA ANALIZAR (fuente ARCHIVO)");
     }
@@ -389,7 +423,12 @@ export class RealCoreBridge implements E14Bridge {
     // = papel cortado); se calcula aquí y se consulta ANTES del gate en el
     // paso 6. Una captura que corta el acta NUNCA se acepta, aunque la
     // cabecera sea legible y el clasificador la identifique.
-    const completa = esActaCompleta(quad);
+    // §D3 (SPEC-e14-simulacion-scores): con `simular` la verificación SE OMITE
+    // (completa = true forzado) — la foto del chip MEDIO ES una acta cortada a
+    // propósito y jamás debe caer INCOMPLETA desde un chip (AC3/AC6); el
+    // desenlace lo decide el gate con el score inyectado. Sin `simular` la
+    // regla queda byte a byte (AC6: regresión cero del fix del PR #33).
+    const completa = opciones.simular ? true : esActaCompleta(quad);
 
     // 3) Recorte + realce (warp real INTER_CUBIC + filtro default "bw").
     emitir({ etapa: "RECORTANDO", progreso: 0.2 });
@@ -441,6 +480,16 @@ export class RealCoreBridge implements E14Bridge {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
     });
+    // §D3 (SPEC-e14-simulacion-scores): inyección determinista del chip —
+    // reemplaza el calculado DESPUÉS de scoreDeCalidad y ANTES del gate. El
+    // piso de identificada §X.3 RE-APLICA cuando el chip reemplazó el score
+    // (la óptima sí se identifica: 8.2 + AUTO → 10.0 — AC2); sin AUTO el
+    // score inyectado llega limpio al gate (7.0 → EN_REVISION_HUMANA ·
+    // 4.3 → RECHAZADA, §D4). Nada se fuerza a mano: `evaluarGate` decide.
+    if (opciones.simular && opciones.scoreSimulado != null) {
+      score = opciones.scoreSimulado;
+      if (clasificacion.nivel === "AUTO") score = Math.max(score, PISO_IDENTIFICADA);
+    }
     // §F-2 (SPEC-camara-funcional): acta INCOMPLETA → resolución por la vía
     // de rechazo SIN tocar evaluarGate (el piso de identificada solo
     // beneficia a actas COMPLETAS — aquí queda anulado en la práctica por
@@ -461,6 +510,8 @@ export class RealCoreBridge implements E14Bridge {
         };
     if (!completa) score = Math.min(score, 6.4);
 
+    const evidenciaSim =
+      opciones.simular && opciones.scoreSimulado != null ? ` sim=${opciones.scoreSimulado}` : "";
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
         `total=${Math.round(ms.total)}ms ` +
@@ -472,7 +523,7 @@ export class RealCoreBridge implements E14Bridge {
         `score=${score} filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
         `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
-        `level:${calidad.level}})`,
+        `level:${calidad.level}})${evidenciaSim}`,
     );
 
     return this.construirActa(opciones, parcial, {

@@ -343,6 +343,39 @@ Ciclo verificado: 4 disparos consumen [0]→[1]→[2]→[0] (d1 y d4 = 10.0 ÓPT
 
 ---
 
+## 0-decimosexto. E14 — SIMULACIÓN DE SCORES: los chips SON botones + arranque SIEMPRE en CÁMARA (rama `feat/e14-simulacion-scores`, base main@`256f613` — PR #33 fusionado)
+
+**Base:** SPEC-e14-simulacion-scores Rev. 1. Corrección del modelo mental de la ronda anterior (mandato verbatim del dueño): «lo que entiendes por simulacion simplemente son los botones (scores de ejemplo) que estan encima del boton de capturar, pero por defecto siempre se inicia con camara y las fotos que te deje de ejemplo para los score son para las simulacion, la acta que no esta completa es para el score intermedio, y la borrosa es para score bajo». El ciclo rotativo de la fuente SIMULACIÓN (PR #33 §G) queda INTACTO y fuera de alcance.
+
+**Cambios (4 archivos — `store.ts` · `scanner-core-bridge.ts` · `bridge.ts` · `ScanView.tsx` + CHANGES.md):**
+
+- **§D1 `store.ts` arranque en CÁMARA:** estado inicial `fuente: "SIMULACION"` → `fuente: "CAMARA"` — cada cold start aterriza en CÁMARA (pill AUTO activa, visor vivo u overlay §E sin permiso). No se persiste la última fuente. `[VOLVER A SIMULACIÓN]` del overlay §E verificado funcionando.
+- **§D2 `ScanView.tsx` chips = BOTONES:** los 3 chips de calidad pasan de `div` decorativo a `<button>` en la MISMA posición/tamaño/visual del mock aprobado (mismas clases, h-[30px], anillo colgante intacto — AC8). Área táctil ≥44px SIN deformar el visual (`after` invisible −7px/−8px). `active:scale-95` + `cursor-pointer` (único cambio visual permitido). `disabled={procesando}` + opacidad durante análisis; segundo guard en la store (`vista==="analizando"` → ignorado) — triple-click síncrono = **1 solo** `[e14] pipeline` (AC7). `aria-label` exactos de la spec («Simular acta óptima (10.0 — envío automático)» / «…intermedia (7.0 — revisión)» / «…baja (4.3 — rechazada)»). Funcionan en los 3 modos (CÁMARA/SIMULACIÓN/IMPORTAR) sin cámara viva.
+- **§D3 inyección determinista (mecánica, sin tocar el gate):**
+  - `bridge.ts`: `OpcionesEscaneo` += `simular?: boolean` + `scoreSimulado?: number` (SOLO 2 campos).
+  - `scanner-core-bridge.ts`: `fetchActaSimPorScore(score)` — mapeo FIJO dueño 8.2→`acta-e14-real.jpg` · 7.0→`acta-sim-intermedia.jpg` · 4.3→`acta-sim-baja.jpg` (reutiliza `ACTAS_SIM`/`NOMBRES_ACTAS_SIM`/`actasSimCache`; el ciclo rotativo `fetchActaSimulada` queda byte a byte). En `pipeline`: `completa = opciones.simular ? true : esActaCompleta(quad)` (la cortada del chip MEDIO jamás cae INCOMPLETA) y tras `scoreDeCalidad`/antes del gate: `score = scoreSimulado` + re-aplicación del piso identificada §X.3 cuando la clasificación es AUTO (8.2 + AUTO → 10.0). `evaluarGate`/`scoreDeCalidad`/`esActaCompleta` (definiciones) byte a byte. Log añade evidencia ` sim=8.2|7.0|4.3` cuando aplica.
+  - `store.ts`: acción nueva `simularScore(banda)` (BandaSim = optima|medio|baja, `SCORE_SIMULADO` = 8.2|7.0|4.3) → `dispararEscaneo(undefined, {simular:true, scoreSimulado})` — el MISMO camino (fuente SIMULACION, guards de ARCHIVO/CAMARA no aplican, no consume archivoPendiente/framePendiente): REVISIÓN, banner, toast, historial, ACTAS y contingencia C4 idénticos a capturas reales. El intento es el vigente del ciclo (chip = UNA captura).
+- **§D4 coherencia de desenlaces (todo vía `evaluarGate`, nada forzado a mano):** ver tabla medida abajo. RECORTAR desde sim rechazada NO simula (re-evaluación real). Regresión de completitud por IMPORTAR: cero.
+
+**Desenlaces medidos (dev sandbox 390×844, motor=worker, consola `[e14] pipeline` — divipol 200):**
+
+| Reproducción | Evidencia de consola | Resultado en la app |
+|---|---|---|
+| Chip ÓPTIMA ×1 | `SIMULACION/file … completa=true quad=[0.293,0.058 … 0.313,0.998] score=10 clasif={dep:88,mun:120,zon:15,std:02,mesa:012,tipo:T,nivel:AUTO} … sim=8.2` | ANALIZANDO → REVISIÓN **«10.0/10 ÓPTIMA»** + FRANKFURT CONSULADO · MESA 012 · TRANSMISIÓN P1 + **«ENVIADO AUTOMÁTICAMENTE»** + ACTAS +1 (foto = acta completa real) |
+| Chip MEDIO ×1 | `… completa=true quad=[0.367,0.142 … 0.240,0.538] score=7 clasif={…,nivel:MANUAL} … sim=7` | REVISIÓN **«7.0/10 REVISIÓN HUMANA»** ámbar + **CLASIFICACIÓN PENDIENTE** («Repita la foto… INTENTO 1 DE 4») + toolbar de 3 + CTA ámbar REPETIR CAPTURA (foto = acta cortada) — NO rechazada, NO incompleta, NO enviada |
+| Chip BAJA ×1 | `… completa=true quad=[0.117,0.485 … 0.110,0.717] score=4.3 clasif={sin-clasificar} … sim=4.3` | Toast crit **«ACTA NO RECONOCIDA / Score 4.3/10 — obligatorio repetir foto.»** + REVISIÓN **«4.3/10 RECHAZADA»** + toolbar de 3 + **«OBLIGATORIO REPETIR FOTO (INTENTO X DE 4)»** (foto = acta borrosa) |
+| BAJA ×4 seguidas | intento 1→4, mismo `score=4.3 sim=4.3` | intento 4 → **contingencia C4**: «4.3/10 REVISIÓN HUMANA» + banner «ENVIADA A REVISIÓN HUMANA / Un auditor validará esta acta» + VOLVER AL ESCÁNER — idéntico a capturas reales |
+| RECORTAR desde sim rechazada (APLICAR sin mover) | `[e14] recorte SIMULACION … completa=false score=6.4` (log SIN `sim=`) | **SIGUE RECHAZADA** 6.4 — el rescate por recorte NO simula (re-evaluación real) |
+| IMPORTAR la cortada (regresión AC6) | `ARCHIVO/file … completa=false quad=[0.367,0.142 …] score=6.4` (mismo quad que el chip MEDIO — solo cambia `completa` por `simular`) | Toast crit **«ACTA INCOMPLETA / Falta parte del acta…»** + «6.4/10 RECHAZADA» — el fix del PR #33 queda EXACTO |
+
+**Fingerprint del ciclo de intentos por chips:** MEDIO (EN_RH repetir-primero, intento 1) → BAJA (RECHAZADA, «INTENTO 2 DE 4» — el chip CONSUMIÓ el intento del ciclo) → RECORTAR → «INTENTO 3 DE 4» → BAJA ×2 → C4 en intento 4. El contador cuenta CAPTURAS (chips incluidas), candado RH y contingencia al agotar: mismo plumaje de las capturas reales.
+
+**NO cambiado:** `evaluarGate`/`scoreDeCalidad`/`esActaCompleta`/`statusDeScore` definiciones byte a byte; `fetchActaSimulada` (ciclo rotativo §G) byte a byte; `enviarActa`/`repetirFoto`/`aplicarRecorte`/`escalarRevisionHumana`/`guardarUbicacion` (0 líneas); `dispararEscaneo` solo lo mínimo para enrutar la simulación por el camino existente (firma + `fuenteEfectiva`/campos sim — el camino sin `sim` es idéntico); pipeline de recorte (0 líneas); `ReviewView`/`TopBar`/`BottomNav`/`AnalyzingView`/`icons.tsx`/`globals.css` (0 líneas); overlay §E, menú ⋮, botón ámbar, flash honesto, sondas F-LENS v4, ZSL, disparo por plataforma (0 líneas); `apps/scanner-lab`/**`packages`** = 0 líneas de diff; assets (sin binarios nuevos).
+
+**Verificado:** gates 3/3 (`lint:e14` 0 · `e14:check` tsc 0 · build estático 3/3 páginas) · AC9 (`git diff -- packages apps/scanner-lab` = 0) · QA navegador 390×844 + 360×740: AC1-AC8 con hit-tests reales, ciclo completo de chips (ÓPTIMA/MEDIO/BAJA + agotamiento C4 + recorte sin simular + regresión IMPORTAR), chips en los 3 modos, `[VOLVER A SIMULACIÓN]` del overlay, área táctil ::after medida (30px visual + 14px = 44px), overflow horizontal = 0 en escanear y revisión de ambos viewports, **0 page errors / 0 errores de consola**. 14 screenshots en /home/z/tmp-e14/.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
