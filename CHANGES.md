@@ -376,19 +376,7 @@ Ciclo verificado: 4 disparos consumen [0]→[1]→[2]→[0] (d1 y d4 = 10.0 ÓPT
 
 ---
 
-## Resumen de commits
-
-| # | Commit | Título |
-|---|--------|--------|
-| 1 | `3392064` | fix(cámara): estabilizador de quietud + throttling adaptativo + buffer ZSL anti tap-shock |
-| 2 | `2f98475` | feat(cámara): Dual Pipeline — preview ligero + captura full-sensor |
-| 3 | `27bb731` | perf(scanner): preview dual-pipeline v2 — 960×540 + fps cap 30, foto intacta vía takePhoto |
-| 4 | `b4e1aa2` | feat(sensor): sensor-profiler con tope seguro 4032/3200px por gama |
-| 5 | `740f7a2` | fix(scanner): F-TEXT-CLEAN — filtro Texto claro sin ruido amplificado, halos de croma ni unsharp global |
-
----
-
-## 0-decimosexto. DIAG — Informe de diagnóstico por dispositivo, datos reales medidos (rama `diag/informe-dispositivo`, base `main` @ `bb2aa8f` — rama SOLO de instrumentación, cero cambios de comportamiento)
+## 0-decimoseptimo. DIAG — Informe de diagnóstico por dispositivo, datos reales medidos (rama `diag/informe-dispositivo`, base `main` @ `bb2aa8f` — rama SOLO de instrumentación, cero cambios de comportamiento)
 
 **Base:** INSTRUCCIONES-diag-informe-dispositivo.md. Nueva funcionalidad pedida por el dueño: un informe que se diligencia SOLO con datos reales medidos en el dispositivo — info del hardware (CPU/RAM/GPU/almacenamiento/pantalla/red/batería) + tiempos del proceso completo (cámara, captura, editor, filtros, OCR, export) + FPS (editor Y cámara) + benchmarks — descargable y compartible por WhatsApp para el asistente de análisis. **Línea base**: mide cómo está el proyecto HOY con el MISMO instrumental que luego medirá las optimizaciones (Plan A/B se rebasearán sobre esta rama).
 
@@ -405,6 +393,19 @@ Ciclo verificado: 4 disparos consumen [0]→[1]→[2]→[0] (d1 y d4 = 10.0 ÓPT
 **Notas de comparabilidad:** `page_saved` dispara al ATERRIZAR la captura en la sesión (bytes = original persistido) — así el derivado «captura→editor» de la spec §5 es medible; en el guardado del documento queda `save_done{ms,bytes}` (bytes = procesadas totales). El Plan A solo instrumentó `editor_open`; el Plan B puso `page_saved` al guardar — la divergencia queda documentada en el PR.
 
 ---
+
+## Resumen de commits
+
+| # | Commit | Título |
+|---|--------|--------|
+| 1 | `3392064` | fix(cámara): estabilizador de quietud + throttling adaptativo + buffer ZSL anti tap-shock |
+| 2 | `2f98475` | feat(cámara): Dual Pipeline — preview ligero + captura full-sensor |
+| 3 | `27bb731` | perf(scanner): preview dual-pipeline v2 — 960×540 + fps cap 30, foto intacta vía takePhoto |
+| 4 | `b4e1aa2` | feat(sensor): sensor-profiler con tope seguro 4032/3200px por gama |
+| 5 | `740f7a2` | fix(scanner): F-TEXT-CLEAN — filtro Texto claro sin ruido amplificado, halos de croma ni unsharp global |
+
+---
+
 
 ## 1. Estabilizador + rendimiento del bucle de frames (gama baja y alta)
 
