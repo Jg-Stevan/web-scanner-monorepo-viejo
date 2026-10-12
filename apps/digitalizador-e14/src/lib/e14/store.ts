@@ -443,10 +443,15 @@ export const useE14Store = create<E14Store>((set, get) => {
           solicitudesRescaneo: get().solicitudesRescaneo + 1,
           historial: [fila, ...get().historial],
         });
+        // §F-6 (SPEC-camara-funcional): toast rechazo-aware — INCOMPLETA
+        // explica QUÉ hacer (aléjate y repite); el resto conserva el score.
+        const esIncompleta = actaActual.rechazo?.tipo === "INCOMPLETA";
         notificar(
           "crit",
-          "ACTA NO RECONOCIDA",
-          `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
+          esIncompleta ? "ACTA INCOMPLETA" : "ACTA NO RECONOCIDA",
+          esIncompleta
+            ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
+            : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
         );
       }
       set({ vista: "revision" });

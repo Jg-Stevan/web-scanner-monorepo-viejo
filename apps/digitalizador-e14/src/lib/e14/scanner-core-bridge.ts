@@ -56,6 +56,11 @@ import {
 // §1 (SPEC-ux-real-bn-editor): acta E-14 real del dueño (Galaxy A56 5G) —
 // import estático: Next resuelve el basePath /web-scanner del deploy estático.
 import actaSimUrl from "@/assets/acta-e14-real.jpg";
+// §G-1 (SPEC-camara-funcional): las 3 actas del dueño para la SIMULACIÓN de
+// scores — [0] óptima (acta-e14-real) · [1] intermedia (nítida pero cortada
+// abajo, 1770×2360) · [2] baja (borrosa, rotada, cortada, 1902×1426).
+import actaSimIntermediaUrl from "@/assets/acta-sim-intermedia.jpg";
+import actaSimBajaUrl from "@/assets/acta-sim-baja.jpg";
 import type { Acta, ActaFirma, ActaStatus, ProgresoAnalisis } from "./types";
 import type { E14Bridge, OpcionesEscaneo } from "./bridge";
 
@@ -65,6 +70,49 @@ const TIMEOUT_MS = 15_000;
 const DETALLE_ILEGIBLE = "CÓDIGO DE BARRAS Y CABECERA NO DETECTADOS";
 const DETALLE_TIMEOUT = "TIEMPO DE PROCESADO EXCEDIDO";
 const DETALLE_GENERICO = "SCORE INSUFICIENTE PARA TRANSMISIÓN";
+// §F-5 (SPEC-camara-funcional): detalle del rechazo por acta INCOMPLETA —
+// la captura corta el papel aunque la cabecera sea legible.
+const DETALLE_INCOMPLETA = "EL ACTA ESTÁ CORTADA EN EL ENCUADRE — ALÉJATE UN POCO Y CAPTURA EL ACTA COMPLETA";
+
+/**
+ * §F-1 (SPEC-camara-funcional) — señal de ACTA COMPLETA en el encuadre.
+ * El quad de detección son 4 puntos en fracciones (0-1) de la foto. Regla de
+ * producto (cerrada por el dueño): una captura que corta el acta NUNCA se
+ * acepta, aunque la cabecera sea legible. DOS señales — calibradas con los
+ * quads REALES medidos de las 3 actas del dueño (QA M22-1, motor=worker):
+ *  1. BORDE — esquina esencialmente SOBRE el borde de la foto (≥0.999 de
+ *     cualquiera de los 4 lados): el papel corre hasta el filo → cortada.
+ *     La Rev. 1 del spec fijaba MARGEN 0.02; medido: el acta BUENA del
+ *     dueño enmarca apretado (esquinas 0.988/0.998) → con 0.02 el caso
+ *     bueno se rechazaría (falso positivo) — umbral ajustado a «sobre el
+ *     borde» literal. Evidencia en CHANGES.md 0-decimoquinto.
+ *  2. COBERTURA — el quad debe cubrir ≥30% de la foto: cuando el papel está
+ *     cortado, el worker NO logra cerrar su contorno y devuelve un fragmento
+ *     INTERNO (la tabla del acta: áreas 0.13/0.18 medidas vs 0.39 de la
+ *     completa) → no se puede VERIFICAR que el acta esté completa →
+ *     incompleta (mensaje «aléjate un poco y captura el acta completa»:
+ *     también el consejo correcto para un encuadre lejano).
+ */
+const MARGEN_BORDE = 0.001;
+const AREA_MINIMA = 0.3;
+function esActaCompleta(quad: Quad): boolean {
+  const alBorde = quad.some(
+    (p) =>
+      p.x <= MARGEN_BORDE ||
+      p.x >= 1 - MARGEN_BORDE ||
+      p.y <= MARGEN_BORDE ||
+      p.y >= 1 - MARGEN_BORDE,
+  );
+  if (alBorde) return false;
+  // Área del cuadrilátero (shoelace — robusta al orden de las esquinas).
+  let dobleArea = 0;
+  for (let i = 0; i < quad.length; i++) {
+    const p = quad[i];
+    const q = quad[(i + 1) % quad.length];
+    dobleArea += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(dobleArea) / 2 >= AREA_MINIMA;
+}
 // PATRON_CABECERA vive ahora en ./clasificador (§4.5: se mantiene como
 // constante para traza/log — ya NO decide sola el estado del gate).
 
@@ -92,19 +140,31 @@ type EntradaPipeline = { archivo: File } | { dataUrl: string };
 
 /**
  * SIMULACIÓN = pipeline real sobre el acta E-14 incluida (D35).
- * Mismo camino que IMPORTAR: File → fileToCaptureDataUrl (F-IMPORT: EXIF/12MP).
- * Caché a nivel de módulo para no re-descargar en REINTENTAR/REPETIR FOTO
- * (SPEC §F1.1 — el asset se decodifica al entrar a SIMULACIÓN, lazy).
+ * §G-2 (SPEC-camara-funcional): ciclo determinista de las 3 actas del dueño
+ * (óptima → intermedia → baja → óptima…) — cada disparo consume el índice
+ * actual y avanza el contador de módulo. Mismo camino que IMPORTAR: File →
+ * fileToCaptureDataUrl (F-IMPORT: EXIF/12MP). Caché POR ÍNDICE a nivel de
+ * módulo para no re-descargar un acta ya servida en el ciclo.
  */
-let actaSimCache: File | null = null;
+const ACTAS_SIM = [actaSimUrl, actaSimIntermediaUrl, actaSimBajaUrl];
+const NOMBRES_ACTAS_SIM = ["acta-e14-real.jpg", "acta-sim-intermedia.jpg", "acta-sim-baja.jpg"];
+let actaSimIdx = 0;
+const actasSimCache: File[] = [];
 async function fetchActaSimulada(): Promise<File> {
-  if (actaSimCache) return actaSimCache;
-  // actaSimUrl es StaticImageData — .src ya resuelve el basePath /web-scanner
-  // del deploy estático (en dev: /_next/static/media/...).
-  const res = await fetch(actaSimUrl.src);
+  const idx = actaSimIdx;
+  actaSimIdx = (actaSimIdx + 1) % ACTAS_SIM.length;
+  const cache = actasSimCache[idx];
+  if (cache) return cache;
+  // ACTAS_SIM[idx].src es StaticImageData — .src ya resuelve el basePath
+  // /web-scanner del deploy estático (en dev: /_next/static/media/...).
+  const res = await fetch(ACTAS_SIM[idx].src);
   if (!res.ok) throw new Error("SIMULACIÓN: no se pudo cargar la imagen incluida");
-  actaSimCache = new File([await res.blob()], "acta-e14-real.jpg", { type: "image/jpeg" });
-  return actaSimCache;
+  // File con nombre real del asset (.jpg — evita el camino HEIC).
+  const file = new File([await res.blob()], NOMBRES_ACTAS_SIM[idx], {
+    type: "image/jpeg",
+  });
+  actasSimCache[idx] = file;
+  return file;
 }
 
 function dosDigitos(n: number): string {
@@ -324,6 +384,13 @@ export class RealCoreBridge implements E14Bridge {
     ms.detect = performance.now() - tDetect;
     emitir({ etapa: "DETECTANDO", progreso: 1 });
 
+    // §F-2 (SPEC-camara-funcional): señal de ACTA COMPLETA — el quad de
+    // detección YA contiene la evidencia (esquinas sobre el borde de la foto
+    // = papel cortado); se calcula aquí y se consulta ANTES del gate en el
+    // paso 6. Una captura que corta el acta NUNCA se acepta, aunque la
+    // cabecera sea legible y el clasificador la identifique.
+    const completa = esActaCompleta(quad);
+
     // 3) Recorte + realce (warp real INTER_CUBIC + filtro default "bw").
     emitir({ etapa: "RECORTANDO", progreso: 0.2 });
     const tProceso = performance.now();
@@ -370,17 +437,29 @@ export class RealCoreBridge implements E14Bridge {
     //    identificación manda sobre las métricas globales del crudo.
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
-    const score = scoreDeCalidad(calidad, {
+    let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
     });
-    const gate = this.evaluarGate(
-      score,
-      texto,
-      clasificacion,
-      opciones.intento,
-      opciones.maxIntentos,
-    );
+    // §F-2 (SPEC-camara-funcional): acta INCOMPLETA → resolución por la vía
+    // de rechazo SIN tocar evaluarGate (el piso de identificada solo
+    // beneficia a actas COMPLETAS — aquí queda anulado en la práctica por
+    // el techo 6.4, mismo que «poor"). El resto del pipeline corrió igual
+    // (recorte/calidad/OCR) para que REVISIÓN muestre la imagen y el
+    // operador entienda el problema.
+    const gate: ResultadoGate = completa
+      ? this.evaluarGate(score, texto, clasificacion, opciones.intento, opciones.maxIntentos)
+      : {
+          // intento < maxIntentos → RECHAZADA · al AGOTAR → contingencia
+          // automática C4 (EN_REVISION_HUMANA con el MISMO rechazo).
+          status:
+            opciones.intento >= opciones.maxIntentos
+              ? ("EN_REVISION_HUMANA" as ActaStatus)
+              : ("RECHAZADA" as ActaStatus),
+          rechazo: { tipo: "INCOMPLETA", detalle: DETALLE_INCOMPLETA },
+          clasificacion: null,
+        };
+    if (!completa) score = Math.min(score, 6.4);
 
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
@@ -388,8 +467,9 @@ export class RealCoreBridge implements E14Bridge {
         `(decode=${Math.round(ms.decode)} detect=${Math.round(ms.detect)} ` +
         `proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
-        `cabeceraE14=${PATRON_CABECERA.test(texto)} score=${score} ` +
-        `filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
+        `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
+        `score=${score} filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
         `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
         `level:${calidad.level}})`,
@@ -517,26 +597,37 @@ export class RealCoreBridge implements E14Bridge {
     //    escaneo — helper ÚNICO evaluarGate, §4.4: AMBOS pipelines con el
     //    MISMO criterio). §X (SPEC-score-legible): clasificación primero,
     //    score con señales de legibilidad.
+    // §F-3 (SPEC-camara-funcional): el quad del editor está en coordenadas
+    // de `fotoOriginal` → la MISMA esActaCompleta(quadManual) ANTES del gate.
+    // El rescate NO sirve de bypass: si el papel está cortado en la foto,
+    // ningún crop lo completa; si el acta SÍ está entera (detección falló
+    // por sombra), el recorte manual la rescata legítimamente.
+    const completa = esActaCompleta(quad);
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
-    const score = scoreDeCalidad(calidad, {
+    let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
     });
-    const gate = this.evaluarGate(
-      score,
-      texto,
-      clasificacion,
-      acta.intento,
-      acta.maxIntentos,
-    );
+    const gate: ResultadoGate = completa
+      ? this.evaluarGate(score, texto, clasificacion, acta.intento, acta.maxIntentos)
+      : {
+          status:
+            acta.intento >= acta.maxIntentos
+              ? ("EN_REVISION_HUMANA" as ActaStatus)
+              : ("RECHAZADA" as ActaStatus),
+          rechazo: { tipo: "INCOMPLETA", detalle: DETALLE_INCOMPLETA },
+          clasificacion: null,
+        };
+    if (!completa) score = Math.min(score, 6.4);
 
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
         `(proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
-        `cabeceraE14=${PATRON_CABECERA.test(texto)} score=${score} ` +
-        `filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
+        `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
+        `score=${score} filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
         `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
         `level:${calidad.level}})`,

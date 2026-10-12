@@ -7,6 +7,12 @@
  * fila de estado, chips de calidad decorativos y fila de disparo con
  * obturador-documento. La LÓGICA de cámara (fallbacks, disparo por
  * plataforma, linterna, ZSL, gate) queda INTACTA — solo capa visual.
+ * CÁMARA FUNCIONAL (SPEC-e14-camara-funcional Rev. 1 — ronda de
+ * FUNCIONALIDAD, estética neón conservada al píxel): botón ámbar = captura
+ * automática (§B), menú ⋮ (§C), flash honesto (§D), aviso de cámara con
+ * reintento y fin del rebote silencioso (§E), fila de estado centrada sin
+ * «ISO: 1600» (§A). La lógica intocable (disparo por plataforma, cascada,
+ * sondas, gate, ZSL) queda byte a byte.
  * Historial previo: marco con corner brackets, retícula central, botón
  * disparo, ghost IMPORTAR y PANEL DE SIMULACIÓN para forzar el resultado.
  * FASE LÓGICA L2 (§7): chips de FUENTE (SIMULACIÓN · CÁMARA · IMPORTAR);
@@ -77,6 +83,7 @@ import type { Quad } from "@jg-stevan/scanner-core/types";
 import { useE14Store } from "@/lib/e14/store";
 import {
   BoltIcon,
+  CameraNavIcon,
   FileDocIcon,
   FocusFrameIcon,
   FolderImportIcon,
@@ -485,6 +492,15 @@ export function ScanView() {
   const [torchOn, setTorchOn] = useState(false);
   const [torchDisponible, setTorchDisponible] = useState(false);
   const [camEstado, setCamEstado] = useState<CamEstado>("iniciando");
+  // §E (SPEC-camara-funcional): aviso de cámara (denied/perdido) con
+  // reintento — fin del rebote silencioso a SIMULACIÓN. reintentoCamara es
+  // el token que re-dispara el efecto de arranque ([ACTIVAR CÁMARA]).
+  const [avisoCamara, setAvisoCamara] = useState<null | "denied" | "perdido">(null);
+  const [reintentoCamara, setReintentoCamara] = useState(0);
+  // §C (SPEC-camara-funcional): menú ⋮ funcional — menuMontado es la fase
+  // de entrada (opacidad + scale 150 ms) del panel.
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const [menuMontado, setMenuMontado] = useState(false);
   const [live, setLive] = useState<LiveUi>({ corners: null, score: null });
   const [procesando, setProcesando] = useState(false);
   const [destelloKey, setDestelloKey] = useState(0);
@@ -518,6 +534,29 @@ export function ScanView() {
   useEffect(() => {
     warmUpScannerWorker();
   }, []);
+
+  // §C (SPEC-camara-funcional): Escape cierra el menú ⋮; menuMontado pasa
+  // a true un frame tras el montaje para que la transición de entrada
+  // (150 ms, opacidad + scale-0.97→1) corra en CSS puro (sin framer-motion).
+  useEffect(() => {
+    if (!menuAbierto) {
+      setMenuMontado(false);
+      return;
+    }
+    const alTecla = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuAbierto(false);
+    };
+    window.addEventListener("keydown", alTecla);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setMenuMontado(true));
+    });
+    return () => {
+      window.removeEventListener("keydown", alTecla);
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [menuAbierto]);
 
   /* ── Linterna — F-FLASH v3 (lab L473-520) ─────────────────────────── */
 
@@ -916,12 +955,11 @@ export function ScanView() {
 
     const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
     if (!media || typeof media.getUserMedia !== "function" || !window.isSecureContext) {
-      notificar(
-        "warn",
-        "CÁMARA NO DISPONIBLE",
-        "Sin acceso a la cámara en este entorno (se requiere HTTPS y permiso). VOLVIENDO A SIMULACIÓN.",
-      );
-      setFuente("SIMULACION");
+      // §E (SPEC-camara-funcional): fin del rebote silencioso — la app SE
+      // QUEDA en modo CÁMARA con el overlay de aviso + reintento (paridad
+      // con el aviso B2 del lab); el toast es redundante con el overlay.
+      setCamEstado("no-disponible");
+      setAvisoCamara("denied");
       return;
     }
 
@@ -1092,14 +1130,11 @@ export function ScanView() {
       if (!stream) stream = await abrirConCascada();
       if (!stream) {
         if (cancelado) return;
-        // Permiso denegado / sin cámara / sin HTTPS (headless cae aquí):
-        // toast warn + vuelta automática a SIMULACIÓN (spec §7).
-        notificar(
-          "warn",
-          "CÁMARA NO DISPONIBLE",
-          "No hay cámara accesible (permiso denegado, sin hardware o sin conexión segura). VOLVIENDO A SIMULACIÓN.",
-        );
-        setFuente("SIMULACION");
+        // §E (SPEC-camara-funcional): fracaso tras sondas+cascada → overlay
+        // con [ACTIVAR CÁMARA] (reintento) / [VOLVER A SIMULACIÓN] — SIN
+        // rebote automático. abrirCamaraPrincipal/abrirConCascada intactas.
+        setCamEstado("no-disponible");
+        setAvisoCamara("denied");
         return;
       }
       if (cancelado) {
@@ -1125,13 +1160,17 @@ export function ScanView() {
         );
       }
       // B3 (lab): si el track muere (permiso revocado, otra app roba la
-      // cámara) → aviso + vuelta a SIMULACIÓN (el visor no queda congelado).
+      // cámara) → overlay §E «SE PERDIÓ LA CÁMARA» sin cambio de modo (el
+      // visor no queda congelado; el reintento revive el stream).
       const track = stream.getVideoTracks()[0];
       if (track) {
         track.onended = () => {
           if (cancelado) return;
-          notificar("warn", "SE PERDIÓ LA CÁMARA", "El stream se cortó. VOLVIENDO A SIMULACIÓN.");
-          setFuente("SIMULACION");
+          // §E (SPEC-camara-funcional): stream perdido → overlay «SE PERDIÓ
+          // LA CÁMARA» SIN cambio de modo (el visor no queda congelado; el
+          // reintento revive el stream).
+          setCamEstado("no-disponible");
+          setAvisoCamara("perdido");
         };
       }
       // F-FLASH v3: botón habilitado SIEMPRE con cámara real (la verdad del
@@ -1154,10 +1193,11 @@ export function ScanView() {
       streamRef.current = null;
       setFramePendiente(null);
       setCamEstado("iniciando");
+      setAvisoCamara(null); // §E: el aviso NO sobrevive al ciclo de arranque
       procesandoRef.current = false;
       cooldownRef.current = 0;
     };
-  }, [fuente]);
+  }, [fuente, reintentoCamara]);
 
   /** Re-asigna el stream al <video> (lab L1255-1261) por si el elemento se
    *  remontó (cambio de vista ida/vuelta manteniendo la fuente viva). */
@@ -1251,6 +1291,23 @@ export function ScanView() {
       notificar("warn", "LINTERNA NO CONTROLADA", TORCH_HINT);
     }
   }, [camEstado, torchOn, ponerLinterna, notificar]);
+
+  /** §B (SPEC-camara-funcional): botón ámbar = CAPTURA AUTOMÁTICA (paridad
+   *  con el lab CameraView L2350-2382): en CÁMARA alterna el MISMO autoArmado
+   *  del botón inferior «Auto» (quedan sincronizados — mismo useState);
+   *  en SIMULACIÓN/IMPORTAR el tap NO se queda mudo: avisa que la función
+   *  vive con la cámara viva. */
+  const alternarAutoHUD = useCallback(() => {
+    if (!modoCamara) {
+      notificar(
+        "warn",
+        "CAPTURA AUTOMÁTICA EN CÁMARA",
+        "La captura automática funciona con la cámara viva. Cambia al modo AUTO (cámara).",
+      );
+      return;
+    }
+    setAutoArmado((v) => !v);
+  }, [modoCamara, notificar]);
 
   /* ── Disparo por plataforma (lab onShutter L902-925) ──────────────── */
 
@@ -1497,26 +1554,118 @@ export function ScanView() {
               </button>
             </div>
 
-            {/* §2 HUD ámbar + menú ⋮ — DECORATIVOS (SPEC §4): sin lógica
-                nueva; el ámbar marca «Modo de enfoque», el ⋮ queda 40×40
-                táctil sin función (opción por defecto de la spec). */}
+            {/* §B (SPEC-camara-funcional): HUD ámbar = CAPTURA AUTOMÁTICA
+                (paridad con el lab): en CÁMARA alterna el MISMO estado del
+                botón inferior «Auto» — ON = mock ámbar + glow · OFF = blanco
+                tenue sin glow. En SIM/IMPORT se ve como el mock y el tap
+                avisa (ningún control mudo). */}
             <div className="pointer-events-auto flex items-center gap-1">
               <button
                 type="button"
-                aria-label="Modo de enfoque"
-                className="w-[44px] h-[44px] rounded-full border-2 border-amber-hud shadow-[0_0_12px_rgba(232,200,74,0.35)] flex items-center justify-center transition-transform active:scale-95"
+                aria-label="Captura automática"
+                aria-pressed={modoCamara ? autoArmado : undefined}
+                title={
+                  modoCamara
+                    ? "Captura automática (dispara sola con el acta quieta y nítida)"
+                    : "Captura automática (disponible en modo cámara)"
+                }
+                onClick={alternarAutoHUD}
+                className={
+                  modoCamara && !autoArmado
+                    ? "w-[44px] h-[44px] rounded-full border-2 border-white/25 flex items-center justify-center transition-transform active:scale-95"
+                    : "w-[44px] h-[44px] rounded-full border-2 border-amber-hud shadow-[0_0_12px_rgba(232,200,74,0.35)] flex items-center justify-center transition-transform active:scale-95"
+                }
               >
-                <FocusFrameIcon className="w-[18px] text-amber-hud" />
+                <FocusFrameIcon
+                  className={`w-[18px] ${modoCamara && !autoArmado ? "text-white/60" : "text-amber-hud"}`}
+                />
               </button>
+              {/* §C (SPEC-camara-funcional): menú ⋮ FUNCIONAL — abre/cierra
+                  con el botón, el fondo o Escape; filas según modo. */}
               <button
                 type="button"
                 aria-label="Más opciones"
+                aria-haspopup="menu"
+                aria-expanded={menuAbierto}
+                onClick={() => setMenuAbierto((v) => !v)}
                 className="w-10 h-10 flex items-center justify-center text-[#C7CEDA] text-[20px] font-bold leading-none"
               >
                 ⋮
               </button>
             </div>
           </div>
+
+          {/* §C (SPEC-camara-funcional) — MENÚ ⋮ (paridad con el lab
+              L2383-2392 + L2878-2911, vestido neón): fondo clickeable a
+              pantalla del visor que cierra; panel anclado bajo el HUD
+              derecho (right-3 top-[60px]) con filas según modo. Entrada:
+              150 ms opacidad + scale 0.97→1 en CSS puro. */}
+          {menuAbierto && (
+            <>
+              <button
+                type="button"
+                aria-label="Cerrar menú"
+                onClick={() => setMenuAbierto(false)}
+                className="absolute inset-0 z-50 cursor-default"
+              />
+              <div
+                role="menu"
+                aria-label="Opciones de escaneo"
+                className={`absolute right-3 top-[60px] z-50 w-64 origin-top-right rounded-2xl border border-white/10 bg-[#0C1018]/95 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-xl divide-y divide-white/[0.08] transition-[opacity,transform] duration-150 ${
+                  menuMontado ? "opacity-100 scale-100" : "opacity-0 scale-[0.97]"
+                }`}
+              >
+                {modoCamara && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setAutoArmado((v) => !v)}
+                    className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                  >
+                    <ScanFrameIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                    <span className="text-[13px] font-medium text-white">
+                      Captura automática
+                    </span>
+                    <span
+                      className={`ml-auto text-[13px] font-semibold ${
+                        autoArmado ? "text-ok-tint" : "text-white"
+                      }`}
+                    >
+                      {autoArmado ? "Sí" : "No"}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuAbierto(false);
+                    setFuente("CAMARA");
+                  }}
+                  className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                >
+                  <CameraNavIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                  <span className="text-[13px] font-medium text-white">
+                    Escanear con cámara
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuAbierto(false);
+                    inputRef.current?.click();
+                  }}
+                  className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                >
+                  <FolderImportIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                  <span className="text-[13px] font-medium text-white">
+                    Importar desde galería
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
 
           {modoCamara ? (
             <>
@@ -1538,6 +1687,46 @@ export function ScanView() {
                   <span className="text-[10px] font-bold tracking-[0.2em] text-white/60">
                     INICIANDO CÁMARA…
                   </span>
+                </div>
+              )}
+
+              {/* §E (SPEC-camara-funcional): aviso de cámara con REINTENTO —
+                  paridad con el aviso B2 del lab. La app PERMANECE en CÁMARA;
+                  [ACTIVAR CÁMARA] re-ejecuta el arranque (spinner visible),
+                  [VOLVER A SIMULACIÓN] regresa al modo SIM. */}
+              {avisoCamara && camEstado !== "viva" && (
+                <div className="absolute inset-x-4 top-[64px] z-40 rounded-2xl border border-white/10 bg-[#0C1018]/95 p-4 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md">
+                  <p className="text-[15px] font-bold text-white">
+                    {avisoCamara === "denied" ? "SIN ACCESO A LA CÁMARA" : "SE PERDIÓ LA CÁMARA"}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-snug text-white/70">
+                    {avisoCamara === "denied"
+                      ? "Permiso denegado o cámara ocupada. Toca el candado 🔒 en la barra de direcciones › Permisos › Cámara › Permitir, o cierra otra app que use la cámara."
+                      : "El stream se cortó (permiso revocado o otra app tomó la cámara)."}
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvisoCamara(null);
+                        setCamEstado("iniciando");
+                        setReintentoCamara((n) => n + 1); // re-dispara el efecto
+                      }}
+                      className="h-9 rounded-full px-4 text-[12px] font-bold text-black bg-ok-tint transition-transform active:scale-95"
+                    >
+                      ACTIVAR CÁMARA
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvisoCamara(null);
+                        setFuente("SIMULACION");
+                      }}
+                      className="h-9 rounded-full px-4 text-[12px] font-bold text-white/80 bg-white/10 ring-1 ring-inset ring-white/15 transition-transform active:scale-95"
+                    >
+                      VOLVER A SIMULACIÓN
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1682,18 +1871,16 @@ export function ScanView() {
         </div>
       </div>
 
-      {/* §4 Fila de estado — entre visor y chips, sobre fondo de página (sin
-          cápsula): punto + label del modo ACTIVO (data-driven) a la izquierda;
-          HUD decorativo «ISO: 1600» a la derecha (string canónico de la spec). */}
-      <div className="flex items-center justify-between px-4 h-[24px] shrink-0">
+      {/* §4/§A (SPEC-camara-funcional) Fila de estado — entre visor y chips,
+          sobre fondo de página (sin cápsula): punto + label del modo ACTIVO
+          (data-driven) CENTRADO — «ISO: 1600» ELIMINADO y la fila pasa de
+          justify-between a justify-center (petición explícita del dueño). */}
+      <div className="flex items-center justify-center px-4 h-[24px] shrink-0">
         <span className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-ok-tint" aria-hidden />
           <span className="text-[10px] font-bold tracking-[0.14em] text-[#C7CEDA]">
             {labelModo}
           </span>
-        </span>
-        <span className="text-[10px] font-bold tracking-[0.12em] text-[#666A69]" aria-hidden>
-          ISO: 1600
         </span>
       </div>
 
@@ -1787,12 +1974,25 @@ export function ScanView() {
 
           {obturador}
 
-          {/* Flash (derecha) — HUD DECORATIVO sin lógica (SPEC §8; sin
-              stream no hay linterna): div no interactivo + aria-hidden. */}
-          <div aria-hidden className="flex flex-col items-center gap-1.5 px-2 py-1 text-white">
+          {/* §D (SPEC-camara-funcional): Flash con feedback honesto — la
+              linterna REAL vive en el modo CÁMARA (F-FLASH v3, botón de la
+              fila superior); aquí el tap avisa en vez de quedarse mudo.
+              Mismo visual exacto (BoltIcon 24px + label «Flash»). */}
+          <button
+            type="button"
+            aria-label="Flash (disponible en modo cámara)"
+            onClick={() =>
+              notificar(
+                "warn",
+                "LINTERNA EN CÁMARA",
+                "La linterna se controla con la cámara viva. Cambia al modo AUTO (cámara).",
+              )
+            }
+            className="flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 text-white"
+          >
             <BoltIcon className="w-[24px] h-[24px]" />
             <span className="text-[10px] font-bold text-[#C7CEDA]">Flash</span>
-          </div>
+          </button>
         </div>
       )}
     </div>
