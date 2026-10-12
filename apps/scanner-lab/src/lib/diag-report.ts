@@ -25,7 +25,7 @@ import {
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "diag/informe-dispositivo @ d8043ff";
+export const DIAG_BUILD = "diag/informe-dispositivo @ 7b012ac";
 
 /* ------------------------------------------------------------------ */
 /* Tipos del informe (spec §6a)                                         */
