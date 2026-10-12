@@ -25,8 +25,16 @@ import { initialDocuments } from "./mock-data";
 import {
   loadImageFromSrc,
   processImageToBlob,
-  PROCESSED_MAX_LONG_SIDE,
 } from "./image-processor";
+// ADDENDUM Plan A (A5·A6 — tier-2 gama baja): el tier decide el lado mayor
+// del RESULTADO procesado (downscale post-captura del recorte ya aplicado —
+// JAMÁS recorte del sensor). PROCESSED_MAX_LONG_SIDE (4032) sigue siendo el
+// techo/default de image-processor: en tier high es lo que devuelve
+// effectiveProcessedLongSide() (comportamiento byte-idéntico a da516f1).
+import {
+  effectiveProcessedLongSide,
+  reportTimingSample,
+} from "./device-tier";
 import {
   clearAllDocuments as idbClearAll,
   dataUrlToBlob,
@@ -63,7 +71,12 @@ export function nextId(prefix: string): string {
  *
  *  PLAN A (A1): firma `Blob | string` — la MATEMÁTICA y la tolerancia son
  *  INTACTAS (⛔ §2.5); solo cambia DE DÓNDE se decodifica (Blob → decode
- *  transitorio con objectURL revocado en finally — nunca data URL string). */
+ *  transitorio con objectURL revocado en finally — nunca data URL string).
+ *
+ *  ADDENDUM Plan A (⛔ §3.6): la defensa NO se elimina ni se relaja — su
+ *  TARGET pasa a ser el valor del tier (effectiveProcessedLongSide(): en
+ *  tier high = 4032, comportamiento idéntico; en tier low = 3200). Excepción
+ *  explícita y autorizada a la regla 5 del plan original. */
 async function processedMeetsTarget(
   processed: Blob | string,
   original: Blob | string,
@@ -84,7 +97,8 @@ async function processedMeetsTarget(
       const b = quad[(i + 1) % 4]!;
       maxEdge = Math.max(maxEdge, Math.hypot((b.x - a.x) * ow, (b.y - a.y) * oh));
     }
-    const target = Math.min(PROCESSED_MAX_LONG_SIDE, maxEdge);
+    // ADDENDUM (⛔ §3.6): target = valor del tier (high: idéntico a da516f1).
+    const target = Math.min(effectiveProcessedLongSide(), maxEdge);
     return pl >= target * 0.9;
   } catch {
     return null;
@@ -324,10 +338,13 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       let precision: ScanPage["precision"];
       try {
         // PLAN A (A1·A3): MISMO pipeline, salida Blob — single-encode desde
-        // el bitmap derivado del original a full-res (4032 ⛔ intacto).
+        // el bitmap derivado del original (tier high: full-res 4032).
+        // ADDENDUM (A6-b): producción de la página procesada → lado mayor
+        // del TIER (downscale post-captura; captura/sensor ⛔ diff 0).
+        const tierT0 = performance.now();
         const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
           manual: p.quadManual === true,
-          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+          maxLongSide: effectiveProcessedLongSide(),
         });
         processed = res.processed;
         thumbnail = res.thumbnail;
@@ -338,6 +355,10 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
           bytes: res.processed.size,
           pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
         });
+        // ADDENDUM (A5b): fallback por timing — muestra del guardado de ESTA
+        // página (capture_fired → page_saved: la medición vive junto a los
+        // marks existentes de la sonda, sin marks nuevos ni timers).
+        reportTimingSample(performance.now() - tierT0);
       } catch {
         /* usa original */
       }
@@ -496,12 +517,14 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       let thumbnail = "";
       let precision: ScanPage["precision"];
       try {
-        // PLAN A (A1·A3): MISMO pipeline desde el ORIGINAL a full-res —
-        // single-encode (el preview del editor era una capa display 2048
-        // desechable; el dato guardado SIEMPRE nace del original).
+        // PLAN A (A1·A3): MISMO pipeline desde el ORIGINAL — single-encode
+        // (el preview del editor era una capa display 2048 desechable; el
+        // dato guardado SIEMPRE nace del original).
+        // ADDENDUM (A6-b): lado mayor del TIER (high: idéntico a da516f1).
+        const tierT0 = performance.now();
         const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
           manual: p.quadManual === true,
-          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+          maxLongSide: effectiveProcessedLongSide(),
         });
         processed = res.processed;
         thumbnail = res.thumbnail;
@@ -512,6 +535,9 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
           bytes: res.processed.size,
           pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
         });
+        // ADDENDUM (A5b): fallback por timing — muestra del guardado de ESTA
+        // página (capture_fired → page_saved, sin marks nuevos ni timers).
+        reportTimingSample(performance.now() - tierT0);
       } catch {
         /* conserva la procesada anterior si la hay */
         if (prev) processed = prev.processed;
@@ -635,9 +661,13 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     let precision: ScanPage["precision"];
     try {
       // PLAN A (A1·A3): pipeline Blob — single-encode desde el original.
+      // ADDENDUM (A6-b): lado mayor del TIER (high: idéntico a da516f1).
+      // Cubre también el import de galería (la página entra por la misma
+      // frontera addCapturePage → addPageToDocument).
+      const tierT0 = performance.now();
       const res = await processImageToBlob(page.original, page.quad, page.filter, page.rotation, {
         manual: page.quadManual === true,
-        maxLongSide: PROCESSED_MAX_LONG_SIDE,
+        maxLongSide: effectiveProcessedLongSide(),
       });
       processed = res.processed;
       thumbnail = res.thumbnail;
@@ -647,6 +677,9 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         bytes: res.processed.size,
         pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
       });
+      // ADDENDUM (A5b): fallback por timing — muestra del guardado de ESTA
+      // página (capture_fired → page_saved, sin marks nuevos ni timers).
+      reportTimingSample(performance.now() - tierT0);
     } catch {
       /* usa original */
     }
@@ -767,9 +800,12 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     let precision: ScanPage["precision"] = page.precision;
     try {
       // PLAN A (A1·A3): pipeline Blob — single-encode desde el original.
+      // ADDENDUM (A6-b): lado mayor del TIER (high: idéntico a da516f1). Es
+      // un re-filtrado (no una captura nueva): NO alimenta el fallback por
+      // timing (A5b cuenta capturas, no reprocesos de páginas ya guardadas).
       const res = await processImageToBlob(page.original, page.quad, filter, page.rotation, {
         manual: page.quadManual === true,
-        maxLongSide: PROCESSED_MAX_LONG_SIDE,
+        maxLongSide: effectiveProcessedLongSide(),
       });
       processed = res.processed;
       thumbnail = res.thumbnail;

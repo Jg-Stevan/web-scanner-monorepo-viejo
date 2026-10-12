@@ -9,6 +9,7 @@
  */
 export * from "./store";
 export * from "./types";
+export * from "./device-tier";
 export * from "./image-processor";
 export * from "./quality";
 export * from "./ocr";

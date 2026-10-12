@@ -69,9 +69,11 @@ import {
   loadImage,
   loadImageFromSrc,
   processImageToBlob,
-  PROCESSED_MAX_LONG_SIDE,
   EDITOR_DISPLAY_LONG_SIDE,
 } from "@jg-stevan/scanner-core/image-processor";
+// ADDENDUM Plan A (A6-b): producción de página procesada → lado mayor del
+// TIER (high: 4032, idéntico a da516f1; low: 3200 downscale post-captura).
+import { effectiveProcessedLongSide } from "@jg-stevan/scanner-core/device-tier";
 import { acquireObjectUrl, releaseObjectUrl } from "@jg-stevan/scanner-core/page-store";
 import { toJpeg } from "@jg-stevan/scanner-core/pdf-export";
 import { markPerf } from "@/lib/perf-probe";
@@ -1337,9 +1339,11 @@ export default function EditorView() {
         blob = typeof p.processed === "string" ? await dataUrlToBlob(p.processed) : p.processed;
       } else {
         // Sesión de captura / estado cambiado: single-encode full-res.
+        // ADDENDUM (A6-b): lado mayor del TIER (high: idéntico a da516f1;
+        // low: 3200 — «máxima» = el dato guardado, q intacto).
         const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
           manual: p.quadManual === true,
-          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+          maxLongSide: effectiveProcessedLongSide(),
         });
         blob = res.processed;
       }

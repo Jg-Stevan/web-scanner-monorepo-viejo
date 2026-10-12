@@ -22,7 +22,26 @@
  *   crash-reporter). Los módulos de scanner-core marcan eventos leyendo
  *   window.__perfProbe directamente (core no puede importar código de la
  *   app): el global ES el contrato.
+ *
+ * ADDENDUM tier-2 (A7 — SOLO aditivo ⛔ §3.5: los marks y métodos existentes
+ * quedan byte-compatibles con el Plan B; la comparabilidad es sagrada):
+ *   window.__perfProbe.tier() → { memoryGB, tier, effectiveLongSide,
+ *     method: "qa-forced"|"memory"|"default"|"timing", downgradedByTiming }
+ *   — también incluido dentro de report().tier.
+ *   window.__tierTools = { info(), force("low"|"high"|"auto") } — force()
+ *   escribe localStorage["scannerlab-qa-force-tier"] y recarga (ergonomía
+ *   idéntica a __techTools del Plan B).
  */
+
+// ADDENDUM (A7): el tier-2 vive en scanner-core (device-tier.ts); la sonda
+// lo resuelve AL ARRANCAR (A5a «síncrona, al arrancar») y lo expone de
+// forma aditiva. Import core→app prohibido: aquí es app→core, dirección
+// legítima.
+import {
+  resolveInitialTier,
+  tierInfo,
+  writeQaForceTier,
+} from "@jg-stevan/scanner-core/device-tier";
 
 /** Entrada de la cola de eventos: {ev, ts, meta}. */
 export interface PerfMark {
@@ -36,6 +55,21 @@ export interface PerfMemory {
   heapMB: number;
   limitMB: number;
   ts: number;
+}
+
+/** ADDENDUM (A7) — vista del tier-2: window.__perfProbe.tier(). */
+export interface PerfTierInfo {
+  memoryGB: number | null;
+  tier: "high" | "low";
+  effectiveLongSide: number;
+  method: "qa-forced" | "memory" | "default" | "timing";
+  downgradedByTiming: boolean;
+}
+
+/** ADDENDUM (A7) — herramientas de QA del tier (window.__tierTools). */
+export interface TierTools {
+  info(): PerfTierInfo | null;
+  force(tier: "low" | "high" | "auto"): void;
 }
 
 /** Agregado de long tasks observadas desde la instalación. */
@@ -58,6 +92,8 @@ export interface PerfReport {
   markCounts: Record<string, number>;
   memory: PerfMemory | null;
   longTasks: PerfLongTasks;
+  /** ADDENDUM (A7, aditivo): tier vigente en el momento del reporte. */
+  tier: PerfTierInfo | null;
   lastEvents: PerfMark[];
   totals: {
     pagesSaved: number;
@@ -69,7 +105,8 @@ export interface PerfReport {
   };
 }
 
-/** API pública expuesta en window.__perfProbe (§6 — exacta). */
+/** API pública expuesta en window.__perfProbe (§6 — exacta; tier() es la
+ *  extensión aditiva del ADDENDUM A7). */
 export interface PerfProbe {
   marks: PerfMark[];
   mark(ev: string, meta?: Record<string, number | string | boolean>): void;
@@ -77,6 +114,8 @@ export interface PerfProbe {
   longTasks: PerfLongTasks;
   fpsSample(ms?: number): Promise<PerfFpsSample>;
   report(): PerfReport;
+  /** ADDENDUM (A7, aditivo): tier-2 vigente. */
+  tier(): PerfTierInfo | null;
 }
 
 interface MemoryPerformance extends Performance {
@@ -99,6 +138,13 @@ export function installPerfProbe(): PerfProbe {
   if (typeof window === "undefined") return null as unknown as PerfProbe;
   const existing = (window as unknown as { __perfProbe?: PerfProbe }).__perfProbe;
   if (existing) return existing;
+
+  // ADDENDUM (A5a): resolución inicial del tier — síncrona, al arrancar.
+  try {
+    resolveInitialTier();
+  } catch {
+    /* best-effort: el tier resolverá perezoso en el primer uso */
+  }
 
   const marks: PerfMark[] = [];
   const longTasks: PerfLongTasks = { count: 0, totalMs: 0 };
@@ -143,6 +189,14 @@ export function installPerfProbe(): PerfProbe {
       }
     },
     longTasks,
+    /** ADDENDUM (A7, aditivo): tier-2 vigente (null si algo falla). */
+    tier() {
+      try {
+        return tierInfo();
+      } catch {
+        return null;
+      }
+    },
     async fpsSample(ms = 3000) {
       return new Promise<PerfFpsSample>((resolve) => {
         try {
@@ -198,6 +252,8 @@ export function installPerfProbe(): PerfProbe {
         markCounts,
         memory: probe.memory(),
         longTasks,
+        // ADDENDUM (A7, aditivo): tier dentro del reporte.
+        tier: probe.tier(),
         lastEvents: marks.slice(-12),
         totals: { pagesSaved, savedBytes, saveMs, exportMs, exportBytes, filterMs },
       };
@@ -206,6 +262,30 @@ export function installPerfProbe(): PerfProbe {
 
   try {
     (window as unknown as { __perfProbe?: PerfProbe }).__perfProbe = probe;
+  } catch {
+    /* noop */
+  }
+
+  // ADDENDUM (A7) — window.__tierTools: ergonomía de QA del tier (idéntica
+  // a __techTools del Plan B, que el dueño ya conoce). SOLO aditivo.
+  try {
+    (window as unknown as { __tierTools?: TierTools }).__tierTools = {
+      info() {
+        try {
+          return tierInfo();
+        } catch {
+          return null;
+        }
+      },
+      force(tier: "low" | "high" | "auto") {
+        try {
+          writeQaForceTier(tier);
+          globalThis.location?.reload();
+        } catch {
+          /* best-effort */
+        }
+      },
+    };
   } catch {
     /* noop */
   }
