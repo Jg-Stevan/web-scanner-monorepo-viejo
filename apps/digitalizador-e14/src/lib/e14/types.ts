@@ -63,7 +63,10 @@ export interface Acta {
     | null
     | { tipo: "ILEGIBLE"; detalle: string }
     | { tipo: "GENERICO"; detalle: string }
-    | { tipo: "INCOMPLETA"; detalle: string };
+    | { tipo: "INCOMPLETA"; detalle: string }
+    /** §D3 (SPEC-e14-score-ocr): sin señal de contenido del acta — «score
+     *  bajo» determinista (repetir NUNCA revisión humana en 1ª ronda). */
+    | { tipo: "BAJO"; detalle: string };
   intento: number;
   maxIntentos: number; // "INTENTO 1 DE 4"
   enviadoAutomaticamente?: string; // "16:42:00"
@@ -75,6 +78,9 @@ export interface Acta {
   fotoProcesada?: string;
   /** data URL cruda del frame/archivo. */
   fotoOriginal?: string;
+  /** §D4 (SPEC-e14-score-ocr): la PROCESADA salió sin tinta (warp de un quad
+   *  degenerado sobre superficie lisa) → REVISIÓN muestra la ORIGINAL. */
+  procesadaVacia?: boolean;
   /** texto detectado (debug/verificación). */
   ocrTexto?: string;
   /** métricas del core 0-100. */

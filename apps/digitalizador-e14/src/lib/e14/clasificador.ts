@@ -37,6 +37,12 @@ export interface ClasificacionE14 {
   kit: number | null;
   nivel: NivelClasificacion;
   confianzas: { departamento: number; municipio: number; puesto: number; tipo: number };
+  /** §D2 (SPEC-e14-score-ocr): lecturas CRUDAS display-only — cabecera E-14
+   *  matcheada, MESA de ANCLA_MESA y tipo de banda. NO se validan contra
+   *  divipol, NO afectan niveles AUTO/SUGERIDA/MANUAL ni el panel §5 —
+   *  alimentan la señal de contenido del score (§D1) y el chip MESA parcial
+   *  de REVISIÓN. Opcional: las construcciones manuales (panel) no lo llevan. */
+  parciales?: { cabecera: boolean; mesa: number | null; tipo: TipoCopia | null };
 }
 
 /** Regla de dominio E-14 (§4.5): la cabecera debe decir E-14/REGISTRADURÍA.
@@ -446,6 +452,14 @@ export function clasificarCabecera(ocrTexto: string, base: DivipolBase): Clasifi
     pagina,
     kit,
     nivel,
+    // §D2 (SPEC-e14-score-ocr): paquete display-only — lecturas crudas ANTES
+    // de la validación divipol (la jerarquía puede no resolver y aun así la
+    // MESA/tipo leídos son información real del acta para el chip parcial).
+    parciales: {
+      cabecera: PATRON_CABECERA.test(texto),
+      mesa: Number.isFinite(mesaLeida) ? mesaLeida : null,
+      tipo,
+    },
     confianzas: {
       departamento: Math.round(confDep * 100) / 100,
       municipio: Math.round(confMun * 100) / 100,

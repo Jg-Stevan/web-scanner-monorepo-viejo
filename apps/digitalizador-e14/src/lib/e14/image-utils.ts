@@ -33,6 +33,49 @@ function encodePngDataUrl(canvas: HTMLCanvasElement): Promise<string> {
 import { loadImage } from "@jg-stevan/scanner-core/image-processor";
 
 /**
+ * §D4 (SPEC-e14-score-ocr) — cobertura de TINTA de la foto PROCESADA.
+ * El realce por defecto es B/N adaptativo (Bradley-Roth + despeckle del
+ * core): binario — tinta ≈ 0, papel ≈ 255. Un warp de un quad degenerado
+ * sobre una superficie LISA queda blanco puro → «sin tinta» → REVISIÓN
+ * muestra la ORIGINAL («el operador SIEMPRE ve lo que capturó»).
+ *
+ * Muestreo barato en canvas 64×64 SIN suavizado (nearest): el promedio de
+ * área DILUYE las líneas de tinta finas hasta luma ~240 y mataría la señal
+ * (un acta real cabe entera en 64 px: cada muestra cubre ~600 px originales).
+ * % de píxeles oscuros (luma < 128) < 0.5% → vacía. Con tinta — aunque sea
+ * poca, p. ej. la borrosa B/N — NO está vacía (se muestra la procesada).
+ * Ante cualquier error del decode NO se afirma «vacía» (conservador).
+ */
+const TINTA_LADO = 64;
+const TINTA_LUMA_OSCURA = 128;
+const TINTA_FRACCION_MINIMA = 0.005;
+
+export async function procesadaVaciaDataUrl(url: string): Promise<boolean> {
+  try {
+    const img = await loadImage(url);
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    if (!w || !h) return false;
+    const canvas = document.createElement("canvas");
+    canvas.width = TINTA_LADO;
+    canvas.height = TINTA_LADO;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return false;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, TINTA_LADO, TINTA_LADO);
+    const { data } = ctx.getImageData(0, 0, TINTA_LADO, TINTA_LADO);
+    let oscuras = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (luma < TINTA_LUMA_OSCURA) oscuras += 1;
+    }
+    return oscuras / (TINTA_LADO * TINTA_LADO) < TINTA_FRACCION_MINIMA;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Rota una data URL `deg` grados (múltiplos de 90) con canvas puro.
  * El lab devuelve también miniatura/w/h para su carrusel; e14 solo consume
  * `url` (los demás campos se conservan por fidelidad de la copia).

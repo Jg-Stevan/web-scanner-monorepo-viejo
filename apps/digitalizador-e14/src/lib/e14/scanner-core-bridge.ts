@@ -53,6 +53,7 @@ import {
   tituloYUbicacionDe,
   type ClasificacionE14,
 } from "./clasificador";
+import { procesadaVaciaDataUrl } from "./image-utils";
 // §1 (SPEC-ux-real-bn-editor): acta E-14 real del dueño (Galaxy A56 5G) —
 // import estático: Next resuelve el basePath /web-scanner del deploy estático.
 import actaSimUrl from "@/assets/acta-e14-real.jpg";
@@ -73,6 +74,30 @@ const DETALLE_GENERICO = "SCORE INSUFICIENTE PARA TRANSMISIÓN";
 // §F-5 (SPEC-camara-funcional): detalle del rechazo por acta INCOMPLETA —
 // la captura corta el papel aunque la cabecera sea legible.
 const DETALLE_INCOMPLETA = "EL ACTA ESTÁ CORTADA EN EL ENCUADRE — ALÉJATE UN POCO Y CAPTURA EL ACTA COMPLETA";
+// §D1 (SPEC-e14-score-ocr): modelo del score por RECONOCIMIENTO — techo de
+// una foto SIN SEÑAL de contenido del acta (bolsa de papas, pared, borrosa
+// total): por debajo de RECHAZADA (6.5) → «score bajo» garantizado. El
+// detalle es el rechazo determinista §D3 (repetir, NUNCA RH en 1ª ronda).
+const TECHO_SIN_SENAL = 4.9;
+const DETALLE_BAJO = "NO SE RECONOCE INFORMACIÓN DEL ACTA — REPITA LA FOTO";
+
+/**
+ * §D1 (SPEC-e14-score-ocr): SEÑAL DE CONTENIDO del acta — se calcula DESPUÉS
+ * del OCR + clasificación. El score del dueño mide el RECONOCIMIENTO («el
+ * score se basa en el reconocimiento del acta por ocr y que el acta esté
+ * completa»), no solo las métricas fotográficas. Señales: cabecera E-14 o
+ * alguna lectura cruda del clasificador (MESA/tipo). `ocrTextIsValid` NO es
+ * señal (la bolsa de papas lo pasa con texto ficticio del empaque).
+ */
+function senalDeContenido(texto: string, clasificacion: ClasificacionE14): boolean {
+  const p = clasificacion.parciales;
+  return (
+    PATRON_CABECERA.test(texto) ||
+    p?.cabecera === true ||
+    (p?.mesa != null && Number.isFinite(p.mesa)) ||
+    p?.tipo != null
+  );
+}
 
 /**
  * §F-1 (SPEC-camara-funcional) — señal de ACTA COMPLETA en el encuadre.
@@ -217,10 +242,12 @@ function contrasteEfectivoDe(q: PageQuality, ocrLegible: boolean): number {
 
 /** Mapeo §4.1: PageQuality del core → score 0-10 (1 decimal) con techos por
  *  level. §X (SPEC-score-legible): recibe señales de legibilidad — OCR válido
- *  y clasificación AUTO (identificación completa). */
+ *  y clasificación AUTO (identificación completa). §D1 (SPEC-e14-score-ocr):
+ *  `conSenal` extiende el paquete — SIN señal de contenido del acta el score
+ *  no describe una digitalización → techo 4.9 («score bajo»). */
 function scoreDeCalidad(
   q: PageQuality,
-  senales?: { ocrLegible: boolean; identificada: boolean },
+  senales?: { ocrLegible: boolean; identificada: boolean; conSenal?: boolean },
 ): number {
   const contrasteEf = contrasteEfectivoDe(q, senales?.ocrLegible ?? false);
   const bruto = (q.sharpness * 0.4 + q.brightness * 0.3 + contrasteEf * 0.3) / 10;
@@ -236,6 +263,10 @@ function scoreDeCalidad(
   }
   if (level === "fair") score10 = Math.min(score10, 7.9); // techo ADVERTENCIA
   if (level === "poor") score10 = Math.min(score10, 6.4); // techo RECHAZADA
+  // §D1 (SPEC-e14-score-ocr): techo SIN SEÑAL de contenido — ANTES del piso
+  // de identificada (no colisiona: AUTO exige tipo leído → implica señal).
+  // Fórmulas/techos/piso existentes BYTE A BYTE intactos (§7 prohibido).
+  if (senales && !senales.conSenal) score10 = Math.min(score10, TECHO_SIN_SENAL);
   // §X.2 piso por IDENTIFICACIÓN — ÚLTIMO (manda sobre los techos): una
   // clasificación AUTO (jerarquía divipol validada + mesa ≤ countTable + tipo)
   // es evidencia directa de legibilidad → el acta identificada nunca queda en
@@ -449,6 +480,12 @@ export class RealCoreBridge implements E14Bridge {
     ms.proceso = performance.now() - tProceso;
     emitir({ etapa: "REALZANDO", progreso: 1 });
     const fotoProcesada = resultado.processed;
+    // §D4 (SPEC-e14-score-ocr): visor nunca vacío — tinta de la PROCESADA
+    // (muestreo 64×64): un warp sin tinta (quad degenerado sobre superficie
+    // lisa → blanco puro del B/N adaptativo) marca el acta para que REVISIÓN
+    // muestre la ORIGINAL con su nota. Con tinta (aunque poca, p. ej. la
+    // borrosa B/N) se muestra la procesada como hoy — sin regresión.
+    const procesadaVacia = await procesadaVaciaDataUrl(fotoProcesada);
 
     // 4) Calidad de la página (Laplaciano + contraste + brillo sobre el crudo).
     emitir({ etapa: "CALIDAD", progreso: 0 });
@@ -476,9 +513,13 @@ export class RealCoreBridge implements E14Bridge {
     //    identificación manda sobre las métricas globales del crudo.
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
+    // §D1 (SPEC-e14-score-ocr): señal de CONTENIDO del acta — alimenta el
+    // score (techo 4.9 sin señal) y el desenlace §D3 (rechazo BAJO).
+    const senalActa = senalDeContenido(texto, clasificacion);
     let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
+      conSenal: senalActa,
     });
     // §D3 (SPEC-e14-simulacion-scores): inyección determinista del chip —
     // reemplaza el calculado DESPUÉS de scoreDeCalidad y ANTES del gate. El
@@ -510,6 +551,16 @@ export class RealCoreBridge implements E14Bridge {
         };
     if (!completa) score = Math.min(score, 6.4);
 
+    // §D3 (SPEC-e14-score-ocr): desenlace «SCORE BAJO» determinista — sin
+    // señal de contenido, el rechazo se sustituye por BAJO SEA CUAL SEA el
+    // status (el status lo sigue decidiendo el gate/los intentos: al agotar,
+    // contingencia C4 con su rechazo BAJO real). Con señal, nada cambia
+    // (INCOMPLETA/ILEGIBLE/GENERICO como hoy). Mismo patrón que INCOMPLETA:
+    // FUERA de evaluarGate (§7 prohibido tocarlo).
+    const rechazoFinal: Acta["rechazo"] = senalActa
+      ? gate.rechazo
+      : { tipo: "BAJO", detalle: DETALLE_BAJO };
+
     const evidenciaSim =
       opciones.simular && opciones.scoreSimulado != null ? ` sim=${opciones.scoreSimulado}` : "";
     console.info(
@@ -519,6 +570,7 @@ export class RealCoreBridge implements E14Bridge {
         `proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `senal=${senalActa} vacia=${procesadaVacia} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
         `score=${score} filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
@@ -528,13 +580,14 @@ export class RealCoreBridge implements E14Bridge {
 
     return this.construirActa(opciones, parcial, {
       fotoProcesada,
+      procesadaVacia,
       quadDetectado: quad,
       calidad,
       ocrTexto: texto,
       motor,
       score,
       status: gate.status,
-      rechazo: gate.rechazo,
+      rechazo: rechazoFinal,
       clasificacion: gate.clasificacion,
     });
   }
@@ -625,6 +678,9 @@ export class RealCoreBridge implements E14Bridge {
     ms.proceso = performance.now() - tProceso;
     emitir({ etapa: "REALZANDO", progreso: 1 });
     const fotoProcesada = resultado.processed;
+    // §D4 (SPEC-e14-score-ocr): tinta de la procesada re-recortada — mismo
+    // criterio del pipeline (un crop sobre zona sin tinta → ORIGINAL).
+    const procesadaVacia = await procesadaVaciaDataUrl(fotoProcesada);
 
     // 2) Calidad de la página (sobre el crudo — misma regla §5 paso 4).
     emitir({ etapa: "CALIDAD", progreso: 0 });
@@ -656,9 +712,13 @@ export class RealCoreBridge implements E14Bridge {
     const completa = esActaCompleta(quad);
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
+    // §D1 (SPEC-e14-score-ocr): señal de contenido — mismo criterio §4.4
+    // (helper único, AMBOS pipelines con el MISMO criterio).
+    const senalActa = senalDeContenido(texto, clasificacion);
     let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
+      conSenal: senalActa,
     });
     const gate: ResultadoGate = completa
       ? this.evaluarGate(score, texto, clasificacion, acta.intento, acta.maxIntentos)
@@ -671,12 +731,18 @@ export class RealCoreBridge implements E14Bridge {
           clasificacion: null,
         };
     if (!completa) score = Math.min(score, 6.4);
+    // §D3 (SPEC-e14-score-ocr): sustitución BAJO sin señal — igual que el
+    // escaneo (el recorte de una foto sin acta no fabrica señal).
+    const rechazoFinal: Acta["rechazo"] = senalActa
+      ? gate.rechazo
+      : { tipo: "BAJO", detalle: DETALLE_BAJO };
 
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
         `(proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `senal=${senalActa} vacia=${procesadaVacia} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
         `score=${score} filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
@@ -695,6 +761,7 @@ export class RealCoreBridge implements E14Bridge {
     const actaActualizada: Acta = {
       ...acta,
       fotoProcesada,
+      procesadaVacia,
       quadDetectado: quad,
       rotation: rotacion,
       ocrTexto: texto,
@@ -706,7 +773,7 @@ export class RealCoreBridge implements E14Bridge {
       motor,
       score,
       status: gate.status,
-      rechazo: gate.rechazo,
+      rechazo: rechazoFinal,
       clasificacion: gate.clasificacion ?? undefined,
       firmas: this.firmasPorStatus(acta.firmas, gate.status),
     };
@@ -828,6 +895,8 @@ export class RealCoreBridge implements E14Bridge {
     parcial: { fotoOriginal?: string },
     campos: {
       fotoProcesada?: string;
+      /** §D4 (SPEC-e14-score-ocr): la procesada salió sin tinta. */
+      procesadaVacia?: boolean;
       quadDetectado?: Quad;
       calidad?: PageQuality;
       ocrTexto?: string;
@@ -889,6 +958,7 @@ export class RealCoreBridge implements E14Bridge {
       fuente: opciones.fuente,
       fotoOriginal: parcial.fotoOriginal,
       fotoProcesada: campos.fotoProcesada,
+      procesadaVacia: campos.procesadaVacia,
       ocrTexto: campos.ocrTexto,
       metricas: campos.calidad
         ? {

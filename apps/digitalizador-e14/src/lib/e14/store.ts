@@ -493,13 +493,22 @@ export const useE14Store = create<E14Store>((set, get) => {
         });
         // §F-6 (SPEC-camara-funcional): toast rechazo-aware — INCOMPLETA
         // explica QUÉ hacer (aléjate y repite); el resto conserva el score.
+        // §D3 (SPEC-e14-score-ocr): variante BAJO — sin señal de contenido
+        // del acta, el desenlace del dueño es «score bajo → repetir foto».
         const esIncompleta = actaActual.rechazo?.tipo === "INCOMPLETA";
+        const esBajo = actaActual.rechazo?.tipo === "BAJO";
         notificar(
           "crit",
-          esIncompleta ? "ACTA INCOMPLETA" : "ACTA NO RECONOCIDA",
-          esIncompleta
-            ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
-            : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
+          esBajo
+            ? "SCORE BAJO"
+            : esIncompleta
+              ? "ACTA INCOMPLETA"
+              : "ACTA NO RECONOCIDA",
+          esBajo
+            ? "No se reconoce información del acta. Repita la foto."
+            : esIncompleta
+              ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
+              : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
         );
       }
       set({ vista: "revision" });

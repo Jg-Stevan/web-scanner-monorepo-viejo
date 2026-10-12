@@ -239,9 +239,34 @@ export function ReviewView() {
     : status === "EN_REVISION_HUMANA"
       ? "CLASIFICACIÓN PENDIENTE"
       : "NO IDENTIFICADO";
-  const hayFoto = Boolean(acta.fotoProcesada);
+  // §D2 (SPEC-e14-score-ocr): lectura PARCIAL de MESA (cruda, sin validación
+  // divipol — display-only) — diligencia el chip cuando la canónica NO
+  // resolvió (nivel ≠ AUTO; con AUTO el chip ya muestra la mesa VALIDADA
+  // real). NOTA clasificador: una MESA leída implica nivel ≥ SUGERIDA
+  // (algoResuelto §3.4) → la parcial vive en el bloque SUGERIDA/MANUAL, no
+  // solo en el «---» — el resto de chips conserva su fallback (mínimo del
+  // spec: el número se lee, con marca tenue «· PARCIAL»).
+  const mesaParcial =
+    !clasifAuto && acta.clasificacion?.parciales?.mesa != null
+      ? acta.clasificacion.parciales.mesa
+      : null;
+  // §D4 (SPEC-e14-score-ocr): el visor NUNCA queda vacío — sin
+  // fotoProcesada (detección con excepción/timeout) o procesada SIN tinta
+  // (warp degenerado sobre superficie lisa → blanco puro) se muestra la
+  // ORIGINAL con nota tenue. Con tinta (aunque poca, p. ej. la borrosa
+  // B/N) se muestra la procesada como hoy — sin regresión.
+  const fotoSinTinta = !acta.fotoProcesada || acta.procesadaVacia === true;
+  const fotoVisible = fotoSinTinta
+    ? (acta.fotoOriginal ?? acta.fotoProcesada)
+    : acta.fotoProcesada;
+  const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
+  const hayFoto = Boolean(fotoVisible);
+  const altFoto = mostrandoOriginal
+    ? "Foto original del acta (la procesada salió vacía)"
+    : "Foto real del acta procesada por el core";
   // D35: SIMULACIÓN produce fotos reales (pipeline real) — el gate es la foto, no la fuente.
-  const esReal = Boolean(acta.fotoProcesada);
+  // §D4: cualquier foto (procesada u original de respaldo) = acta real.
+  const esReal = Boolean(fotoVisible);
   // F-OCR (§F1.2, D39): TEXTO activo cuando ya hay texto válido (el pipeline
   // corre el OCR SIEMPRE — §1 del spec; OCR_NO_TEXT distingue el vacío que
   // pudo dejar el pipeline: ocr.ts L12 del core, PROHIBIDO re-declararlo).
@@ -371,7 +396,25 @@ export function ReviewView() {
             SÓLIDO con texto negro + glow; chips 2-3 navy texto blanco. */}
         <div className="w-full max-w-sm flex items-center justify-center gap-2.5 pb-2 flex-wrap">
           <Chip tone={toneEstado} solid>{hayClasificacion ? tipo : "---"}</Chip>
-          <Chip tone="neutral">{hayClasificacion ? `MESA ${acta.ubicacion.mesa}` : "MESA ---"}</Chip>
+          <Chip tone="neutral">
+            {clasifAuto ? (
+              `MESA ${acta.ubicacion.mesa}`
+            ) : mesaParcial != null ? (
+              <>
+                {`MESA ${String(mesaParcial).padStart(3, "0")}`}
+                <span
+                  className="ml-1 text-[9px] font-bold tracking-[0.1em] text-ink-faint"
+                  title="Lectura parcial del OCR — sin validar contra DIVIPOL"
+                >
+                  · PARCIAL
+                </span>
+              </>
+            ) : hayClasificacion ? (
+              `MESA ${acta.ubicacion.mesa}`
+            ) : (
+              "MESA ---"
+            )}
+          </Chip>
           <Chip tone="neutral">{paginaIdentificada ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}</Chip>
         </div>
 
@@ -392,15 +435,15 @@ export function ReviewView() {
           <button
             type="button"
             aria-label="Ver acta a pantalla completa"
-            onClick={() => (acta.fotoProcesada ? setVisorAbierto(true) : undefined)}
+            onClick={() => (fotoVisible ? setVisorAbierto(true) : undefined)}
             className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
           >
             <BracketsNeon />
             <div className="w-full h-full relative flex items-center justify-center min-h-0">
               {hayFoto ? (
                 <img
-                  src={acta.fotoProcesada}
-                  alt="Foto real del acta procesada por el core"
+                  src={fotoVisible}
+                  alt={altFoto}
                   className="w-full h-full object-cover rounded-[14px]"
                 />
               ) : (
@@ -418,8 +461,8 @@ export function ReviewView() {
             <div className="w-full h-full relative flex items-center justify-center min-h-0">
               {hayFoto ? (
                 <img
-                  src={acta.fotoProcesada}
-                  alt="Foto real del acta procesada por el core"
+                  src={fotoVisible}
+                  alt={altFoto}
                   className="w-full h-full object-cover rounded-[14px]"
                 />
               ) : (
@@ -431,6 +474,16 @@ export function ReviewView() {
               )}
             </div>
           </section>
+        )}
+
+        {/* §D4 (SPEC-e14-score-ocr): nota tenue del respaldo — la tarjeta
+            muestra la ORIGINAL porque la procesada salió vacía (o nunca
+            existió: timeout/excepción de detección). El operador SIEMPRE ve
+            lo que capturó. */}
+        {mostrandoOriginal && (
+          <p className="w-full max-w-sm pt-1.5 shrink-0 text-center font-data text-[9px] font-bold tracking-[0.18em] text-ink-faint uppercase">
+            SE MUESTRA LA FOTO ORIGINAL
+          </p>
         )}
 
         {/* §7 (cyber-neón): barra de envío = cápsula 46px verde-traslúcida
@@ -470,7 +523,12 @@ export function ReviewView() {
                 <XIcon className="w-4 h-4 text-neon-ink" />
               </span>
               <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-crit flex-1 min-w-0 truncate">
-                ACTA RECHAZADA
+                {/* §D3 (SPEC-e14-score-ocr): el chip de estado del rechazo
+                    BAJO lleva el copy del dueño (score bajo visible); el resto
+                    conserva «ACTA RECHAZADA» (la razón vive en el toast). */}
+                {acta.rechazo?.tipo === "BAJO"
+                  ? `SCORE BAJO — ${acta.rechazo.detalle}`
+                  : "ACTA RECHAZADA"}
               </span>
             </div>
           </div>
@@ -539,12 +597,14 @@ export function ReviewView() {
             <ToolbarBtn
               icon={<RotateIcon />}
               label="Rotar 90°"
-              onClick={esReal ? () => void rotarFoto() : undefined}
+              onClick={acta.fotoProcesada ? () => void rotarFoto() : undefined}
             />
+            {/* §D4 (SPEC-e14-score-ocr): PANTALLA COMPLETA siempre habilitado
+                mientras haya UNA foto (procesada u original de respaldo). */}
             <ToolbarBtn
               icon={<FullscreenIcon />}
               label="Pantalla completa"
-              onClick={esReal && acta.fotoProcesada ? () => setVisorAbierto(true) : undefined}
+              onClick={fotoVisible ? () => setVisorAbierto(true) : undefined}
             />
           </div>
         )}
@@ -587,7 +647,7 @@ export function ReviewView() {
             <ToolbarBtn
               icon={<FullscreenIcon />}
               label="Pantalla completa"
-              onClick={esReal && acta.fotoProcesada ? () => setVisorAbierto(true) : undefined}
+              onClick={fotoVisible ? () => setVisorAbierto(true) : undefined}
             />
           </div>
         )}
@@ -793,9 +853,10 @@ export function ReviewView() {
         </>
       ) : null}
 
-      {/* L5 §7 — PANTALLA COMPLETA: visor modal de la foto procesada
-          (object-contain, tap en cualquier lado o Esc cierra). */}
-      {visorAbierto && acta.fotoProcesada ? (
+      {/* L5 §7 — PANTALLA COMPLETA: visor modal de la foto (procesada o, si
+          salió vacía, ORIGINAL de respaldo — §D4 SPEC-e14-score-ocr;
+          object-contain, tap en cualquier lado o Esc cierra). */}
+      {visorAbierto && fotoVisible ? (
         <div
           role="dialog"
           aria-label="Foto del acta a pantalla completa"
@@ -803,8 +864,8 @@ export function ReviewView() {
           onClick={() => setVisorAbierto(false)}
         >
           <img
-            src={acta.fotoProcesada}
-            alt="Foto procesada del acta a pantalla completa"
+            src={fotoVisible}
+            alt={altFoto}
             className="max-w-full max-h-full object-contain rounded-sm shadow-2xl shadow-black"
             draggable={false}
           />
