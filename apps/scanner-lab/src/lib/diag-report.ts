@@ -27,7 +27,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "diag/v1.1-sub-marks (fingerprint pendiente)";
+export const DIAG_BUILD = "diag/test-estandar-qa @ 97dbe66";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
