@@ -97,11 +97,21 @@ export interface PagePrecision {
 
 export interface ScanPage {
   id: string;
-  /** data URL de la imagen cruda capturada */
-  original: string;
-  /** data URL procesada (recorte + filtro) */
-  processed: string;
-  /** data URL miniatura */
+  /**
+   * PLAN A (A1 — Blob-first): el ORIGINAL completo vive como `Blob` binario
+   * (fuera del heap de JS) — NUNCA como data URL string persistente.
+   * `string` = data URL legacy (migración lazy a Blob al vuelo al hidratar,
+   * ver page-store.loadAllDocuments). El dato guardado no cambia: mismos
+   * píxeles, distinto contenedor de memoria.
+   */
+  original: Blob | string;
+  /**
+   * PLAN A (A1): la PROCESADA (recorte + filtro, PNG sin pérdida R-10) vive
+   * como `Blob`. `string` = data URL legacy. La UI materializa objectURLs
+   * bajo demanda (ciclo de vida auditado — page-store.acquireObjectUrl).
+   */
+  processed: Blob | string;
+  /** Miniatura ~160px JPEG (data URL pequeña: despreciable en heap). */
   thumbnail: string;
   filter: PageFilter;
   quad: Quad;
@@ -150,15 +160,27 @@ export function trashDaysLeft(doc: ScanDocument, now = Date.now()): number {
 /** Página en sesión de captura (antes de guardar) */
 export interface CapturePage {
   id: string;
-  original: string;
+  /**
+   * PLAN A (A1): fuente de verdad Blob-first. La captura produce data URL
+   * (string, CameraView sin cambios) y el STORE la convierte a Blob en el
+   * intake (addCapturePage) → el data URL 4032 NUNCA persiste en memoria.
+   * `string` solo existe entre captura e intake.
+   */
+  original: Blob | string;
   quad: Quad;
   /** true = el humano movió las esquinas → warp SIN refine y SIN shrink */
   quadManual?: boolean;
   filter: PageFilter;
   rotation: number;
   quality: PageQuality;
-  /** Procesada persistida (solo modo revisión de documento: preview inmediato). */
-  processed?: string;
+  /**
+   * PLAN A (A2 — pirámide de render): la procesada persistida viaja en la
+   * sesión SOLO como fuente de semilla para la capa de display (~2048px);
+   * el editor ya NO escribe procesadas de sesión — al guardar se re-ejecuta
+   * el MISMO pipeline desde el original a full-res (single-encode, WYSIWYG
+   * por construcción). `Blob | string` por compat legacy.
+   */
+  processed?: Blob | string;
   /** Clave de estado (id|quad|filtro|rotación) con la que se generó
    *  `processed` — el preview solo la usa si el estado NO ha cambiado
    *  (rotar/filtrar/recortar invalida la procesada guardada). */

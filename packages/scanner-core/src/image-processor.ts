@@ -22,6 +22,10 @@ import {
   type EnhanceMode,
   type ScannerWorkerClient,
 } from "./detector-client";
+// PLAN A (A1): utilidades Blob/objectURL compartidas (page-store no importa
+// image-processor → sin ciclos). acquireObjectUrl centraliza el ciclo de
+// vida de TODA objectURL del escáner (auditoría §5 A1).
+import { acquireObjectUrl, dataUrlToBlob } from "./page-store";
 
 export { warmUpScannerWorker, getScannerWorker } from "./detector-client";
 
@@ -29,6 +33,18 @@ export interface ProcessResult {
   processed: string; // data URL
   thumbnail: string; // data URL pequeña
   /** Estadísticas del pipeline REAL (worker OpenCV) o fallback canvas. */
+  precision?: PagePrecision;
+}
+
+/** PLAN A (A1 · A3 — Blob-first + single-encode): resultado del pipeline con
+ *  la PROCESADA como `Blob` binario (fuera del heap de JS). La miniatura
+ *  sigue siendo data URL pequeña (~160px, despreciable). El editor consume
+ *  esta variante a escala display (2048, A2) y el store a full-res (4032):
+ *  MISMO pipeline, mismos parámetros → WYSIWYG por construcción. */
+export interface ProcessResultBlob {
+  /** PNG sin pérdida (R-10) — la codificación FINAL única del documento. */
+  processed: Blob;
+  thumbnail: string;
   precision?: PagePrecision;
 }
 
@@ -54,7 +70,11 @@ export interface ProcessOptions {
  *  FIX v3 (fix-editor-quality): ahora se EXPORTA — preview del editor y
  *  guardado usan ESTA MISMA constante → WYSIWYG estricto por construcción
  *  (lo que ves ES la imagen guardada). Regla del producto: guardar siempre
- *  a la resolución máxima del lente, sin ajustes por dispositivo. */
+ *  a la resolución máxima del lente, sin ajustes por dispositivo.
+ *
+ *  PLAN A (§2.2 ⛔ inmutable): este tope NO cambia. La pirámide de render
+ *  (A2) añade EDITOR_DISPLAY_LONG_SIDE como capa de SOLO display en el
+ *  editor — nunca reemplaza este techo de export/guardado. */
 export const PROCESSED_MAX_LONG_SIDE = 4032;
 
 /** Mapea los 3 filtros del producto (§8) a los modos reales del worker. */
@@ -94,6 +114,20 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error("No se pudo cargar la imagen"));
     img.src = src;
   });
+}
+
+/** PLAN A (A1 — Blob-first): decodifica una fuente `Blob | string` a
+ *  HTMLImageElement. El Blob se materializa como objectURL TRANSITORIO que
+ *  se revoca en `finally` justo tras el decode (el elemento ya retiene los
+ *  píxeles) — ningún URL ni string gigante sobrevive a la llamada. */
+export async function loadImageFromSrc(src: Blob | string): Promise<HTMLImageElement> {
+  if (typeof src === "string") return loadImage(src);
+  const url = URL.createObjectURL(src);
+  try {
+    return await loadImage(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /** Tope del lado mayor para IMÁGENES IMPORTADAS (galería/cámara nativa).
@@ -299,6 +333,28 @@ function blobToDataURL(blob: Blob): Promise<string> {
     fr.onload = () => resolve(fr.result as string);
     fr.onerror = () => reject(new Error("blobToDataURL falló"));
     fr.readAsDataURL(blob);
+  });
+}
+
+/** PLAN A (A3 — single-encode): encode PNG de un canvas vía `toBlob`
+ *  (asíncrono, memoria-seguro en iOS — regla “error #22”). El PNG resultante
+ *  es LA codificación final del documento: jamás se re-codifica después. */
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
+    try {
+      canvas.toBlob(
+        (b) => {
+          if (!b || b.size === 0) {
+            reject(new Error("toBlob PNG vacío"));
+            return;
+          }
+          resolve(b);
+        },
+        "image/png"
+      );
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error("toBlob PNG falló"));
+    }
   });
 }
 
@@ -830,9 +886,142 @@ export async function processImage(
   rotation = 0,
   opts?: ProcessOptions
 ): Promise<ProcessResult> {
+  // CONTRATO PÚBLICO (intacto — apps/digitalizador-e14 depende de él):
+  // data URL de salida como siempre. Internamente corre el pipeline Blob
+  // (PLAN A) y convierte UNA vez al salir — mismo resultado, cero cambio
+  // observable para e14.
+  const res = await processImageToBlob(src, quad, filter, rotation, opts);
+  const processed = await blobToDataURL(res.processed);
+  return { processed, thumbnail: res.thumbnail, precision: res.precision };
+}
+
+/** PLAN A (A1 · A2 · A3) — pipeline completo con salida **Blob**: la fuente
+ *  puede ser Blob (fuente de verdad binaria, fuera del heap) o data URL
+ *  legacy. MISMO pipeline, mismos parámetros que `processImage`:
+ *  · editor  → maxLongSide = EDITOR_DISPLAY_LONG_SIDE (capa display 2048)
+ *  · store   → maxLongSide = PROCESSED_MAX_LONG_SIDE (guardado full-res)
+ *  → WYSIWYG por construcción: mismo código, distinta escala de preview. */
+export async function processImageToBlob(
+  src: Blob | string,
+  quad: Quad,
+  filter: PageFilter,
+  rotation = 0,
+  opts?: ProcessOptions
+): Promise<ProcessResultBlob> {
   const precise = await processImagePrecise(src, quad, filter, rotation, opts);
   if (precise) return precise;
   return processImageCanvas(src, quad, filter, rotation, opts);
+}
+
+/** PLAN A (A2 — pirámide de render) — lado mayor de la CAPA DE DISPLAY del
+ *  editor: 2048 px. Es una constante de SOLO render: NO reemplaza a
+ *  PROCESSED_MAX_LONG_SIDE (4032 ⛔ inmutable §2.2) — el full-res se
+ *  decodifica UNA sola vez, en el momento exacto de procesar/exportar. */
+export const EDITOR_DISPLAY_LONG_SIDE = 2048;
+
+/** PLAN A (A2) — materializa la CAPA DE DISPLAY de una imagen guardada:
+ *  createImageBitmap con opciones de resize cuando el navegador las soporta
+ *  (el full-res nunca entra al heap de JS); fallback: decode completo +
+ *  downscale por canvas dentro del mismo tick, liberando el bitmap grande
+ *  inmediatamente. Devuelve objectURL (registrado — page-store) + dims:
+ *  el LLAMADOR es dueño del ciclo de vida (releaseObjectUrl en finally).
+ *  Es un ítem de display desechable (A3 permite su re-encode). */
+export async function blobToDisplayUrl(
+  src: Blob | string,
+  maxLongSide: number
+): Promise<{ url: string; w: number; h: number }> {
+  if (typeof src === "string") {
+    // Legacy data URL: mismo trato (decode → capa display) sin objectURL.
+    const img = await loadImage(src);
+    const w0 = img.naturalWidth || img.width;
+    const h0 = img.naturalHeight || img.height;
+    if (!w0 || !h0) throw new Error("imagen sin dimensiones");
+    const scale = Math.min(1, maxLongSide / Math.max(w0, h0));
+    if (scale >= 1) return { url: src, w: w0, h: h0 };
+    return await downscaleToDisplayUrl(img, w0, h0, maxLongSide);
+  }
+  // Dimensiones intrínsecas vía <img> (decode gestionado por el navegador,
+  // transitorio — el objectURL se revoca en finally).
+  const probeUrl = URL.createObjectURL(src);
+  let w0 = 0;
+  let h0 = 0;
+  try {
+    const img = await loadImage(probeUrl);
+    w0 = img.naturalWidth || img.width;
+    h0 = img.naturalHeight || img.height;
+  } finally {
+    URL.revokeObjectURL(probeUrl);
+  }
+  if (!w0 || !h0) throw new Error("imagen sin dimensiones");
+  const scale = Math.min(1, maxLongSide / Math.max(w0, h0));
+  if (scale >= 1) {
+    // Ya cabe: objectURL directo del Blob (cero re-encode).
+    return { url: acquireObjectUrl(src), w: w0, h: h0 };
+  }
+  const w = Math.max(1, Math.round(w0 * scale));
+  const h = Math.max(1, Math.round(h0 * scale));
+  // Ruta rápida: createImageBitmap con resize nativo (si el navegador
+  // soporta las opciones — se VERIFICA el resultado). Chrome/Android ✓.
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bm = await createImageBitmap(src, {
+        resizeWidth: w,
+        resizeHeight: h,
+        resizeQuality: "high",
+      });
+      if (bm.width === w && bm.height === h) {
+        try {
+          return { url: await bitmapToPngObjectUrl(bm, w, h), w, h };
+        } finally {
+          bm.close();
+        }
+      }
+      // El navegador ignoró las opciones de resize → descartar y caer al
+      // fallback (liberación inmediata del bitmap obtenido).
+      bm.close();
+    } catch {
+      /* sin resize options → fallback */
+    }
+  }
+  // Fallback (A2): decode completo + downscale por canvas EN EL MISMO TICK,
+  // liberando el bitmap grande inmediatamente.
+  const big = await createImageBitmap(src);
+  try {
+    return { url: await bitmapToPngObjectUrl(big, w, h), w, h };
+  } finally {
+    big.close();
+  }
+}
+
+/** Dibuja un CanvasImageSource a un canvas w×h (downscale high quality) y
+ *  devuelve su PNG como objectURL registrado (capa display desechable). */
+async function bitmapToPngObjectUrl(
+  source: CanvasImageSource,
+  w: number,
+  h: number
+): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("sin contexto 2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, w, h);
+  const blob = await canvasToPngBlob(canvas);
+  return acquireObjectUrl(blob);
+}
+
+/** Downscale de un HTMLImageElement legacy (data URL) a capa display. */
+async function downscaleToDisplayUrl(
+  img: HTMLImageElement,
+  w0: number,
+  h0: number,
+  maxLongSide: number
+): Promise<{ url: string; w: number; h: number }> {
+  const scale = Math.min(1, maxLongSide / Math.max(w0, h0));
+  const w = Math.max(1, Math.round(w0 * scale));
+  const h = Math.max(1, Math.round(h0 * scale));
+  return { url: await bitmapToPngObjectUrl(img, w, h), w, h };
 }
 
 /** Nº de esquinas firmes del refinado (fellBack[i]=true ⇒ esquina i cayó al
@@ -844,18 +1033,19 @@ function solidCorners(fellBack: readonly boolean[] | null): number | null {
 
 /** Pipeline REAL vía DetectionWorker. null → el llamador usa su fallback. */
 async function processImagePrecise(
-  src: string,
+  src: Blob | string,
   quad: Quad,
   filter: PageFilter,
   rotation: number,
   opts?: ProcessOptions
-): Promise<ProcessResult | null> {
+): Promise<ProcessResultBlob | null> {
   const client: ScannerWorkerClient | null = getScannerWorker();
   if (!client || client.isDead) return null;
   const ok = await client.waitReady();
   if (!ok) return null;
   try {
-    const img = await loadImage(src);
+    // PLAN A (A1): Blob → decode transitorio (objectURL revocado tras cargar).
+    const img = await loadImageFromSrc(src);
     if (!img.naturalWidth || !img.naturalHeight) return null;
 
     // 1) Warp: refinado sub-píxel (RANSAC) + shrink 3.5px + homografía
@@ -891,7 +1081,9 @@ async function processImagePrecise(
           /* conserva el blob puro */
         }
       }
-      const processed = await blobToDataURL(blob);
+      // PLAN A (A1·A3): el PNG del worker YA es Blob — cero data URL, cero
+      // re-encode: esta ES la codificación final del documento.
+      const processed = blob;
       const thumbnail = await thumbnailFromBlob(blob);
       const precision: PagePrecision = {
         engine: "worker",
@@ -916,9 +1108,16 @@ async function processImagePrecise(
     if (filter === "original" && opts?.unsharpOriginal === true) {
       applyUnsharpToCanvas(filtered);
     }
-    const processed = await canvasToDataURL(filtered, "image/png");
+    // PLAN A (A3): PNG Blob — codificación final única (con rescate dataURL
+    // → Blob si toBlob fallase — nunca revienta).
+    let processedBlob: Blob;
+    try {
+      processedBlob = await canvasToPngBlob(filtered);
+    } catch {
+      processedBlob = dataUrlToBlob(await canvasToDataURL(filtered, "image/png"));
+    }
     return {
-      processed,
+      processed: processedBlob,
       thumbnail: thumbnailFromCanvas(filtered),
       precision: {
         engine: "worker",
@@ -983,13 +1182,14 @@ function canvasToDataURL(
  *  3. Filtro con la MISMA matemática del motor (image-modes) + PNG (R-10).
  */
 async function processImageCanvas(
-  src: string,
+  src: Blob | string,
   quad: Quad,
   filter: PageFilter,
   rotation: number,
   opts?: ProcessOptions
-): Promise<ProcessResult> {
-  const img = await loadImage(src);
+): Promise<ProcessResultBlob> {
+  // PLAN A (A1): Blob → decode transitorio (objectURL revocado tras cargar).
+  const img = await loadImageFromSrc(src);
   const maxLongSide = opts?.maxLongSide ?? PROCESSED_MAX_LONG_SIDE;
   const warped = warpQuadToCanvas(img, quad, maxLongSide);
   const base =
@@ -1001,7 +1201,14 @@ async function processImageCanvas(
     applyUnsharpToCanvas(filtered);
   }
   // Los 3 filtros del producto salen PNG (R-10) — sin ringing sobre tinta.
-  const processed = await canvasToDataURL(filtered, "image/png");
+  // PLAN A (A3 — single-encode): PNG Blob como codificación final única
+  // (rescate dataURL → Blob si toBlob fallase — nunca revienta).
+  let processed: Blob;
+  try {
+    processed = await canvasToPngBlob(filtered);
+  } catch {
+    processed = dataUrlToBlob(await canvasToDataURL(filtered, "image/png"));
+  }
   return {
     processed,
     thumbnail: thumbnailFromCanvas(filtered),

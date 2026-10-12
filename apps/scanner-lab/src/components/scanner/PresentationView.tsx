@@ -24,7 +24,14 @@ import type { ScanPage } from "@jg-stevan/scanner-core/types";
  *  displayPending=true mientras el src es el THUMBNAIL provisional
  *  (~160 px) esperando la copia de display que EditorView genera en
  *  background (apertura progresiva). Runtime-only: no se persiste. */
-export type PresentationPage = ScanPage & {
+/** Página de la presentación. PLAN A (A1): las imágenes llegan como URLs YA
+ *  materializadas por el padre (objectURL con ciclo de vida gestionado en
+ *  EditorView — closePresentation revoca) o data URLs pequeñas (miniaturas);
+ *  esta vista NUNCA toca Blobs ni materializa data URLs gigantes. */
+export type PresentationPage = Omit<ScanPage, "original" | "processed" | "thumbnail"> & {
+  original: string;
+  processed: string;
+  thumbnail: string;
   displayPending?: boolean;
 };
 

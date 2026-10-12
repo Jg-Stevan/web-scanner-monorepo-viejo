@@ -64,11 +64,17 @@ import { toast } from "sonner";
 
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 import {
+  blobToDisplayUrl,
   detectDocumentEdges,
   loadImage,
-  processImage,
+  loadImageFromSrc,
+  processImageToBlob,
   PROCESSED_MAX_LONG_SIDE,
+  EDITOR_DISPLAY_LONG_SIDE,
 } from "@jg-stevan/scanner-core/image-processor";
+import { acquireObjectUrl, releaseObjectUrl } from "@jg-stevan/scanner-core/page-store";
+import { toJpeg } from "@jg-stevan/scanner-core/pdf-export";
+import { markPerf } from "@/lib/perf-probe";
 import {
   FILTER_PRESETS,
   TRASH_RETENTION_DAYS,
@@ -117,14 +123,12 @@ const LOUPE_GAP = 14;
 const COMPARE_HOLD_MS = 350;
 
 /** Preview procesado de la página en edición (modo review).
- *  `url` es el DATO completo (PNG hasta 4032 px — fuente de
- *  verdad para rotación/export/guardado) y, desde el EXPERIMENTO
- *  v11, es TAMBIÉN lo que consumen todos los <img> del editor y de
- *  la presentación: fuente única, sin copia de pantalla.
- *  EXPERIMENTO v11 (crash-test): `displayUrl` (la copia de PANTALLA
- *  JPEG ≤ tope de v5/v10-A) queda APAGADA — nadie la escribe ni la
- *  lee. El campo y `makeDisplayUrl` se conservan como SEAM para
- *  revertir el experimento con un commit si el crash-test lo pide. */
+ *  PLAN A (A2 — pirámide de render): `url` es la CAPA DE DISPLAY — un PNG
+ *  ≤2048px como objectURL REGISTRADO (page-store). El dato guardado
+ *  (4032 ⛔ intacto) se materializa UNA sola vez al procesar/exportar:
+ *  mismo pipeline, distinta escala de previsualización → WYSIWYG por
+ *  construcción. Ciclo de vida: LRU (eviction → releaseObjectUrl) +
+ *  release total al desmontar el editor. */
 interface PreviewEntry {
   url: string;
   /** EXPERIMENTO v11: APAGADO — seam sin uso (copia de display v5/v10-A). */
@@ -169,8 +173,10 @@ function prettyDate(ts: number): string {
   }
 }
 
-/** Encode PNG de un canvas vía toBlob (memoria-seguro en iOS) → data URL. */
-function encodePngDataUrl(canvas: HTMLCanvasElement): Promise<string> {
+/** Encode PNG de un canvas vía toBlob (memoria-seguro en iOS) → Blob.
+ *  PLAN A (A3): los canvas del editor codifican a Blob + objectURL
+ *  registrado (rotateDisplayUrl) — nunca a data URL string. */
+function canvasToPngBlobLocal(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     try {
       canvas.toBlob((b) => {
@@ -178,10 +184,7 @@ function encodePngDataUrl(canvas: HTMLCanvasElement): Promise<string> {
           reject(new Error("toBlob vacío"));
           return;
         }
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result ?? ""));
-        fr.onerror = () => reject(new Error("FileReader falló"));
-        fr.readAsDataURL(b);
+        resolve(b);
       }, "image/png");
     } catch (e) {
       reject(e instanceof Error ? e : new Error("toBlob falló"));
@@ -189,17 +192,41 @@ function encodePngDataUrl(canvas: HTMLCanvasElement): Promise<string> {
   });
 }
 
-/**
- * F-ROT-RAPID — rota una data URL en múltiplos de 90° SIN reprocesar el
- * pipeline (warp+enhance). Matemáticamente equivalente: el warp ya ocurrió y
- * los filtros (raw/text/bw: operaciones por píxel + gaussiano isotrópico) son
- * conmutativos con rotaciones de 90°. Devuelve también una miniatura 160px
- * coherente para el merge al guardar.
- */
-async function rotateProcessedDataUrl(
+/** PLAN A (A1): hook de ciclo de vida para objectURLs de display — acquire
+ *  al montar/cambiar la fuente, release (revoca) en el cleanup. Las strings
+ *  (data URLs/miniaturas) pasan síncronas sin registro. */
+function useObjectUrl(src: Blob | string | undefined): string | undefined {
+  const [url, setUrl] = useState<string | undefined>(() =>
+    typeof src === "string" ? src : undefined
+  );
+  useEffect(() => {
+    if (typeof src === "string") {
+      setUrl(src);
+      return;
+    }
+    if (!src) {
+      setUrl(undefined);
+      return;
+    }
+    const u = acquireObjectUrl(src);
+    setUrl(u);
+    return () => {
+      releaseObjectUrl(u);
+    };
+  }, [src]);
+  return url;
+}
+
+/** PLAN A (A2 — pirámide de render): rota la CAPA DE DISPLAY (2048) en
+ *  múltiplos de 90° SIN reprocesar el pipeline — matemáticamente
+ *  equivalente (el filtro es por píxel y su gaussiano isotrópico conmuta
+ *  con rotaciones de 90°). La rotación viaja como ESTADO ({rotation}) y al
+ *  guardar/exportar el store re-ejecuta el MISMO pipeline desde el
+ *  original a full-res (single-encode, WYSIWYG por construcción). */
+async function rotateDisplayUrl(
   url: string,
   deg: number
-): Promise<{ url: string; thumb: string; w: number; h: number }> {
+): Promise<{ url: string; w: number; h: number }> {
   const img = await loadImage(url);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
@@ -216,21 +243,10 @@ async function rotateProcessedDataUrl(
   ctx.translate(cw / 2, ch / 2);
   ctx.rotate((deg * Math.PI) / 180);
   ctx.drawImage(img, -w / 2, -h / 2);
-  const tW = 160;
-  const tH = Math.max(1, Math.round((ch / cw) * tW));
-  const tCanvas = document.createElement("canvas");
-  tCanvas.width = tW;
-  tCanvas.height = tH;
-  const tCtx = tCanvas.getContext("2d");
-  if (tCtx) {
-    tCtx.imageSmoothingQuality = "high";
-    tCtx.drawImage(canvas, 0, 0, tW, tH);
-  }
-  const [urlOut, thumb] = await Promise.all([
-    encodePngDataUrl(canvas),
-    Promise.resolve(tCanvas.toDataURL("image/jpeg", 0.8)),
-  ]);
-  return { url: urlOut, thumb, w: cw, h: ch };
+  // Capa desechable: PNG Blob → objectURL registrado (A3 permite el
+  // re-encode de ítems de display).
+  const blob = await canvasToPngBlobLocal(canvas);
+  return { url: acquireObjectUrl(blob), w: cw, h: ch };
 }
 
 /** data URL → Blob (fetch soporta data URLs en todos los navegadores modernos). */
@@ -241,30 +257,25 @@ async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   return blob;
 }
 
-/** EXPERIMENTO v11 (crash-test fuente única) — tope de DISPLAY apagado
- *  por decisión del dueño: TODOS los dispositivos ven el mismo dato de
- *  imagen (el de 4032 px), sin degradación por tier y sin red de
- *  seguridad. Si el crash-test en gama baja NO crashea, esto se vuelve
- *  permanente; si crashea, se reactiva la protección SOLO en el punto
- *  exacto del fallo (restaurar los tiers v10-A: deviceMemory
- *  4032/3200/2560, iOS 3200).
- *
- *  (Histórico v10-A: tope adaptativo 2560/3200/4032 por deviceMemory;
- *  v5 fijaba 2560 para ahorrar RAM en gama baja. Memoria esperada por
- *  imagen activa decodificada: 2560→~19 MB · 3200→~33 MB · 4032→~49 MB.)
- *
- *  La telemetría `window.__displayMax` sigue viva y debe leer **4032**
- *  en todos los entornos mientras dure el experimento. */
+/** PLAN A (A2 — pirámide de render) — tope de la CAPA DE DISPLAY del editor.
+ *  El EXPERIMENTO v11 (fuente única 4032 para todo) CONCLUYÓ: era el origen
+ *  de la presión de memoria (PNG 4032 como data URL string = 10–25 MB por
+ *  página en el heap, ×2 como cadena viva). El patrón industria (Apple
+ *  Photos / Lightroom) manda: la UI trabaja sobre una capa ~2048px y el
+ *  full-res se decodifica UNA sola vez, en el momento exacto de
+ *  procesar/exportar. La telemetría `window.__displayMax` refleja la capa
+ *  de display real (2048); `PROCESSED_MAX_LONG_SIDE` (4032 ⛔ §2.2) sigue
+ *  siendo el tope de export/guardado. */
 function computeDisplayMaxLongSide(): number {
-  // EXPERIMENTO v11: apagado por decisión del dueño — todos los dispositivos
-  // ven el dato completo; restaurar tiers solo si el crash-test lo justifica.
-  return 4032;
+  return EDITOR_DISPLAY_LONG_SIDE;
 }
 
-/** FIX v10-A — tope de DISPLAY (EXPERIMENTO v11: constante 4032 — ver computeDisplayMaxLongSide). */
+/** FIX v10-A — tope de DISPLAY (PLAN A: capa 2048 — ver computeDisplayMaxLongSide). */
 const DISPLAY_MAX_LONG_SIDE = computeDisplayMaxLongSide();
 
 // Telemetría QA (patrón existente, solo dev/QA): tope efectivo en window.
+// PLAN A: refleja la CAPA DE DISPLAY (2048) — el techo de guardado sigue
+// siendo 4032 (PROCESSED_MAX_LONG_SIDE, ⛔ §2.2).
 if (typeof window !== "undefined") {
   (window as unknown as { __displayMax?: number }).__displayMax = DISPLAY_MAX_LONG_SIDE;
 }
@@ -404,6 +415,12 @@ export default function EditorView() {
     capturePages[editingIndex] ?? capturePages[capturePages.length - 1];
   const activeIdx = page ? capturePages.indexOf(page) : -1;
 
+  // PLAN A (A1): el ORIGINAL de la página en edición, materializado como
+  // objectURL con ciclo de vida (acquire al cambiar, revoke al limpiar).
+  // Lo consumen: comparación antes/después, modo recorte (backdrop + lupa)
+  // y las previews de filtros — mismos píxeles que la v11, sin la cadena.
+  const originalUrl = useObjectUrl(page?.original);
+
   // ── Modo review/crop + preview procesado (F-FLOW) ───────────────────────
   const [mode, setMode] = useState<"review" | "crop">("review");
   const [preview, setPreview] = useState<PreviewEntry | null>(null);
@@ -537,81 +554,122 @@ export default function EditorView() {
   // documento final, no el original con marco (eso queda para "Recortar").
   const cacheKey = page ? capturePageKey(page) : "";
 
-  /** Inserta en la cache de previews con recorte LRU unificado. FIX v3
-   *  (4.5): tope 12 → 6 entradas — al procesar TODO a 4032 px, cada entrada
-   *  (data URL PNG) pesa ~el doble (10-25 MB como cadena JS, ×2 en heap):
-   *  mismo presupuesto TOTAL de memoria que antes, mitades entradas → sin
-   *  riesgo de jetsam en iOS con sesiones largas (runOcrAll incluido).
-   *  EXPERIMENTO v11: la entrada es SOLO el dato completo (sin copia de
-   *  display) — el LRU de 6 NO se toca (medir la presión real ES el
-   *  experimento). */
+  // ── REVIEW: cache de previews (LRU 6) — PLAN A: capa display 2048 ──────
+  // FIX v3 (4.5): tope 6 entradas (presupuesto total acotado). PLAN A (A2):
+  // cada entrada es la CAPA DE DISPLAY (PNG ≤2048 como objectURL) — el
+  // presupuesto por entrada baja de 10-25 MB de cadena JS (data URL 4032)
+  // a ~2-6 MB de Blob fuera del heap; el tope de 6 SE MANTIENE (regla
+  // conservadora). El eviction revoca el objectURL (regla A1). */
   const cachePreviewEntry = useCallback((key: string, entry: PreviewEntry) => {
+    const prev = previewCache.current.get(key);
+    if (prev && prev.url !== entry.url) releaseObjectUrl(prev.url);
     previewCache.current.set(key, entry);
     if (previewCache.current.size > 6) {
       const oldest = previewCache.current.keys().next().value;
-      if (oldest) previewCache.current.delete(oldest);
+      if (oldest) {
+        const evicted = previewCache.current.get(oldest);
+        if (evicted) releaseObjectUrl(evicted.url);
+        previewCache.current.delete(oldest);
+      }
     }
   }, []);
 
+  // PLAN A (A1): al desmontar el editor se revocan TODAS las objectURLs de
+  // la caché de previews (regla §5 A1 — revoke en unmount). Auditoría:
+  // window.__objectUrls().live debe volver a su nivel base.
+  useEffect(() => {
+    const cache = previewCache.current;
+    return () => {
+      for (const entry of cache.values()) releaseObjectUrl(entry.url);
+      cache.clear();
+    };
+  }, []);
+
+  // §6 — sonda local: editor_open por página abierta en el editor.
+  const probeLastPid = useRef<string | null>(null);
+  useEffect(() => {
+    if (!page?.id || probeLastPid.current === page.id) return;
+    probeLastPid.current = page.id;
+    markPerf("editor_open");
+  }, [page?.id]);
+
   useEffect(() => {
     if (mode !== "review" || !page) return;
-    // F-NOVIEW: las páginas de un documento guardado llegan con su
-    // `processed` persistido + `processedKey` (estado exacto de fábrica) →
-    // se siembra en la cache SOLO si el estado no ha cambiado (rotar/
-    // filtrar/recortar invalida la procesada guardada y fuerza reproceso).
-    if (
-      page.processed &&
-      page.processedKey === cacheKey &&
-      !previewCache.current.has(cacheKey)
-    ) {
-      previewCache.current.set(cacheKey, {
-        url: page.processed,
-        w: 0,
-        h: 0,
-        engine: "canvas",
-      });
-    }
+    const t0 = performance.now();
     let cancelled = false;
     const cached = previewCache.current.get(cacheKey);
     if (cached) {
       setPreview(cached);
       setPreviewLoading(false);
-      // EXPERIMENTO v11: sin copia de display — se consume el DATO
-      // completo directamente (la generación en 2º plano de displayUrl
-      // de v5 5.1 está APAGADA; la entrada se pinta YA con su url).
+      // PLAN A: la entrada cacheada YA es la capa de display (objectURL
+      // ≤2048) — se pinta al instante, sin decodificar el full-res.
       return () => {
         cancelled = true;
       };
     }
     // Cache-miss: limpiar el preview ANTERIOR — sin esto, durante el
-    // reproceso (segundos en 12 MP) el preview sigue siendo el de la página
-    // previa y el OCR podría capturarlo y persistir texto en la página
-    // equivocada.
+    // reproceso el preview sigue siendo el de la página previa y el OCR
+    // podría capturarlo y persistir texto en la página equivocada.
     setPreview(null);
     setPreviewLoading(true);
     void (async () => {
       try {
-        // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
-        // estricto por construcción: lo que ves ES la imagen guardada.
-        const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
-          manual: page.quadManual === true,
-          maxLongSide: PROCESSED_MAX_LONG_SIDE,
-        });
-        if (cancelled) return;
-        // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
-        // con el DATO completo (url/w/h/engine); los <img> del editor
-        // decodifican directamente el PNG ≤4032 (red de seguridad
-        // APAGADA — el re-encode de v5 5.1/v10-A no corre).
-        const entry: PreviewEntry = {
-          url: res.processed,
-          w: res.precision?.width ?? 0,
-          h: res.precision?.height ?? 0,
-          engine: res.precision?.engine === "worker" ? "worker" : "canvas",
-        };
+        let entry: PreviewEntry | null = null;
+        // F-NOVIEW: las páginas de un documento guardado llegan con su
+        // `processed` persistido + `processedKey` (estado exacto de
+        // fábrica) → se SIEMBRA la capa display desde el Blob persistido
+        // (blobToDisplayUrl: createImageBitmap resize + fallback) SOLO si
+        // el estado no ha cambiado (rotar/filtrar/recortar invalida la
+        // procesada guardada y fuerza reproceso).
+        if (page.processed && page.processedKey === cacheKey) {
+          const layer = await blobToDisplayUrl(page.processed, DISPLAY_MAX_LONG_SIDE);
+          if (cancelled) {
+            releaseObjectUrl(layer.url);
+            return;
+          }
+          entry = { url: layer.url, w: layer.w, h: layer.h, engine: "canvas" };
+        } else {
+          // Cache-miss puro: MISMO pipeline (mismo worker, mismos
+          // parámetros) a ESCALA DE DISPLAY (2048) — WYSIWYG por
+          // construcción: mismo código, distinta escala de previsualización.
+          // El full-res 4032 NO se decodifica para mostrar.
+          const res = await processImageToBlob(
+            page.original,
+            page.quad,
+            page.filter,
+            page.rotation,
+            {
+              manual: page.quadManual === true,
+              maxLongSide: DISPLAY_MAX_LONG_SIDE,
+            }
+          );
+          if (cancelled) return;
+          entry = {
+            url: acquireObjectUrl(res.processed),
+            w: res.precision?.width ?? 0,
+            h: res.precision?.height ?? 0,
+            engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+          };
+          // §6 — sonda local: tiempo del pipeline de display (filtro).
+          markPerf("filter_applied", { ms: Math.round(performance.now() - t0) });
+        }
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
+        // §6 — sonda local: primer render de la página en el editor.
+        markPerf("editor_first_render", { ms: Math.round(performance.now() - t0) });
       } catch {
-        if (!cancelled) setPreview({ url: page.original, w: 0, h: 0, engine: "canvas" });
+        if (!cancelled) {
+          // Fallback: el ORIGINAL como capa de emergencia (objectURL
+          // registrado → cache LRU lo revoca; data URL legacy pasa tal cual).
+          const entry: PreviewEntry = {
+            url: acquireObjectUrl(page.original),
+            w: 0,
+            h: 0,
+            engine: "canvas",
+          };
+          cachePreviewEntry(cacheKey, entry);
+          setPreview(entry);
+        }
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
@@ -619,12 +677,11 @@ export default function EditorView() {
     return () => {
       cancelled = true;
     };
-     
+
   }, [mode, cacheKey, page?.original, cachePreviewEntry]);
 
-  // EXPERIMENTO v11 — telemetría QA: fuente única en el editor. El <img>
-  // del preview consume preview.url (el DATO completo) — sin copia de
-  // display. Debe leer "preview-url" durante el QA físico.
+  // PLAN A — telemetría QA: el <img> del preview consume preview.url (la
+  // CAPA DE DISPLAY 2048, objectURL registrado) — sin copias de pantalla.
   useEffect(() => {
     if (mode !== "review" || !preview) return;
     (window as unknown as { __editorSource?: string }).__editorSource = "preview-url";
@@ -974,7 +1031,8 @@ export default function EditorView() {
     const src = page?.original;
     setNatural(null);
     if (!src) return;
-    loadImage(src)
+    // PLAN A (A1): Blob → decode transitorio (objectURL revocado tras cargar).
+    loadImageFromSrc(src)
       .then((img) => {
         if (!cancelled) {
           setNatural({
@@ -1197,38 +1255,27 @@ export default function EditorView() {
   const rotatingRef = useRef(false);
   const [exportingImg, setExportingImg] = useState(false);
 
-  /** Resuelve el PREVIEW actual de la página (cache de sesión o procesada
-   *  persistida con clave válida). null = aún no hay procesada confiable. */
+  /** Resuelve el PREVIEW actual de la página (cache de sesión — capa
+   *  display 2048). PLAN A: la procesada persistida ya NO viaja como entry
+   * (el efecto la SIEMBRA vía blobToDisplayUrl); esta consulta es solo
+   * cache. null = aún no hay capa. */
   const currentPreviewEntry = useCallback(
     (p: CapturePage): PreviewEntry | null => {
-      const key = capturePageKey(p);
-      const cached = previewCache.current.get(key);
-      if (cached) return cached;
-      if (p.processed && p.processedKey === key) {
-        return { url: p.processed, w: 0, h: 0, engine: "canvas" };
-      }
-      return null;
+      return previewCache.current.get(capturePageKey(p)) ?? null;
     },
     []
   );
 
   /**
-   * Rotar 90° — F-ROT-RAPID: si existe la procesada del estado actual, se
-   * GIRA ESA IMAGEN (rotación de 90° = píxel-idéntica al reproceso completo,
-   * porque el filtro es por píxel y su gaussiano es isotrópico) y se guarda
-   * como `processed`+`processedKey` con la nueva rotación → el preview y el
-   * guardado NO vuelven a llamar al worker. De 2-6 s a ~0,2 s.
+   * Rotar 90° — PLAN A (A2 — pirámide): se GIRA la CAPA DE DISPLAY (2048)
+   * en canvas (rotación de 90° = píxel-idéntica al reproceso: el filtro es
+   * por píxel y su gaussiano isotrópico) y la rotación viaja como ESTADO
+   * ({rotation}). Al guardar/exportar, el store re-ejecuta el MISMO
+   * pipeline desde el ORIGINAL a full-res (4032 ⛔) — single-encode: el
+   * dato guardado NUNCA nace de una capa de display.
+   * La defensa v3 (processedMeetsTarget en el store) sigue custodiando que
+   * solo procesadas a resolución objetivo lleguen al documento.
    * En crop el preview rota en vivo (CSS) como antes.
-   *
-   * FIX v3 (2.2 — calidad): la rotada solo viaja al documento como "final"
-   * si conserva la RESOLUCIÓN OBJETIVO: min(4032, máx(aristas del quad en px
-   * del original)) — la misma geometría con la que el warp dimensiona su
-   * salida. Una fuente menor (auto-captura iOS 1920 px) no puede dar 4032 y
-   * NO está degradada; una base degradada heredada (3200/2600 de versiones
-   * con benchmark o cachés viejas) sí → se queda SIN processed/processedKey
-   * y el store la REPROCESA a tope al guardar. La rotación rápida sigue
-   * siendo válida para el PREVIEW (matemáticamente equivalente); solo se
-   * prohíbe que una imagen inferior al objetivo llegue al documento.
    */
   const handleRotate = () => {
     const p = page;
@@ -1237,7 +1284,7 @@ export default function EditorView() {
     const base = currentPreviewEntry(p);
     if (!base || !base.url) {
       // Sin base procesable → camino histórico (cambia rotation y el efecto
-      // de preview reprocesa con el pipeline completo).
+      // de preview reprocesa la capa display con el pipeline completo).
       updateCapturePage(p.id, { rotation: newRotation });
       return;
     }
@@ -1245,45 +1292,19 @@ export default function EditorView() {
     toast("Rotando…", { id: "rot-rapid", duration: 1500 });
     void (async () => {
       try {
-        const rot = await rotateProcessedDataUrl(base.url, 90);
+        const rot = await rotateDisplayUrl(base.url, 90);
         const newKey = capturePageKey({ ...p, rotation: newRotation });
-        previewCache.current.set(newKey, {
+        cachePreviewEntry(newKey, {
           url: rot.url,
           w: base.h || rot.w,
           h: base.w || rot.h,
           engine: base.engine,
         });
-        // Una sola actualización: con calidad completa, el efecto de preview
-        // siembra la cache y pinta al instante (processedKey coincide) y el
-        // merge al guardar NO reprocesa (F-ROT-RAPID en saveSessionToDocument).
-        // Sin ella: solo rotation → al guardar el store reprocesa a 4032.
-        // Resolución objetivo de ESTA página (geometría quad + original):
-        // min(4032, máx aristas del quad en px) — tolerancia 0.9 (shrink
-        // 3.5px/lado del worker + redondeos).
-        const natW = natural?.w ?? 0;
-        const natH = natural?.h ?? 0;
-        let targetLong = PROCESSED_MAX_LONG_SIDE;
-        if (natW > 0 && natH > 0) {
-          let maxEdge = 0;
-          for (let i = 0; i < 4; i += 1) {
-            const a = p.quad[i]!;
-            const b = p.quad[(i + 1) % 4]!;
-            maxEdge = Math.max(maxEdge, Math.hypot((b.x - a.x) * natW, (b.y - a.y) * natH));
-          }
-          targetLong = Math.min(PROCESSED_MAX_LONG_SIDE, maxEdge);
-        }
-        const rotatedLong = Math.max(rot.w, rot.h);
-        const atFullQuality = rotatedLong >= targetLong * 0.9;
-        updateCapturePage(p.id, atFullQuality
-          ? {
-              rotation: newRotation,
-              processed: rot.url,
-              processedKey: newKey,
-              thumbnail: rot.thumb,
-            }
-          : { rotation: newRotation });
+        // PLAN A: SOLO estado — la rotación persiste como `rotation`; el
+        // guardado reprocesa desde el original a full-res (single-encode).
+        updateCapturePage(p.id, { rotation: newRotation });
       } catch {
-        // Rotación rápida fallida (memoria, decode…): camino histórico.
+        // Rotación rápida fallada (memoria, decode…): camino histórico.
         updateCapturePage(p.id, { rotation: newRotation });
       } finally {
         rotatingRef.current = false;
@@ -1292,23 +1313,42 @@ export default function EditorView() {
   };
 
   /** F-IMG — "Imagen": descarga la página actual procesada como imagen
-   *  (PNG sin pérdida, igual que la procesada persistida). */
+   *  (PNG sin pérdida, igual que la procesada persistida).
+   *  PLAN A (A3 — single-encode): el Blob persistido VÁLIDO se descarga
+   *  DIRECTO (es el dato final); si no hay (captura sin guardar / estado
+   *  cambiado) se procesa UNA vez desde el original a full-res — jamás se
+   *  descarga una capa de display. */
   const handleSaveImage = async () => {
     const p = page;
     if (!p || exportingImg) return;
-    const entry = currentPreviewEntry(p);
-    if (!entry) {
+    const hasPersisted =
+      !!p.processed && p.processedKey === capturePageKey(p);
+    if (!hasPersisted && (previewLoading || !currentPreviewEntry(p))) {
       toast("Aún se está procesando la página…");
       return;
     }
     setExportingImg(true);
+    const t0 = performance.now();
     try {
-      const blob = await dataUrlToBlob(entry.url);
+      markPerf("export_start", { type: "png" });
+      let blob: Blob;
+      if (p.processed && p.processedKey === capturePageKey(p)) {
+        // Dato final persistido (modo revisión sin cambios): descarga directa.
+        blob = typeof p.processed === "string" ? await dataUrlToBlob(p.processed) : p.processed;
+      } else {
+        // Sesión de captura / estado cambiado: single-encode full-res.
+        const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
+          manual: p.quadManual === true,
+          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+        });
+        blob = res.processed;
+      }
       const ext = blob.type === "image/jpeg" ? "jpg" : "png";
       const name = sanitizeFileName(
         `${headerTitle}-página-${activeIdx + 1}.${ext}`
       );
       downloadBlob(blob, name);
+      markPerf("export_end", { type: "png", ms: Math.round(performance.now() - t0), bytes: blob.size });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
       toast.error("No se pudo guardar la imagen");
@@ -1372,7 +1412,13 @@ export default function EditorView() {
     if (!page || detecting) return;
     setDetecting(true);
     try {
-      const quad = await detectDocumentEdges(page.original);
+      // PLAN A (A1): Blob → decode transitorio (el elemento retiene los
+      // píxeles; el objectURL se revoca en loadImageFromSrc).
+      const source =
+        typeof page.original === "string"
+          ? page.original
+          : await loadImageFromSrc(page.original);
+      const quad = await detectDocumentEdges(source);
       autoIds.current.add(page.id);
       manualIds.current.delete(page.id);
       updateCapturePage(page.id, { quad, quadManual: false });
@@ -1542,14 +1588,19 @@ export default function EditorView() {
       return;
     }
     // Preview actual (estado fresco) → procesada guardada si sigue vigente →
-    // original como último recurso.
-    const image =
+    // original como último recurso. PLAN A (A1): las fuentes pueden ser
+    // objectURL/Blob — el payload OCR se NORMALIZA a JPEG ≤2400 (mismo
+    // patrón que el OCR por lotes de la biblioteca): copia de trabajo
+    // desechable (A3 la permite) y server-safe.
+    const source: Blob | string | undefined =
       preview?.url ??
       (page.processed && page.processedKey === cacheKey ? page.processed : undefined) ??
       page.original;
+    if (!source) return;
     setOcrRunning(true);
     try {
-      const text = await requestOcr(image);
+      const { dataUrl } = await toJpeg(source);
+      const text = await requestOcr(dataUrl);
       if (ocrTextIsValid(text)) {
         updateCapturePage(page.id, { ocrText: text, ocrDone: true });
         toast.success("Texto reconocido", {
@@ -1582,26 +1633,34 @@ export default function EditorView() {
         // La procesada guardada solo sirve si el estado no cambió (como el
         // preview): rotada/filtrada/recortada → procesar al vuelo.
         const freshKey = capturePageKey(p);
-        let image = p.processed && p.processedKey === freshKey ? p.processed : undefined;
-        if (!image) {
-          image = previewCache.current.get(freshKey)?.url;
+        let source: Blob | string | undefined =
+          p.processed && p.processedKey === freshKey ? p.processed : undefined;
+        if (!source) {
+          source = previewCache.current.get(freshKey)?.url;
         }
-        if (!image) {
+        if (!source) {
           // Procesa al vuelo (sesión de captura: aún no hay procesada).
-          // FIX v3 (2.1): misma constante que preview y guardado (WYSIWYG).
-          const res = await processImage(p.original, p.quad, p.filter, p.rotation, {
+          // PLAN A (A2): a ESCALA DE DISPLAY (2048) — el OCR no necesita el
+          // 4032 (Tesseract interno baja a 1600; payload normalizado a 2400
+          // vía toJpeg): cero decodes full-res en el flujo OCR.
+          const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
             manual: p.quadManual === true,
-            maxLongSide: PROCESSED_MAX_LONG_SIDE,
+            maxLongSide: DISPLAY_MAX_LONG_SIDE,
           });
-          image = res.processed;
+          const url = acquireObjectUrl(res.processed);
           cachePreviewEntry(capturePageKey(p), {
-            url: res.processed,
-            w: 0,
-            h: 0,
+            url,
+            w: res.precision?.width ?? 0,
+            h: res.precision?.height ?? 0,
             engine: res.precision?.engine === "worker" ? "worker" : "canvas",
           });
+          source = url;
         }
-        const text = await requestOcr(image);
+        // PLAN A: payload desechable JPEG ≤2400 (mismo patrón del OCR por
+        // lotes de la biblioteca) — server-safe, cero codificaciones que
+        // sobrevivan a la operación.
+        const { dataUrl } = await toJpeg(source);
+        const text = await requestOcr(dataUrl);
         if (ocrTextIsValid(text)) {
           updateCapturePage(p.id, { ocrText: text, ocrDone: true });
         }
@@ -1615,7 +1674,7 @@ export default function EditorView() {
       setOcrRunning(false);
       setOcrProgress(null);
     }
-  }, [ocrRunning, updateCapturePage]);
+  }, [ocrRunning, updateCapturePage, cachePreviewEntry]);
 
   const copyOcrText = useCallback(async () => {
     const text = page?.ocrText ?? "";
@@ -1687,15 +1746,17 @@ export default function EditorView() {
     if (!ocrEnabled || !page || ocrRunning || previewLoading || autoOcrBusy) return;
     if (page.ocrDone === true || page.processedKey !== undefined) return;
     if (autoOcrTried.current.has(page.id)) return;
-    const image =
+    const source: Blob | string | undefined =
       preview?.url ??
       (page.processed && page.processedKey === cacheKey ? page.processed : undefined);
-    if (!image) return;
+    if (!source) return;
     autoOcrTried.current.add(page.id);
     setAutoOcrBusy(true);
     void (async () => {
       try {
-        const text = await requestOcr(image);
+        // PLAN A: payload desechable JPEG ≤2400 (normalización toJpeg).
+        const { dataUrl } = await toJpeg(source);
+        const text = await requestOcr(dataUrl);
         if (ocrTextIsValid(text)) {
           updateCapturePage(page.id, { ocrText: text, ocrDone: true });
         }
@@ -1758,29 +1819,53 @@ export default function EditorView() {
    * cada página se previsualiza, pero el memo NO se recalculaba por eso →
    * para páginas nunca visitadas caía a p.processed ?? p.original → la
    *  presentación mostraba la foto ORIGINAL SIN RECORTAR (parecía otra
-   *  imagen / "mal recortada"). */
+   *  imagen / "mal recortada").
+   *  PLAN A (A1): las URLs que consume la presentación se materializan
+   *  AQUÍ (objectURLs registrados) y se revocan TODAS al cerrar/desmontar
+   *  (closePresentation) — PresentationView solo ve strings con ciclo de
+   *  vida ya resuelto. */
   const [presentationPages, setPresentationPages] = useState<PresentationPage[]>([]);
+  /** URLs adquiridas para la presentación abierta (se revocan al cerrar). */
+  const presentationUrlsRef = useRef<Set<string>>(new Set());
+  const closePresentation = useCallback(() => {
+    setPresentationOpen(false);
+    // PLAN A (A1): revoca TODAS las objectURLs adquiridas para la
+    // presentación (las de la caché LRU NO — viven con el editor).
+    for (const u of presentationUrlsRef.current) releaseObjectUrl(u);
+    presentationUrlsRef.current.clear();
+  }, []);
+  // Seguro de vida: desmontar el editor con la presentación abierta.
+  useEffect(() => {
+    const urls = presentationUrlsRef.current;
+    return () => {
+      for (const u of urls) releaseObjectUrl(u);
+      urls.clear();
+    };
+  }, []);
   const openPresentation = useCallback(() => {
     const state = useScannerStore.getState();
     if (state.capturePages.length === 0) return;
     const built = state.capturePages.map((p) => {
-      // EXPERIMENTO v11: la presentación consume el DATO completo — si la
-      // entry existe en la caché de previews, se arranca YA con su url
-      // (PNG ≤4032), la MISMA fuente que el editor (imposible que se vean
-      // distintas). FIX v6 (6.4): si NO existe, se pinta YA el THUMBNAIL
+      // PLAN A (A2): la presentación consume la CAPA DE DISPLAY (2048) de la
+      // caché de previews — la MISMA fuente que el editor (imposible que se
+      // vean distintas). FIX v6 (6.4): si NO existe, se pinta YA el THUMBNAIL
       // (~160 px, placeholder con blur estilo iOS en PresentationView) y
-      // el dato completo se intercambia en background (cola de concurrencia
-      // 2, abajo — ahora SIN re-encode) — al aterrizar, swap suave.
+      // la capa completa se intercambia en background (cola de concurrencia
+      // 2, abajo) — al aterrizar, swap suave.
       const entry = previewCache.current.get(capturePageKey(p));
       const ready = entry?.url ?? null;
+      // PLAN A (A1): el original se materializa como objectURL REGISTRADO
+      // (se revoca en closePresentation; data URL legacy pasa tal cual).
+      const originalUrl = acquireObjectUrl(p.original);
+      presentationUrlsRef.current.add(originalUrl);
       return {
         page: {
           id: p.id,
-          original: p.original,
-          processed: ready ?? p.thumbnail ?? p.original, // placeholder si no hay display
+          original: originalUrl,
+          processed: ready ?? p.thumbnail ?? originalUrl, // placeholder si no hay display
           // C3: miniatura REAL (~160 px, coherente con la procesada) — pasar el
           // original hacía decodificar N fotos completas para pintar pies de 40×52.
-          thumbnail: p.thumbnail ?? p.original,
+          thumbnail: p.thumbnail ?? originalUrl,
           filter: p.filter,
           quad: p.quad,
           quadManual: p.quadManual,
@@ -1792,11 +1877,10 @@ export default function EditorView() {
           displayPending: !ready,
         } as PresentationPage,
         key: capturePageKey(p),
-        // Fuente para el swap en background (EXPERIMENTO v11: SIN
-        // re-encode): el DATO procesado de la caché si existe; si la
-        // página nunca fue previsualizada, el original (mismo fallback
-        // que v5/v6, pero sin bloquear la apertura).
-        source: entry?.url ?? p.original,
+        // Fuente para el swap en background: la capa display de la caché si
+        // existe; si la página nunca fue previsualizada, el original
+        // (mismo fallback que v5/v6, pero sin bloquear la apertura).
+        source: entry?.url ?? originalUrl,
       };
     });
     setPresentationPages(built.map((b) => b.page));
@@ -1815,9 +1899,8 @@ export default function EditorView() {
       if (!item) return;
       void (async () => {
         try {
-          // EXPERIMENTO v11: SIN re-encode — swap directo al DATO completo
-          // (entry?.url ?? p.original). La red de seguridad está apagada:
-          // ya NO se escriben displayUrl en la caché.
+          // PLAN A (A2): swap directo a la capa display ya resuelta
+          // (entry?.url ?? originalUrl materializado arriba).
           const resolved = item.source;
           setPresentationPages((prev) =>
             prev.map((pg) =>
@@ -1832,7 +1915,7 @@ export default function EditorView() {
       })();
     };
     runNext();
-    runNext(); // concurrencia 2 — EXPERIMENTO v11: SE MANTIENE (evita decodificar N PNG de 4032 px a la vez en la apertura)
+    runNext(); // concurrencia 2 — evita decodificar N capas a la vez en la apertura
   }, []);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
@@ -2019,7 +2102,7 @@ export default function EditorView() {
                         aria-hidden="true"
                       >
                         <img
-                          src={page.original}
+                          src={originalUrl}
                           alt=""
                           draggable={false}
                           /* FIX v6 (6.3): mismo touch-none — al comparar, ESTE
@@ -2172,13 +2255,10 @@ export default function EditorView() {
                       : "border-white/15 opacity-70"
                   )}
                 >
-                  <img
-                    src={p.thumbnail ?? p.original}
-                    alt=""
-                    draggable={false}
-                    style={{ filter: CSS_FILTERS[p.filter] ?? "none" }}
-                    className="h-full w-full object-cover"
-                  />
+                  {/* PLAN A (A1): miniatura data URL o, si aún no hay (captura
+                      sin guardar), el ORIGINAL como objectURL con ciclo de
+                      vida propio por ítem (useObjectUrl → revoke). */}
+                  <CarouselThumb page={p} />
                   <span className="absolute bottom-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] font-bold text-white">
                     {i + 1}
                   </span>
@@ -2235,7 +2315,7 @@ export default function EditorView() {
                     transition={{ duration: 0.4, ease: [0.65, 0, 0.35, 1] }}
                   >
                     <img
-                      src={page.original}
+                      src={originalUrl}
                       alt="Página capturada en edición"
                       draggable={false}
                       className="block h-full w-full"
@@ -2359,7 +2439,7 @@ export default function EditorView() {
                     }}
                   >
                     <img
-                      src={page.original}
+                      src={originalUrl}
                       alt=""
                       draggable={false}
                       className="absolute max-w-none select-none"
@@ -2544,7 +2624,7 @@ export default function EditorView() {
                         )}
                       >
                         <img
-                          src={page.original}
+                          src={originalUrl}
                           alt=""
                           draggable={false}
                           style={{ filter: CSS_FILTERS[f.id] ?? "none" }}
@@ -2711,7 +2791,7 @@ export default function EditorView() {
             pages={presentationPages}
             title={headerTitle}
             initialIndex={activeIdx}
-            onClose={() => setPresentationOpen(false)}
+            onClose={closePresentation}
             onIndexChange={goToPage}
           />
         )}
@@ -2752,6 +2832,23 @@ export default function EditorView() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** PLAN A (A1): miniatura del carrusel por página — p.thumbnail (data URL
+ *  pequeña) o, si aún no hay (captura sin guardar), el ORIGINAL
+ *  materializado como objectURL con ciclo de vida PROPIO por ítem
+ *  (acquire al montar, revoke al desmontar/cambiar). */
+function CarouselThumb({ page }: { page: CapturePage }) {
+  const url = useObjectUrl(page.thumbnail ? page.thumbnail : page.original);
+  return (
+    <img
+      src={url}
+      alt=""
+      draggable={false}
+      style={{ filter: CSS_FILTERS[page.filter] ?? "none" }}
+      className="h-full w-full object-cover"
+    />
   );
 }
 

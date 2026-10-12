@@ -34,8 +34,11 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** Estima el tamaño de un data URL en bytes (real para base64 y texto). */
-export function dataUrlBytes(dataUrl: string): number {
+/** Estima el tamaño de una imagen persistida: PLAN A (A1) — los datos viven
+ *  como Blob (tamaño EXACTO en bytes) o data URL legacy (estimación base64).
+ *  Así SettingsView sigue compilando y reportando sin cambios. */
+export function dataUrlBytes(dataUrl: Blob | string): number {
+  if (typeof dataUrl !== "string") return dataUrl.size;
   const idx = dataUrl.indexOf(",");
   if (idx < 0) return 0;
   const header = dataUrl.slice(0, idx);

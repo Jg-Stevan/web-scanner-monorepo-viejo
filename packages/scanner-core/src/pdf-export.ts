@@ -15,7 +15,8 @@
  */
 
 import { jsPDF } from "jspdf";
-import { loadImage } from "./image-processor";
+import { loadImage, loadImageFromSrc } from "./image-processor";
+import { dataUrlToBlob, probeMark } from "./page-store";
 import { PNG_FILTERS, type ScanDocument } from "./types";
 
 const MB = 1024 * 1024;
@@ -83,17 +84,33 @@ async function canvasToJpegDataUrl(
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-/** Re-encode JPEG de una página a los parámetros del intento (lado 0 = tamaño
- *  original). Devuelve el data URL y las dimensiones reales. */
-export async function toJpegAt(
-  src: string,
-  longSide: number,
+/** PLAN A (A3) — canvas → BYTES JPEG (mismo encoder que toJpegAt: la salida
+ *  es byte-idéntica a la variante data URL; jsPDF v4 acepta Uint8Array y
+ *  embebe DCTDecode en crudo — cero strings gigantes en el heap). */
+async function canvasToJpegBytes(
+  canvas: HTMLCanvasElement,
   quality: number
-): Promise<{ dataUrl: string; width: number; height: number }> {
-  const img = await loadImage(src);
-  const scale = longSide > 0 ? Math.min(1, longSide / Math.max(img.width, img.height)) : 1;
-  const width = Math.max(1, Math.round(img.width * scale));
-  const height = Math.max(1, Math.round(img.height * scale));
+): Promise<Uint8Array> {
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+  );
+  if (blob && blob.size > 0) {
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+  // Rescate (regla “error #22”): toDataURL → parse base64 → bytes.
+  const dataUrl = canvas.toDataURL("image/jpeg", quality);
+  const blob2 = dataUrlToBlob(dataUrl);
+  return new Uint8Array(await blob2.arrayBuffer());
+}
+
+/** PLAN A (A1): fuente → HTMLImageElement para dibujar en canvas (Blob →
+ *  decode transitorio con objectURL revocado en finally). */
+async function drawSourceToCanvas(
+  src: Blob | string,
+  width: number,
+  height: number
+): Promise<HTMLCanvasElement> {
+  const img = await loadImageFromSrc(src);
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -103,13 +120,51 @@ export async function toJpegAt(
   ctx.fillRect(0, 0, width, height);
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(img, 0, 0, width, height);
+  return canvas;
+}
+
+/** PLAN A (A1): dimensiones de una fuente `Blob | string` SIN materializar
+ *  data URLs (Blob → createImageBitmap → close inmediato). */
+async function sourceDims(src: Blob | string): Promise<{ w: number; h: number }> {
+  if (typeof src === "string") {
+    const img = await loadImage(src);
+    return { w: img.naturalWidth, h: img.naturalHeight };
+  }
+  const bm = await createImageBitmap(src);
+  try {
+    return { w: bm.width, h: bm.height };
+  } finally {
+    bm.close();
+  }
+}
+
+/** PLAN A (A1): bytes crudos de una fuente (Blob → arrayBuffer; data URL
+ *  → parse base64). Sin strings gigantes intermedios en la ruta Blob. */
+async function sourceBytes(src: Blob | string): Promise<Uint8Array> {
+  const blob = typeof src === "string" ? dataUrlToBlob(src) : src;
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+/** Re-encode JPEG de una página a los parámetros del intento (lado 0 = tamaño
+ *  original). Devuelve el data URL y las dimensiones reales. PLAN A (A1):
+ *  la fuente acepta `Blob | string` (Blob → decode transitorio). */
+export async function toJpegAt(
+  src: Blob | string,
+  longSide: number,
+  quality: number
+): Promise<{ dataUrl: string; width: number; height: number }> {
+  const { w: w0, h: h0 } = await sourceDims(src);
+  const scale = longSide > 0 ? Math.min(1, longSide / Math.max(w0, h0)) : 1;
+  const width = Math.max(1, Math.round(w0 * scale));
+  const height = Math.max(1, Math.round(h0 * scale));
+  const canvas = await drawSourceToCanvas(src, width, height);
   // C8: encode asíncrono (toBlob) — antes toDataURL síncrono sobre canvas
   // grandes (riesgo de memoria/jank en Safari).
   return { dataUrl: await canvasToJpegDataUrl(canvas, quality), width, height };
 }
 
 /**
- * Convierte cualquier data URL (svg/jpeg/png…) en JPEG sobre canvas,
+ * Convierte cualquier fuente (Blob PLAN A o data URL) en JPEG sobre canvas,
  * aplanando transparencias. Sirve para el OCR (payload normalizado)
  * y para el PDF (jsPDF solo acepta raster).
  *
@@ -119,22 +174,14 @@ export async function toJpegAt(
  * muy por debajo del límite de payload (10 MB).
  */
 export async function toJpeg(
-  src: string,
+  src: Blob | string,
   maxSide = 2400
 ): Promise<{ dataUrl: string; width: number; height: number }> {
-  const img = await loadImage(src);
-  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-  const width = Math.max(1, Math.round(img.width * scale));
-  const height = Math.max(1, Math.round(img.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Sin contexto 2D");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(img, 0, 0, width, height);
+  const { w: w0, h: h0 } = await sourceDims(src);
+  const scale = Math.min(1, maxSide / Math.max(w0, h0));
+  const width = Math.max(1, Math.round(w0 * scale));
+  const height = Math.max(1, Math.round(h0 * scale));
+  const canvas = await drawSourceToCanvas(src, width, height);
   // C8: encode asíncrono (toBlob) — ver toJpegAt.
   return { dataUrl: await canvasToJpegDataUrl(canvas, 0.92), width, height };
 }
@@ -144,19 +191,30 @@ export function sanitizeFileName(title: string): string {
   return clean.length > 0 ? clean : "documento";
 }
 
-/** Datos crudos (PNG tal cual o JPEG re-encodeado) + tamaño de página mm. */
+/** Datos crudos para embeber (PNG tal cual — SIN re-encode §2.3 — o JPEG
+ *  re-encodeado por intento) + tamaño de página mm. PLAN A (A1·A3): la
+ *  fuente es `Blob | string` y el transporte son BYTES (jsPDF v4 acepta
+ *  Uint8Array): la salida es byte-idéntica a la ruta data URL de main y NO
+ *  materializa strings gigantes por página. */
 async function pageForAttempt(
-  src: string,
+  src: Blob | string,
   filter: ScanDocument["pages"][number]["filter"],
   attempt: ExportAttempt
-): Promise<{ dataUrl: string; w: number; h: number; isPng: boolean }> {
-  const isPng = PNG_FILTERS.has(filter) && src.startsWith("data:image/png");
+): Promise<{ bytes: Uint8Array; w: number; h: number; isPng: boolean }> {
+  const isPng =
+    PNG_FILTERS.has(filter) &&
+    (typeof src === "string" ? src.startsWith("data:image/png") : src.type === "image/png");
   if (isPng) {
-    const img = await loadImage(src);
-    return { dataUrl: src, w: img.naturalWidth, h: img.naturalHeight, isPng: true };
+    const { w, h } = await sourceDims(src);
+    return { bytes: await sourceBytes(src), w, h, isPng: true };
   }
-  const r = await toJpegAt(src, attempt.longSide, attempt.quality);
-  return { dataUrl: r.dataUrl, w: r.width, h: r.height, isPng: false };
+  // Re-encode JPEG del intento (ladder §8 intacta ⛔ §2.3) → bytes.
+  const { w: w0, h: h0 } = await sourceDims(src);
+  const scale = attempt.longSide > 0 ? Math.min(1, attempt.longSide / Math.max(w0, h0)) : 1;
+  const width = Math.max(1, Math.round(w0 * scale));
+  const height = Math.max(1, Math.round(h0 * scale));
+  const canvas = await drawSourceToCanvas(src, width, height);
+  return { bytes: await canvasToJpegBytes(canvas, attempt.quality), w: width, h: height, isPng: false };
 }
 
 /** Dimensiones de página adaptativas: aspecto de la página, largo 297 mm. */
@@ -354,11 +412,14 @@ export interface BuiltPdf {
  * Presupuesto min(max(n,3),8) MB — ~1MB/página con piso de 3 MB y techo
  * de 8 MB. PNG (raw|text|bw) se embebe SIN re-encode; JPEG se re-encodea
  * por intento hasta caber en el presupuesto.
+ * PLAN A (§6): export_start/export_end {type:pdf, ms, bytes} — sonda local.
  */
 export async function buildDocPdf(
   doc: ScanDocument,
   quality: ExportQuality
 ): Promise<BuiltPdf> {
+  const t0 = performance.now();
+  probeMark("export_start", { type: "pdf" });
   const totalPages = doc.pages.length;
   const budgetBytes = Math.min(Math.max(totalPages, 3), 8) * MB;
   const attempts = attemptsFor(quality);
@@ -372,7 +433,9 @@ export async function buildDocPdf(
     pdf = null;
     for (let i = 0; i < totalPages; i += 1) {
       const p = doc.pages[i]!;
-      const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
+      // PLAN A (A1·A3): bytes crudos (PNG tal cual / JPEG del intento) —
+      // jsPDF v4 acepta Uint8Array: embebido byte-idéntico, sin data URLs.
+      const { bytes: imgBytes, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
       const { pageW, pageH, orientation } = adaptivePageSize(w, h);
       if (first) {
         pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
@@ -380,7 +443,7 @@ export async function buildDocPdf(
       } else {
         pdf!.addPage([pageW, pageH], orientation);
       }
-      pdf!.addImage(dataUrl, isPng ? "PNG" : "JPEG", 0, 0, pageW, pageH);
+      pdf!.addImage(imgBytes, isPng ? "PNG" : "JPEG", 0, 0, pageW, pageH);
     }
     if (!pdf) throw new Error("PDF vacío");
     bytes = pdf.output("blob").size;
@@ -397,6 +460,8 @@ export async function buildDocPdf(
     }`,
     tags: doc.tags ?? [],
   });
+  // §6 — sonda local: export PDF terminado (ms + bytes del archivo).
+  probeMark("export_end", { type: "pdf", ms: Math.round(performance.now() - t0), bytes });
   return { pdf, bytes, adjusted, budgetBytes };
 }
 
@@ -488,6 +553,8 @@ export async function buildLibraryPdf(
   // Presupuesto global: escalado por nº de páginas con techo de 30 MB.
   const budgetBytes = Math.min(Math.max(pageCount, 3), 30) * MB;
   const attempts = attemptsFor(quality);
+  const t0 = performance.now();
+  probeMark("export_start", { type: "pdf" });
   let attemptIdx = 0;
   let bytes = 0;
   let pdf: jsPDF | null = null;
@@ -515,7 +582,8 @@ export async function buildLibraryPdf(
       onProgress?.({ docIndex: d + 1, docCount: docs.length, title: doc.title });
       for (let i = 0; i < doc.pages.length; i += 1) {
         const p = doc.pages[i]!;
-        const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
+        // PLAN A (A1·A3): bytes crudos (PNG tal cual / JPEG del intento).
+        const { bytes: imgBytes, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
         const { pageW, pageH, orientation } = adaptivePageSize(w, h);
         if (first) {
           pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
@@ -523,7 +591,7 @@ export async function buildLibraryPdf(
         } else {
           pdf!.addPage([pageW, pageH], orientation);
         }
-        pdf!.addImage(dataUrl, isPng ? "PNG" : "JPEG", 0, 0, pageW, pageH);
+        pdf!.addImage(imgBytes, isPng ? "PNG" : "JPEG", 0, 0, pageW, pageH);
       }
     }
     if (!pdf) throw new Error("PDF vacío");
@@ -555,6 +623,9 @@ export async function buildLibraryPdf(
     }`,
     tags: docs.flatMap((d) => d.tags ?? []),
   });
+
+  // §6 — sonda local: export PDF de biblioteca terminado (ms + bytes).
+  probeMark("export_end", { type: "pdf", ms: Math.round(performance.now() - t0), bytes });
 
   return { pdf, bytes, adjusted: bytes > budgetBytes && attemptIdx >= attempts.length, budgetBytes, docCount: docs.length, pageCount, coverPages };
 }

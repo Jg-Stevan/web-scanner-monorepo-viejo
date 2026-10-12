@@ -20,16 +20,20 @@ import { initialDocuments } from "./mock-data";
 // FIX v3 (fix-editor-quality): tope ÚNICO para preview y guardado — regla del
 // producto: guardar siempre a la resolución máxima (tope técnico 4032 px,
 // canvas iOS). Sin ajustes por dispositivo/benchmark.
+// PLAN A (A1·A3): el store corre el pipeline con salida **Blob** (fuente de
+// verdad binaria) — el data URL 4032 como string persistente DESAPARECE.
 import {
-  loadImage,
-  processImage,
+  loadImageFromSrc,
+  processImageToBlob,
   PROCESSED_MAX_LONG_SIDE,
 } from "./image-processor";
 import {
   clearAllDocuments as idbClearAll,
+  dataUrlToBlob,
   loadAllDocuments,
   loadSettings,
   persistDocument,
+  probeMark,
   removeDocument as idbRemove,
   saveManualOrder,
   saveSettings,
@@ -55,14 +59,21 @@ export function nextId(prefix: string): string {
  *  el shrink de 3.5px/lado del worker + redondeos.
  *
  *  Devuelve null si no se puede medir → el llamador conserva el
- *  comportamiento original (un fallo de medición no penaliza el merge). */
+ *  comportamiento original (un fallo de medición no penaliza el merge).
+ *
+ *  PLAN A (A1): firma `Blob | string` — la MATEMÁTICA y la tolerancia son
+ *  INTACTAS (⛔ §2.5); solo cambia DE DÓNDE se decodifica (Blob → decode
+ *  transitorio con objectURL revocado en finally — nunca data URL string). */
 async function processedMeetsTarget(
-  processed: string,
-  original: string,
+  processed: Blob | string,
+  original: Blob | string,
   quad: Quad
 ): Promise<boolean | null> {
   try {
-    const [proc, orig] = await Promise.all([loadImage(processed), loadImage(original)]);
+    const [proc, orig] = await Promise.all([
+      loadImageFromSrc(processed),
+      loadImageFromSrc(original),
+    ]);
     const pl = Math.max(proc.naturalWidth || 0, proc.naturalHeight || 0);
     const ow = orig.naturalWidth || 0;
     const oh = orig.naturalHeight || 0;
@@ -259,8 +270,20 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     if (updated) void persistDocument(updated);
   },
 
-  addCapturePage: (page) =>
-    set((s) => ({ capturePages: [...s.capturePages, page], editingIndex: s.capturePages.length })),
+  addCapturePage: (page) => {
+    // PLAN A (A1 — intake Blob-first): la captura entrega un data URL
+    // (CameraView intocable ⛔ §2.4) y el STORE lo convierte a Blob EN LA
+    // FRONTERA → el string 4032 (~1.33× del binario, dentro del GC) NUNCA
+    // persiste en memoria. dataUrlToBlob es parse local (atob+Uint8Array),
+    // transitorio y barato frente al coste de retenerlo toda la sesión.
+    const original = typeof page.original === "string" ? dataUrlToBlob(page.original) : page.original;
+    // §6 — sonda local: evento de captura en el borde captura→store.
+    probeMark("capture_fired", { bytes: original.size });
+    set((s) => ({
+      capturePages: [...s.capturePages, { ...page, original }],
+      editingIndex: s.capturePages.length,
+    }));
+  },
   removeCapturePage: (id) =>
     set((s) => {
       const idx = s.capturePages.findIndex((p) => p.id === id);
@@ -292,19 +315,29 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     const { capturePages } = get();
     if (capturePages.length === 0) return null;
     const now = Date.now();
+    const t0 = performance.now();
     const pages: ScanPage[] = [];
+    let savedBytes = 0;
     for (const p of capturePages) {
-      let processed = p.original;
-      let thumbnail = p.original;
+      let processed: Blob | string = p.original;
+      let thumbnail = "";
       let precision: ScanPage["precision"];
       try {
-        const res = await processImage(p.original, p.quad, p.filter, p.rotation, {
+        // PLAN A (A1·A3): MISMO pipeline, salida Blob — single-encode desde
+        // el bitmap derivado del original a full-res (4032 ⛔ intacto).
+        const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
           manual: p.quadManual === true,
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
         processed = res.processed;
         thumbnail = res.thumbnail;
         precision = res.precision;
+        savedBytes += res.processed.size;
+        // §6 — sonda local: página guardada con bytes y lado mayor real.
+        probeMark("page_saved", {
+          bytes: res.processed.size,
+          pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
+        });
       } catch {
         /* usa original */
       }
@@ -312,7 +345,7 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         id: p.id,
         original: p.original,
         processed,
-        thumbnail,
+        thumbnail: thumbnail || (typeof p.thumbnail === "string" ? p.thumbnail : ""),
         filter: p.filter,
         quad: p.quad,
         quadManual: p.quadManual,
@@ -341,6 +374,8 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     // El orden manual debe conocer al nuevo documento (si no, en el próximo
     // reload caería al final aunque aquí esté primero).
     void saveManualOrder(get().documents.map((d) => d.id));
+    // §6 — sonda local: guardado completo (ms + bytes procesados).
+    probeMark("save_done", { ms: Math.round(performance.now() - t0), bytes: savedBytes });
     return doc;
   },
 
@@ -376,6 +411,7 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
   saveSessionToDocument: async () => {
     const { reviewDocId, capturePages } = get();
     if (!reviewDocId) return null;
+    const t0 = performance.now();
     // B4: snapshot de ids a fusionar ANTES de los awaits — si el usuario
     // captura una página nueva mientras el merge corre (processImage es
     // async), NO debe borrarse con el vaciado final.
@@ -394,10 +430,13 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     const now = Date.now();
     const byId = new Map(doc.pages.map((p) => [p.id, p] as const));
     const pages: ScanPage[] = [];
+    let savedBytes = 0;
     for (const p of capturePages) {
       const prev = byId.get(p.id);
       // "Sin cambios" = mismos valores geometricos/foto → conserva la
-      // procesada persistida (cero reprocesos innecesarios al salir).
+      // procesada persistida (cero reprocesos innecesarios al salir). Con
+      // Blobs la comparación es por REFERENCIA (inmutables — el merge de
+      // beginReviewDocument viaja con las mismas referencias).
       const geometrySame =
         prev !== undefined &&
         prev.original === p.original &&
@@ -440,7 +479,7 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
           id: p.id,
           original: p.original,
           processed: p.processed!,
-          thumbnail: p.thumbnail ?? prev?.thumbnail ?? p.original,
+          thumbnail: p.thumbnail ?? prev?.thumbnail ?? "",
           filter: p.filter,
           quad: p.quad,
           quadManual: p.quadManual,
@@ -453,17 +492,26 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         });
         continue;
       }
-      let processed = p.processed ?? p.original;
-      let thumbnail = p.original;
+      let processed: Blob | string = p.processed ?? p.original;
+      let thumbnail = "";
       let precision: ScanPage["precision"];
       try {
-        const res = await processImage(p.original, p.quad, p.filter, p.rotation, {
+        // PLAN A (A1·A3): MISMO pipeline desde el ORIGINAL a full-res —
+        // single-encode (el preview del editor era una capa display 2048
+        // desechable; el dato guardado SIEMPRE nace del original).
+        const res = await processImageToBlob(p.original, p.quad, p.filter, p.rotation, {
           manual: p.quadManual === true,
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
         processed = res.processed;
         thumbnail = res.thumbnail;
         precision = res.precision;
+        savedBytes += res.processed.size;
+        // §6 — sonda local.
+        probeMark("page_saved", {
+          bytes: res.processed.size,
+          pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
+        });
       } catch {
         /* conserva la procesada anterior si la hay */
         if (prev) processed = prev.processed;
@@ -472,7 +520,7 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         id: p.id,
         original: p.original,
         processed,
-        thumbnail,
+        thumbnail: thumbnail || p.thumbnail || prev?.thumbnail || "",
         filter: p.filter,
         quad: p.quad,
         quadManual: p.quadManual,
@@ -496,6 +544,10 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       reviewDocId: null,
     }));
     void persistDocument(updated);
+    // §6 — sonda local: merge completo (ms + bytes reprocesados).
+    if (savedBytes > 0) {
+      probeMark("save_done", { ms: Math.round(performance.now() - t0), bytes: savedBytes });
+    }
     return reviewDocId;
   },
 
@@ -578,17 +630,23 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
   },
 
   addPageToDocument: async (docId, page) => {
-    let processed = page.original;
-    let thumbnail = page.original;
+    let processed: Blob | string = page.original;
+    let thumbnail = "";
     let precision: ScanPage["precision"];
     try {
-      const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
+      // PLAN A (A1·A3): pipeline Blob — single-encode desde el original.
+      const res = await processImageToBlob(page.original, page.quad, page.filter, page.rotation, {
         manual: page.quadManual === true,
         maxLongSide: PROCESSED_MAX_LONG_SIDE,
       });
       processed = res.processed;
       thumbnail = res.thumbnail;
       precision = res.precision;
+      // §6 — sonda local.
+      probeMark("page_saved", {
+        bytes: res.processed.size,
+        pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
+      });
     } catch {
       /* usa original */
     }
@@ -603,7 +661,7 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
                   id: page.id,
                   original: page.original,
                   processed,
-                  thumbnail,
+                  thumbnail: thumbnail || (typeof page.thumbnail === "string" ? page.thumbnail : ""),
                   filter: page.filter,
                   quad: page.quad,
                   quadManual: page.quadManual,
@@ -704,17 +762,23 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     const doc = get().documents.find((d) => d.id === docId);
     const page = doc?.pages.find((p) => p.id === pageId);
     if (!doc || !page) return;
-    let processed = page.processed;
+    let processed: Blob | string = page.processed;
     let thumbnail = page.thumbnail;
     let precision: ScanPage["precision"] = page.precision;
     try {
-      const res = await processImage(page.original, page.quad, filter, page.rotation, {
+      // PLAN A (A1·A3): pipeline Blob — single-encode desde el original.
+      const res = await processImageToBlob(page.original, page.quad, filter, page.rotation, {
         manual: page.quadManual === true,
         maxLongSide: PROCESSED_MAX_LONG_SIDE,
       });
       processed = res.processed;
       thumbnail = res.thumbnail;
       precision = res.precision;
+      // §6 — sonda local.
+      probeMark("page_saved", {
+        bytes: res.processed.size,
+        pxLong: Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0),
+      });
     } catch {
       /* conserva */
     }

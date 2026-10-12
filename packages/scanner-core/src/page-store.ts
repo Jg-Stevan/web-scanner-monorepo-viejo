@@ -31,13 +31,79 @@ const SETTINGS_MIGRATION_KEY_OCR_OFF = "escaner-settings-v3-ocr-manual";
 
 /** Registro persistido: igual que ScanPage pero con las imágenes como Blob. */
 interface StoredPage extends Omit<ScanPage, "original" | "processed" | "thumbnail"> {
-  original: Blob;
-  processed: Blob;
-  thumbnail: Blob;
+  original: Blob | string;
+  processed: Blob | string;
+  thumbnail: Blob | string;
 }
 
 interface StoredDocument extends Omit<ScanDocument, "pages"> {
   pages: StoredPage[];
+}
+
+// ─── PLAN A (A1) — registro central de objectURLs (auditoría de fugas) ──────
+
+/** Todo `URL.createObjectURL` del escáner pasa por aquí y todo release
+ *  revoca: la regla de ciclo de vida §5 A1 («todo createObjectURL tiene su
+ *  revokeObjectURL en finally/unmount») se audita desde UN solo sitio.
+ *  Estadísticas expuestas en window.__objectUrls y consumibles por el QA
+ *  junto a window.__perfProbe. */
+const objectUrlAudit = { created: 0, released: 0, live: new Set<string>() };
+
+/** Materializa una fuente como URL de `<img>`: Blob → objectURL REGISTRADO
+ *  (el llamador debe liberarlo con releaseObjectUrl en finally/unmount);
+ *  string (data URL legacy) se devuelve tal cual — nada que revocar. */
+export function acquireObjectUrl(source: Blob | string): string {
+  if (typeof source === "string") return source;
+  const url = URL.createObjectURL(source);
+  objectUrlAudit.created += 1;
+  objectUrlAudit.live.add(url);
+  return url;
+}
+
+/** Revoca un objectURL registrado (idempotente; ignora data URLs). */
+export function releaseObjectUrl(url: string | null | undefined): void {
+  if (!url || !url.startsWith("blob:")) return;
+  try {
+    URL.revokeObjectURL(url);
+    objectUrlAudit.released += 1;
+    objectUrlAudit.live.delete(url);
+  } catch {
+    /* revocar un URL ya muerto es inofensivo */
+  }
+}
+
+/** Estadísticas del registro (auditoría A1 — visible en el PR). */
+export function objectUrlStats(): { created: number; released: number; live: number } {
+  return {
+    created: objectUrlAudit.created,
+    released: objectUrlAudit.released,
+    live: objectUrlAudit.live.size,
+  };
+}
+
+/** Telemetría QA (patrón existente del repo): registro de objectURLs en
+ *  window.__objectUrls — «live» debe volver a 0 al desmontar el editor. */
+if (typeof window !== "undefined") {
+  (window as unknown as { __objectUrls?: () => unknown }).__objectUrls = () => objectUrlStats();
+}
+
+// ─── PLAN A (§6) — puente de marks hacia window.__perfProbe ─────────────────
+
+/** Marca un evento de la sonda §6 desde scanner-core (el paquete no puede
+ *  importar código de la app — el global `window.__perfProbe` ES el contrato
+ *  entre la sonda y los módulos instrumentados). 100% local, sin red,
+ *  envuelto en try/catch para no romper producción. */
+export function probeMark(
+  ev: string,
+  meta?: Record<string, number | string | boolean>
+): void {
+  try {
+    (window as unknown as {
+      __perfProbe?: { mark: (ev: string, meta?: Record<string, number | string | boolean>) => void };
+    }).__perfProbe?.mark(ev, meta);
+  } catch {
+    /* sonda best-effort */
+  }
 }
 
 // ─── utilidades data URL ⇄ Blob ─────────────────────────────────────────────
@@ -126,7 +192,10 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** Guarda (o reemplaza) un documento completo con imágenes como Blob. */
+/** Guarda (o reemplaza) un documento completo con imágenes como Blob.
+ *  PLAN A (A1): las páginas de memoria YA traen Blobs (fuente de verdad
+ *  binaria) → pasan DIRECTO a IndexedDB, sin conversión (las strings
+ *  legacy — mocks/demo — se convierten como antes). */
 export async function persistDocument(doc: ScanDocument): Promise<void> {
   try {
     const db = await openDb();
@@ -135,9 +204,9 @@ export async function persistDocument(doc: ScanDocument): Promise<void> {
       ...doc,
       pages: doc.pages.map((p) => ({
         ...p,
-        original: dataUrlToBlob(p.original),
-        processed: dataUrlToBlob(p.processed),
-        thumbnail: dataUrlToBlob(p.thumbnail),
+        original: typeof p.original === "string" ? dataUrlToBlob(p.original) : p.original,
+        processed: typeof p.processed === "string" ? dataUrlToBlob(p.processed) : p.processed,
+        thumbnail: typeof p.thumbnail === "string" ? dataUrlToBlob(p.thumbnail) : p.thumbnail,
       })),
     };
     const tx = db.transaction(STORE_DOCS, "readwrite");
@@ -216,7 +285,11 @@ export async function loadManualOrder(): Promise<string[]> {
   }
 }
 
-/** Carga todos los documentos (Blobs → data URLs para la UI).
+/** Carga todos los documentos PLAN A (A1 — Blob-first): los Blobs de
+ *  IndexedDB pasan a memoria DIRECTO (nunca se re-materializan como data
+ *  URLs — era la fuente del heap hinchado en v11). Los registros legacy
+ *  que solo tengan data URL se migran a Blob al vuelo (lazy), cediendo el
+ *  hilo entre documentos para no bloquear la app.
  *  null = instalación nueva (sin persistir) → la app conserva los mocks.
  *  []   = biblioteca real vacía (p. ej. tras borrar todo). */
 export async function loadAllDocuments(): Promise<ScanDocument[] | null> {
@@ -240,20 +313,31 @@ export async function loadAllDocuments(): Promise<ScanDocument[] | null> {
       const pages: ScanPage[] = [];
       for (const sp of d.pages) {
         try {
+          // §8.4 — migración legacy: los usuarios viejos tienen los 8
+          // presets persistidos; al hidratar se normaliza al de hoy.
+          // PLAN A (A1): data URL legacy → Blob AL VUELO (migración lazy —
+          // el string no sobrevive a la hidratación).
+          const original = typeof sp.original === "string" ? dataUrlToBlob(sp.original) : sp.original;
+          const processed =
+            typeof sp.processed === "string" ? dataUrlToBlob(sp.processed) : sp.processed;
+          const thumbnail: string =
+            typeof sp.thumbnail === "string"
+              ? sp.thumbnail
+              : await blobToDataUrl(sp.thumbnail);
           pages.push({
             ...sp,
-            // §8.4 — migración legacy: los usuarios viejos tienen los 8
-            // presets persistidos; al hidratar se normaliza al de hoy.
             filter: normalizePageFilter(sp.filter),
-            original: await blobToDataUrl(sp.original),
-            processed: await blobToDataUrl(sp.processed),
-            thumbnail: await blobToDataUrl(sp.thumbnail),
+            original,
+            processed,
+            thumbnail,
           });
         } catch {
           /* página corrupta → se omite */
         }
       }
       if (pages.length > 0) out.push({ ...d, pages });
+      // Cede el hilo entre documentos: la migración lazy nunca bloquea la app.
+      await Promise.resolve();
     }
     // Más recientes primero por defecto; si hay orden manual guardado, ese
     // gana (los ids desconocidos/nuevos van al final por fecha).

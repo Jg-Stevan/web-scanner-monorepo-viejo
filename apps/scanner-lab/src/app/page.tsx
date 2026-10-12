@@ -26,6 +26,10 @@ import SettingsView from "@/components/scanner/SettingsView";
 import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
 import { installCrashReporter } from "@/lib/crash-reporter";
+// PLAN A (§6): sonda de rendimiento 100% local (window.__perfProbe) — se
+// auto-instala al importarse, idempotente, try/catch (nunca rompe producción).
+// Los módulos de scanner-core marcan eventos vía el MISMO global (contrato).
+import "@/lib/perf-probe";
 
 // EXPERIMENTO v11 — crash reporter (SOLO observación): instalar lo más
 // temprano posible, ANTES del primer render, para capturar errores desde
