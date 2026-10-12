@@ -169,14 +169,21 @@ export async function buildDiagReport(): Promise<DiagReport> {
   }
 
   // Primer render del editor (editor_first_render − editor_open previo).
+  // Se prefiere el ÚLTIMO render con trabajo real (no cacheado): el
+  // cacheado es instantáneo por construcción y escondería el costo real.
   let firstRenderMs: number | null = null;
+  let firstRenderCached: number | null = null;
   for (const fr of marksOf("editor_first_render")) {
     let prevOpen: PerfProbeMark | null = null;
     for (const e of editorOpens) {
       if (e.ts <= fr.ts) prevOpen = e;
     }
-    if (prevOpen) firstRenderMs = Math.max(0, fr.ts - prevOpen.ts);
+    if (!prevOpen) continue;
+    const delta = Math.max(0, fr.ts - prevOpen.ts);
+    if (fr.meta?.cached === false) firstRenderMs = delta;
+    firstRenderCached = delta;
   }
+  if (firstRenderMs === null) firstRenderMs = firstRenderCached;
 
   // Cámara: ready (última sesión) + FPS early/late.
   const cameraReady = marksOf("camera_ready");
@@ -291,6 +298,7 @@ function fmtDur(ms: number): string {
 }
 
 function fmtMB(bytes: number): string {
+  if (bytes < 1_048_576) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   const mb = bytes / 1_048_576;
   return mb >= 10 ? `${mb.toFixed(0)} MB` : `${mb.toFixed(1)} MB`;
 }
@@ -334,7 +342,6 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`JPEG encode 3200 q0.92 : ${b.jpegEncodeMs ?? DASH}`);
   push(`Decode 3200 → bitmap : ${b.decodeMs ?? DASH}`);
   push(`Canvas máx verificado : ${b.maxCanvasPx ?? DASH} px`);
-  push(`Edad de la medición : ${b.benchAgeDays ?? 0} días`);
   push();
   push("-- TIER ACTIVO -------------------------------");
   if (r.tier) {

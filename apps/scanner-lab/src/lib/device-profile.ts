@@ -90,6 +90,9 @@ interface UaData {
 /** userAgentData.getHighEntropyValues (Android/Chrome) con fallback a
  *  parsear el userAgent clásico. Nunca lanza. */
 async function readUaData(): Promise<UaData> {
+  // Limpieza: una cadena vacía del navegador se reporta como null (—).
+  const clean = (s: unknown): string | null =>
+    typeof s === "string" && s.length > 0 ? s : null;
   const out: UaData = {
     model: null,
     platform: null,
@@ -117,13 +120,12 @@ async function readUaData(): Promise<UaData> {
         "architecture",
         "fullVersionList",
       ]);
-      out.model = typeof v.model === "string" && v.model ? v.model : null;
-      out.platform = typeof v.platform === "string" ? v.platform : null;
-      out.platformVersion =
-        typeof v.platformVersion === "string" ? v.platformVersion : null;
-      out.architecture = typeof v.architecture === "string" ? v.architecture : null;
-      if (typeof v.platform === "string") out.osName = v.platform;
-      if (typeof v.platformVersion === "string") out.osVersion = v.platformVersion;
+      out.model = clean(v.model);
+      out.platform = clean(v.platform);
+      out.platformVersion = clean(v.platformVersion);
+      out.architecture = clean(v.architecture);
+      out.osName = clean(v.platform);
+      out.osVersion = clean(v.platformVersion);
       const list = v.fullVersionList;
       if (Array.isArray(list) && list.length > 0) {
         // La marca real (no los placeholder "Not A Brand") con su versión.
