@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, FileText, Layers, Monitor, Moon, PlusSquare, ScanText, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
+import { Check, Copy, Download, FileText, Gauge, Layers, Loader2, Monitor, Moon, PlusSquare, ScanText, Share2, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -29,6 +29,13 @@ import {
   type PwaInstallState,
 } from "@jg-stevan/scanner-core/pwa";
 import { cn } from "@/lib/utils";
+import { diagTools } from "@/lib/diag-report";
+import {
+  getDeviceSnapshot,
+  getBenchCache,
+  type DiagDeviceSnapshot,
+  type DiagBenchResults,
+} from "@/lib/device-profile";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -450,6 +457,10 @@ export default function SettingsView() {
           </div>
         </SettingsGroup>
 
+        {/* DIAG (spec diag §7) — informe del dispositivo: resumen real +
+            compartir/descargar/copiar + re-medir benchmarks. */}
+        <DiagSection />
+
       </div>
 
       {/* AlertDialog: borrar todos los documentos */}
@@ -763,3 +774,206 @@ function InstallSection() {
  * la app procesa y guarda SIEMPRE al máximo del lente (tope técnico único
  * 4032 px). Su hueco lo cubre la fila informativa estática
  * "Resolución de procesado" del grupo Procesamiento. */
+
+/** DIAG (spec diag §7) — Sección «Diagnóstico»: resumen compacto con datos
+ *  REALES del dispositivo (modelo · RAM · bench CPU · refresh) y 3 acciones
+ *  sobre el informe: Compartir (primaria — Web Share a WhatsApp con
+ *  fallback a descarga), Descargar JSON y Copiar TXT. Botón secundario
+ *  «Re-medir benchmarks» con confirmación (tarda ~2 s). El informe NUNCA
+ *  sale del dispositivo salvo que el dueño lo comparta él mismo. */
+function DiagSection() {
+  const [snap, setSnap] = useState<DiagDeviceSnapshot | null>(null);
+  const [bench, setBench] = useState<DiagBenchResults | null>(null);
+  const [benchAgeDays, setBenchAgeDays] = useState<number | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [remeasuring, setRemeasuring] = useState(false);
+  const [confirmBench, setConfirmBench] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const s = await getDeviceSnapshot();
+        const cache = getBenchCache();
+        if (cancelled) return;
+        setSnap(s);
+        if (cache) {
+          setBench(cache.results);
+          setBenchAgeDays(Math.round(((Date.now() - cache.ts) / 86_400_000) * 10) / 10);
+        }
+      } catch {
+        /* el resumen queda en «—» */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onShare = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      const r = await diagTools.share();
+      if (r === "shared") {
+        toast.success("Informe compartido");
+      } else if (r === "downloaded") {
+        toast("Compartir no está disponible aquí", {
+          description: "El informe TXT se descargó para que lo envíes por WhatsApp.",
+          duration: 7000,
+        });
+      } else if (r === "failed") {
+        toast.error("No se pudo compartir el informe");
+      }
+      /* "cancelled": el usuario cerró el diálogo — sin toast */
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const onDownload = async () => {
+    try {
+      await diagTools.download();
+      toast.success("Informe JSON descargado");
+    } catch {
+      toast.error("No se pudo descargar el informe");
+    }
+  };
+
+  const onCopy = async () => {
+    const ok = await diagTools.copy();
+    if (ok) toast.success("Informe TXT copiado al portapapeles");
+    else toast.error("No se pudo copiar el informe");
+  };
+
+  const onRemeasure = async () => {
+    setConfirmBench(false);
+    setRemeasuring(true);
+    try {
+      const r = await diagTools.bench(true);
+      setBench(r);
+      setBenchAgeDays(0);
+      toast.success("Benchmarks re-medidos");
+    } catch {
+      toast.error("No se pudieron medir los benchmarks");
+    } finally {
+      setRemeasuring(false);
+    }
+  };
+
+  const summary = snap
+    ? [
+        snap.model ?? snap.os ?? "Dispositivo",
+        snap.ramGB !== null ? `${snap.ramGB} GB RAM` : null,
+        bench?.cpuBenchMs != null ? `CPU ${bench.cpuBenchMs} ms` : "CPU —",
+        snap.screen.refreshHz !== null ? `${snap.screen.refreshHz} Hz` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "Midiendo dispositivo…";
+
+  return (
+    <SettingsGroup label="Diagnóstico" delay={0.22}>
+      <SettingsRow
+        title="Informe del dispositivo"
+        subtitle={summary}
+      >
+        <Gauge
+          className="h-[18px] w-[18px] shrink-0 text-[#8e8e93]"
+          strokeWidth={2}
+          aria-hidden="true"
+        />
+      </SettingsRow>
+      <div className="flex flex-col gap-2 border-t border-[#f2f2f7] px-4 py-3 dark:border-[#38383a]">
+        <button
+          type="button"
+          aria-label="Compartir informe de diagnóstico"
+          onClick={() => void onShare()}
+          disabled={sharing}
+          className={cn(
+            "flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#007aff] px-4 py-2.5 text-[15px] font-semibold text-white transition-transform active:scale-[0.98]",
+            sharing && "opacity-60"
+          )}
+        >
+          {sharing ? (
+            <Loader2 className="h-[18px] w-[18px] animate-spin" aria-hidden="true" />
+          ) : (
+            <Share2 className="h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
+          )}
+          {sharing ? "Preparando informe…" : "Compartir informe"}
+        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            aria-label="Descargar informe JSON"
+            onClick={() => void onDownload()}
+            className="flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl bg-[#f2f2f7] px-3 py-2 text-[13.5px] font-semibold text-[#3c3c43] transition-transform active:scale-[0.98] dark:bg-[#2c2c2e] dark:text-white"
+          >
+            <Download className="h-4 w-4" strokeWidth={2.2} aria-hidden="true" />
+            Descargar JSON
+          </button>
+          <button
+            type="button"
+            aria-label="Copiar informe TXT al portapapeles"
+            onClick={() => void onCopy()}
+            className="flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl bg-[#f2f2f7] px-3 py-2 text-[13.5px] font-semibold text-[#3c3c43] transition-transform active:scale-[0.98] dark:bg-[#2c2c2e] dark:text-white"
+          >
+            <Copy className="h-4 w-4" strokeWidth={2.2} aria-hidden="true" />
+            Copiar TXT
+          </button>
+        </div>
+        <button
+          type="button"
+          aria-label="Volver a medir los benchmarks del dispositivo"
+          onClick={() => setConfirmBench(true)}
+          disabled={remeasuring}
+          className={cn(
+            "flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-[#e5e5ea] px-3 py-2 text-[13.5px] font-medium text-[#3c3c43] transition-transform active:scale-[0.98] dark:border-[#3a3a3c] dark:text-white/85",
+            remeasuring && "opacity-60"
+          )}
+        >
+          {remeasuring ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              Midiendo… (~2 s)
+            </>
+          ) : (
+            <>
+              <Gauge className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+              Re-medir benchmarks
+              {benchAgeDays !== null ? ` · ${benchAgeDays} d` : ""}
+            </>
+          )}
+        </button>
+        <p className="text-[11.5px] leading-snug text-[#8e8e93]">
+          Datos medidos en este dispositivo · 100 % local. El informe NO contiene
+          imágenes, contenido de documentos ni texto OCR — solo métricas.
+        </p>
+      </div>
+
+      {/* Confirmación de re-medición (tarda ~2 s y revienta la caché de 7 días) */}
+      <AlertDialog open={confirmBench} onOpenChange={setConfirmBench}>
+        <AlertDialogContent className="max-w-[320px] rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Re-medir benchmarks?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Vuelve a correr las pruebas de CPU y canvas (~2 s). Útil tras un
+              cambio de modo de ahorro de energía o con el teléfono caliente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-2">
+            <AlertDialogCancel className="mt-0 flex-1 rounded-full bg-[#f2f2f7] text-[15px] font-semibold text-[#3c3c43] hover:bg-[#e5e5ea] dark:bg-[#2c2c2e] dark:text-white dark:hover:bg-[#3a3a3c]">
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void onRemeasure()}
+              className="flex-1 rounded-full border-0 bg-[#007aff] text-[15px] font-semibold text-white hover:bg-[#0a84ff]"
+            >
+              Re-medir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SettingsGroup>
+  );
+}
