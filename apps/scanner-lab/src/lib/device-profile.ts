@@ -301,6 +301,30 @@ async function measureRefreshHz(): Promise<number | null> {
   });
 }
 
+/** v1.1 — Batería del Battery Status API. El bug del lote 1-2 (salía null
+ *  en TODO, incluido Chrome Android donde EXISTE): la llamada estaba
+ *  DETACHADA del receiver (`const fn = navigator.getBattery; fn()`) →
+ *  "Illegal invocation" en Chrome → catch silencioso → null. Ahora SIEMPRE
+ *  se llama como método de `navigator`. Best-effort: null si no existe. */
+export async function readBattery(): Promise<{
+  level: number;
+  charging: boolean;
+} | null> {
+  try {
+    const nav = navigator as Navigator & {
+      getBattery?: () => Promise<{ level: number; charging: boolean }>;
+    };
+    if (typeof nav.getBattery !== "function") return null;
+    const b = await nav.getBattery();
+    return {
+      level: Math.round(b.level * 100),
+      charging: b.charging === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Snapshot completo del dispositivo (§4a). Cada campo con try/catch
  *  propio: lo que no exista queda null (— en el informe). */
 export async function snapshotDevice(): Promise<DiagDeviceSnapshot> {
@@ -369,16 +393,7 @@ export async function snapshotDevice(): Promise<DiagDeviceSnapshot> {
     /* — */
   }
   try {
-    const getBattery = (navigator as Navigator & {
-      getBattery?: () => Promise<{ level: number; charging: boolean }>;
-    }).getBattery;
-    if (getBattery) {
-      const b = await getBattery();
-      snap.battery = {
-        level: Math.round(b.level * 100),
-        charging: b.charging === true,
-      };
-    }
+    snap.battery = await readBattery();
   } catch {
     /* — */
   }

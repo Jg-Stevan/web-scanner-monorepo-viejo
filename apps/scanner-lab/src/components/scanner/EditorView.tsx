@@ -82,6 +82,7 @@ import { ocrTextOfPages } from "@jg-stevan/scanner-core/text-export";
 import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { perfProbe } from "@/lib/perf-probe";
+import { readImageLongSide } from "@/lib/image-size";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -535,11 +536,17 @@ export default function EditorView() {
     setPortalEl(document.getElementById("app-phone"));
   }, []);
 
-  // DIAG (spec diag §5/§6) — sesión del editor: apertura + cierre (duración
-  // total de la edición). El AnimatePresence de page.tsx REMONTA la vista en
-  // cada entrada → un par editor_open/editor_close por sesión de edición.
+  // DIAG (spec diag §5/§6 · v1.1) — sesión del editor: apertura NUMERADA
+  // (1, 2, 3… de la sesión — derivada del propio anillo de marcas, sin
+  // estado extra) + cierre (duración total de la edición). El
+  // AnimatePresence de page.tsx REMONTA la vista en cada entrada → un par
+  // editor_open/editor_close por sesión de edición.
   useEffect(() => {
-    perfProbe.mark("editor_open");
+    let openIndex = 1;
+    for (const m of perfProbe.marks) {
+      if (m.ev === "editor_open") openIndex += 1;
+    }
+    perfProbe.mark("editor_open", { openIndex });
     diagEditorOpenT0Ref.current = performance.now();
     return () => {
       perfProbe.mark("editor_close", {
@@ -639,12 +646,16 @@ export default function EditorView() {
         };
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
-        // DIAG (spec diag §6) — filtro aplicado (ms del pipeline) + primer
-        // render de esta página en la vista (recién procesada).
+        // DIAG (spec diag §6 · v1.1) — filtro aplicado (ms del pipeline) +
+        // id EXPLÍCITO + tamaño de ENTRADA (lado largo del original, leído
+        // de la cabecera SIN decodificar — medirlo costaría otro decode de
+        // 12 MP) + primer render de esta página en la vista.
         perfProbe.mark("filter_applied", {
           ms: filterMs,
           engine: entry.engine,
           filter: page.filter,
+          filterId: page.filter,
+          inputPx: readImageLongSide(`p:${page.id}`, page.original) ?? null,
         });
         if (firstRenderPidRef.current !== page.id) {
           firstRenderPidRef.current = page.id;
@@ -1359,8 +1370,9 @@ export default function EditorView() {
       return;
     }
     setExportingImg(true);
-    // DIAG (spec diag §6) — export de imagen (PNG/JPG) con ms y bytes.
-    perfProbe.mark("export_start", { type: "png" });
+    // DIAG (spec diag §6 · v1.1) — export de imagen (PNG/JPG) con ms, bytes,
+    // páginas (siempre 1) y lado largo de la fuente.
+    perfProbe.mark("export_start", { type: "png", pages: 1 });
     const tExport = performance.now();
     try {
       const blob = await dataUrlToBlob(entry.url);
@@ -1373,6 +1385,11 @@ export default function EditorView() {
         type: ext,
         ms: Math.round(performance.now() - tExport),
         bytes: blob.size,
+        pages: 1,
+        pxLong:
+          Math.max(entry.w, entry.h) > 0
+            ? Math.max(entry.w, entry.h)
+            : readImageLongSide(`e:${p.id}:${cacheKey}`, entry.url) ?? null,
       });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
@@ -1493,7 +1510,18 @@ export default function EditorView() {
     const s = useScannerStore.getState();
     const doc = s.documents.find((d) => d.id === docId);
     if (!doc || doc.pages.length === 0) return;
-    // DIAG (spec diag §6) — export PDF (inicio/fin con tipo, ms y bytes).
+    // Lado largo de la fuente del PDF (v1.1): máx entre páginas — precision
+    // si existe (docs guardados), si no cabecera SIN decodificar.
+    const docPxLong = doc.pages.reduce((mx, p) => {
+      const fromPrecision =
+        p.precision && p.precision.width > 0
+          ? Math.max(p.precision.width, p.precision.height ?? 0)
+          : null;
+      const side =
+        fromPrecision ?? readImageLongSide(`d:${doc.id}:${p.id}`, p.processed) ?? 0;
+      return Math.max(mx, side);
+    }, 0);
+    // DIAG (spec diag §6 · v1.1) — export PDF: ms, bytes, PÁGINAS y px fuente.
     perfProbe.mark("export_start", { type: "pdf", pages: doc.pages.length });
     const tExport = performance.now();
     try {
@@ -1503,6 +1531,8 @@ export default function EditorView() {
         type: "pdf",
         ms: Math.round(performance.now() - tExport),
         bytes,
+        pages: doc.pages.length,
+        pxLong: docPxLong > 0 ? docPxLong : null,
       });
       toast.success(
         `PDF exportado · ${doc.pages.length} ${doc.pages.length === 1 ? "página" : "páginas"} · ${formatBytes(bytes)}`
