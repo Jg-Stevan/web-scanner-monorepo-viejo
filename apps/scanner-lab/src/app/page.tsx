@@ -26,6 +26,7 @@ import SettingsView from "@/components/scanner/SettingsView";
 import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
 import { installCrashReporter } from "@/lib/crash-reporter";
+import { perfProbe, PERF_PROBE_T0 } from "@/lib/perf-probe";
 
 // EXPERIMENTO v11 — crash reporter (SOLO observación): instalar lo más
 // temprano posible, ANTES del primer render, para capturar errores desde
@@ -71,6 +72,11 @@ export default function Home() {
   // hidrata documentos + ajustes desde IndexedDB/localStorage (§8 — la
   // biblioteca sobrevive al recargar; en instalación nueva conservan mocks).
   useEffect(() => {
+    // DIAG (spec diag §5) — arranque: la vista principal montó, la app está
+    // lista para pintar la biblioteca. ms desde la carga del módulo probe.
+    perfProbe.mark("boot_ready", {
+      ms: Math.max(0, Math.round(performance.now() - PERF_PROBE_T0)),
+    });
     // Marca de onboarding (lectura síncrona ANTES de hidratar): si ya se
     // completó en una ejecución anterior, el flag se activa aquí — la
     // transición a la app es invisible para visitas repetidas.

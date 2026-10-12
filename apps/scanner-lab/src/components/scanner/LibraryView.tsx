@@ -51,6 +51,7 @@ import { formatBytes, relativeTime } from "@jg-stevan/scanner-core/format";
 import { buildDocPdf, buildLibraryPdf, downloadBlob, sanitizeFileName, toJpeg } from "@jg-stevan/scanner-core/pdf-export";
 import { docHasOcrText, downloadOcrTxt, shareOcrText } from "@jg-stevan/scanner-core/text-export";
 import { ocrTextIsValid, requestOcr } from "@jg-stevan/scanner-core/ocr";
+import { perfProbe } from "@/lib/perf-probe";
 import { countTagUsage, docTags, normalizeTag, tagColor } from "@jg-stevan/scanner-core/tags";
 import { MiniTagRow, TagsDialog } from "@/components/scanner/TagsDialog";
 import { cn } from "@/lib/utils";
@@ -632,12 +633,22 @@ export default function LibraryView() {
         });
         try {
           const { dataUrl } = await toJpeg(t.processed);
+          // DIAG (spec diag §5) — OCR por lotes de la biblioteca.
+          perfProbe.mark("ocr_start", { site: "library" });
+          const tOcr = performance.now();
           const text = await requestOcr(dataUrl);
+          perfProbe.mark("ocr_done", {
+            ms: Math.round(performance.now() - tOcr),
+            chars: text.length,
+            ok: ocrTextIsValid(text),
+            site: "library",
+          });
           if (ocrTextIsValid(text)) {
             setOcrText(t.docId, t.pageId, text);
             ok += 1;
           }
         } catch {
+          perfProbe.mark("ocr_done", { ms: 0, chars: 0, ok: false, site: "library" });
           /* continúa con la siguiente página */
         }
       }

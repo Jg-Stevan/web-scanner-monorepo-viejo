@@ -79,8 +79,9 @@ import type { CapturePage, PageFilter, Point, Quad } from "@jg-stevan/scanner-co
 import { ocrTextIsValid, requestOcr } from "@jg-stevan/scanner-core/ocr";
 import { buildDocPdf, downloadBlob, sanitizeFileName } from "@jg-stevan/scanner-core/pdf-export";
 import { ocrTextOfPages } from "@jg-stevan/scanner-core/text-export";
-import { formatBytes } from "@jg-stevan/scanner-core/format";
+import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
+import { perfProbe } from "@/lib/perf-probe";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -509,6 +510,12 @@ export default function EditorView() {
   const autoIds = useRef<Set<string>>(new Set());
   const manualIds = useRef<Set<string>>(new Set());
   const badgeTimer = useRef<number>(0);
+  // DIAG (spec diag §5) — solo instrumentación de la sonda: última página
+  // cuyo «primer render» ya se marcó, t0 de la sesión del editor y guarda
+  // 1-vez del muestreo de FPS pan/zoom.
+  const firstRenderPidRef = useRef<string | null>(null);
+  const diagEditorOpenT0Ref = useRef(0);
+  const diagFpsAutoRef = useRef(false);
 
   // ── Título del header (estilo Adobe Scan: "Digitalización N · fecha") ────
   const headerTitle = reviewDoc ? reviewDoc.title : `Digitalización ${documentsCount + 1}`;
@@ -526,6 +533,19 @@ export default function EditorView() {
   // ── Portal del sheet de filtros dentro del marco del teléfono ────────────
   useEffect(() => {
     setPortalEl(document.getElementById("app-phone"));
+  }, []);
+
+  // DIAG (spec diag §5/§6) — sesión del editor: apertura + cierre (duración
+  // total de la edición). El AnimatePresence de page.tsx REMONTA la vista en
+  // cada entrada → un par editor_open/editor_close por sesión de edición.
+  useEffect(() => {
+    perfProbe.mark("editor_open");
+    diagEditorOpenT0Ref.current = performance.now();
+    return () => {
+      perfProbe.mark("editor_close", {
+        durationMs: Math.max(0, Math.round(performance.now() - diagEditorOpenT0Ref.current)),
+      });
+    };
   }, []);
 
   // ── F-NOVIEW: la biblioteca abre el documento directamente en el editor
@@ -579,6 +599,12 @@ export default function EditorView() {
       // EXPERIMENTO v11: sin copia de display — se consume el DATO
       // completo directamente (la generación en 2º plano de displayUrl
       // de v5 5.1 está APAGADA; la entrada se pinta YA con su url).
+      // DIAG (spec diag §6) — primer render de esta página en la vista
+      // (entrada cacheada: instantánea).
+      if (firstRenderPidRef.current !== page.id) {
+        firstRenderPidRef.current = page.id;
+        perfProbe.mark("editor_first_render", { engine: cached.engine, cached: true });
+      }
       return () => {
         cancelled = true;
       };
@@ -593,10 +619,13 @@ export default function EditorView() {
       try {
         // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
         // estricto por construcción: lo que ves ES la imagen guardada.
+        // DIAG (spec diag §6) — tiempo del reproceso completo (warp + filtro).
+        const tFilter = performance.now();
         const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
           manual: page.quadManual === true,
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
+        const filterMs = Math.round(performance.now() - tFilter);
         if (cancelled) return;
         // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
         // con el DATO completo (url/w/h/engine); los <img> del editor
@@ -610,6 +639,17 @@ export default function EditorView() {
         };
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
+        // DIAG (spec diag §6) — filtro aplicado (ms del pipeline) + primer
+        // render de esta página en la vista (recién procesada).
+        perfProbe.mark("filter_applied", {
+          ms: filterMs,
+          engine: entry.engine,
+          filter: page.filter,
+        });
+        if (firstRenderPidRef.current !== page.id) {
+          firstRenderPidRef.current = page.id;
+          perfProbe.mark("editor_first_render", { engine: entry.engine, cached: false, ms: filterMs });
+        }
       } catch {
         if (!cancelled) setPreview({ url: page.original, w: 0, h: 0, engine: "canvas" });
       } finally {
@@ -756,6 +796,15 @@ export default function EditorView() {
     (e: ReactPointerEvent<HTMLDivElement>) => {
       const el = zoomStageRef.current;
       if (!el) return;
+      // DIAG (spec diag §5) — primer gesto de pan/zoom (táctil): dispara el
+      // muestreo de FPS del editor UNA vez por sesión, sin depender del
+      // dueño (la muestra de 3 s corre mientras él sigue interactuando).
+      if (!diagFpsAutoRef.current) {
+        diagFpsAutoRef.current = true;
+        void perfProbe.fpsSample(3000).then((s) => {
+          if (s) perfProbe.mark("fps_auto", { fps: s.fps });
+        });
+      }
       // F-NAV (lección de la presentación): solo capturar cuando el down cae
       // en el propio stage — si cae en un hijo interactivo (botón/chip) su
       // click debe vivir. B1: el guard anterior (target === currentTarget)
@@ -930,6 +979,14 @@ export default function EditorView() {
   const onStageWheel = useCallback(
     (e: WheelEvent) => {
       if (!e.deltaY) return;
+      // DIAG (spec diag §5) — primer gesto de zoom (rueda): dispara el
+      // muestreo de FPS pan/zoom UNA vez por sesión de editor.
+      if (!diagFpsAutoRef.current) {
+        diagFpsAutoRef.current = true;
+        void perfProbe.fpsSample(3000).then((s) => {
+          if (s) perfProbe.mark("fps_auto", { fps: s.fps });
+        });
+      }
       e.preventDefault();
       const p = zoomRelToCenter(e.clientX, e.clientY);
       const factor = Math.exp(-e.deltaY * 0.0016);
@@ -1302,6 +1359,9 @@ export default function EditorView() {
       return;
     }
     setExportingImg(true);
+    // DIAG (spec diag §6) — export de imagen (PNG/JPG) con ms y bytes.
+    perfProbe.mark("export_start", { type: "png" });
+    const tExport = performance.now();
     try {
       const blob = await dataUrlToBlob(entry.url);
       const ext = blob.type === "image/jpeg" ? "jpg" : "png";
@@ -1309,6 +1369,11 @@ export default function EditorView() {
         `${headerTitle}-página-${activeIdx + 1}.${ext}`
       );
       downloadBlob(blob, name);
+      perfProbe.mark("export_end", {
+        type: ext,
+        ms: Math.round(performance.now() - tExport),
+        bytes: blob.size,
+      });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
       toast.error("No se pudo guardar la imagen");
@@ -1428,9 +1493,17 @@ export default function EditorView() {
     const s = useScannerStore.getState();
     const doc = s.documents.find((d) => d.id === docId);
     if (!doc || doc.pages.length === 0) return;
+    // DIAG (spec diag §6) — export PDF (inicio/fin con tipo, ms y bytes).
+    perfProbe.mark("export_start", { type: "pdf", pages: doc.pages.length });
+    const tExport = performance.now();
     try {
       const { pdf, bytes } = await buildDocPdf(doc, s.settings.exportQuality);
       pdf.save(`${sanitizeFileName(doc.title)}.pdf`);
+      perfProbe.mark("export_end", {
+        type: "pdf",
+        ms: Math.round(performance.now() - tExport),
+        bytes,
+      });
       toast.success(
         `PDF exportado · ${doc.pages.length} ${doc.pages.length === 1 ? "página" : "páginas"} · ${formatBytes(bytes)}`
       );
@@ -1453,10 +1526,28 @@ export default function EditorView() {
       return;
     }
     setSaving(true);
+    // DIAG (spec diag §6) — la sonda mide el guardado completo (proceso +
+    // merge de todas las páginas): save_done con ms y bytes PROCESADAS
+    // totales (el detalle por página vive en los page_saved de captura).
+    const tSave = performance.now();
+    const markSavedDoc = (doc: { pages: Array<{ processed: string }> }) => {
+      let totalBytes = 0;
+      for (const p of doc.pages) {
+        totalBytes += dataUrlBytes(p.processed);
+      }
+      perfProbe.mark("save_done", {
+        ms: Math.round(performance.now() - tSave),
+        bytes: totalBytes,
+      });
+    };
     try {
       if (s.reviewDocId) {
         const docId = await s.saveSessionToDocument();
         if (docId) {
+          const saved = useScannerStore
+            .getState()
+            .documents.find((d) => d.id === docId);
+          if (saved) markSavedDoc(saved);
           if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
             navigator.vibrate([28, 60, 28]);
           }
@@ -1474,6 +1565,7 @@ export default function EditorView() {
       const n = s.documents.filter((d) => d.deletedAt === undefined).length + 1;
       const doc = await s.saveSessionAsDocument(`Digitalización ${n}`);
       if (doc) {
+        markSavedDoc(doc);
         const engine = doc.pages.some((p) => p.precision?.engine === "worker")
           ? "opencv"
           : "canvas";
@@ -1548,8 +1640,19 @@ export default function EditorView() {
       (page.processed && page.processedKey === cacheKey ? page.processed : undefined) ??
       page.original;
     setOcrRunning(true);
+    // DIAG (spec diag §5) — duración del OCR de la página actual (la 1ª de
+    // la sesión incluye la descarga del motor ~3 MB → frío vs tibio).
+    perfProbe.mark("ocr_start", { site: "current" });
+    const tOcr = performance.now();
     try {
       const text = await requestOcr(image);
+      const ocrOk = ocrTextIsValid(text);
+      perfProbe.mark("ocr_done", {
+        ms: Math.round(performance.now() - tOcr),
+        chars: text.length,
+        ok: ocrOk,
+        site: "current",
+      });
       if (ocrTextIsValid(text)) {
         updateCapturePage(page.id, { ocrText: text, ocrDone: true });
         toast.success("Texto reconocido", {
@@ -1559,6 +1662,12 @@ export default function EditorView() {
         toast.info("La página no parece tener texto legible");
       }
     } catch (err) {
+      perfProbe.mark("ocr_done", {
+        ms: Math.round(performance.now() - tOcr),
+        chars: 0,
+        ok: false,
+        site: "current",
+      });
       toast.error("No se pudo reconocer el texto", {
         description: err instanceof Error ? err.message : undefined,
       });
@@ -1601,7 +1710,15 @@ export default function EditorView() {
             engine: res.precision?.engine === "worker" ? "worker" : "canvas",
           });
         }
+        const tOcr = performance.now();
+        perfProbe.mark("ocr_start", { site: "all" });
         const text = await requestOcr(image);
+        perfProbe.mark("ocr_done", {
+          ms: Math.round(performance.now() - tOcr),
+          chars: text.length,
+          ok: ocrTextIsValid(text),
+          site: "all",
+        });
         if (ocrTextIsValid(text)) {
           updateCapturePage(p.id, { ocrText: text, ocrDone: true });
         }
@@ -1694,12 +1811,27 @@ export default function EditorView() {
     autoOcrTried.current.add(page.id);
     setAutoOcrBusy(true);
     void (async () => {
+      // DIAG (spec diag §5) — OCR automático de fondo tras la captura.
+      perfProbe.mark("ocr_start", { site: "auto" });
+      const tOcr = performance.now();
       try {
         const text = await requestOcr(image);
+        perfProbe.mark("ocr_done", {
+          ms: Math.round(performance.now() - tOcr),
+          chars: text.length,
+          ok: ocrTextIsValid(text),
+          site: "auto",
+        });
         if (ocrTextIsValid(text)) {
           updateCapturePage(page.id, { ocrText: text, ocrDone: true });
         }
       } catch {
+        perfProbe.mark("ocr_done", {
+          ms: Math.round(performance.now() - tOcr),
+          chars: 0,
+          ok: false,
+          site: "auto",
+        });
         /* silencioso en modo automático: el usuario puede reintentar a mano */
       } finally {
         setAutoOcrBusy(false);
