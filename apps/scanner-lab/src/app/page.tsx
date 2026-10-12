@@ -27,6 +27,7 @@ import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
 import { installCrashReporter } from "@/lib/crash-reporter";
 import { perfProbe, PERF_PROBE_T0 } from "@/lib/perf-probe";
+import { scheduleDiagIdle } from "@/lib/device-profile";
 
 // EXPERIMENTO v11 — crash reporter (SOLO observación): instalar lo más
 // temprano posible, ANTES del primer render, para capturar errores desde
@@ -77,6 +78,10 @@ export default function Home() {
     perfProbe.mark("boot_ready", {
       ms: Math.max(0, Math.round(performance.now() - PERF_PROBE_T0)),
     });
+    // DIAG (spec diag §4b) — medición del dispositivo en idle (snapshot +
+    // benchmarks si la caché de 7 días está fría). Nunca bloquea el
+    // arranque ni corre con la pestaña en background.
+    scheduleDiagIdle();
     // Marca de onboarding (lectura síncrona ANTES de hidratar): si ya se
     // completó en una ejecución anterior, el flag se activa aquí — la
     // transición a la app es invisible para visitas repetidas.
