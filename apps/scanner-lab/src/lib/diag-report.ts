@@ -27,7 +27,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "diag/test-estandar-qa @ 97dbe66";
+export const DIAG_BUILD = "perf/burst-budget @ pending";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
@@ -59,10 +59,10 @@ export interface DiagTier {
 
 export interface DiagReport {
   format: "scannerlab-diag-report";
-  /** v1 → v2 (sub-marks) → v3 (test estándar QA): SOLO campos
-   *  adicionales — todo campo v1 conserva nombre y significado (informes
-   *  de los lotes 1-2 comparables 1:1). */
-  version: 3;
+  /** v1 → v2 (sub-marks) → v3 (test estándar QA) → v4 (burst-budget):
+   *  SOLO campos adicionales — todo campo v1 conserva nombre y significado
+   *  (informes de los lotes 1-3 comparables 1:1). */
+  version: 4;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -92,6 +92,15 @@ export interface DiagReport {
       segments: {
         shotToProcessedMs: number | null;
         processedToWriteMs: number | null;
+      };
+      /** v4 (burst-budget) — adquisición bajo presupuesto: por qué terminó
+       *  cada captura (meta aditiva del mark capture_shot) + gap
+       *  capture_fired→shot, LA métrica del antes/después del fix (16.8 s
+       *  → ≤ ~2 s en gama baja). */
+      burst?: {
+        byReason: Record<string, number>;
+        acquisitionMs: number[];
+        acquisitionMsMedian: number | null;
       };
     };
     editor: {
@@ -340,6 +349,30 @@ export async function buildDiagReport(): Promise<DiagReport> {
     if (write) processedToWriteMs.push(Math.max(0, write.ts - p.ts));
   }
 
+  // v4 (burst-budget) — adquisición por captura: razón de salida del
+  // presupuesto (meta aditiva del mark capture_shot) + gap
+  // capture_fired→shot apareado con el disparo previo. Solo si ALGUNA
+  // captura trajo meta burst (sesiones/ramas sin burst-budget → campo
+  // ausente, informes viejos idénticos).
+  const burstByReason: Record<string, number> = {};
+  const burstAcquisitionMs: number[] = [];
+  for (const s of shotMarks) {
+    const fired = lastBefore(firedShots, s.ts);
+    if (fired) burstAcquisitionMs.push(Math.max(0, s.ts - fired.ts));
+    const reason = s.meta?.burstExitReason;
+    if (typeof reason === "string") {
+      burstByReason[reason] = (burstByReason[reason] ?? 0) + 1;
+    }
+  }
+  const burst =
+    Object.keys(burstByReason).length > 0
+      ? {
+          byReason: burstByReason,
+          acquisitionMs: burstAcquisitionMs,
+          acquisitionMsMedian: median(burstAcquisitionMs),
+        }
+      : undefined;
+
   const lastClose = marksOf("editor_close");
   const bootMark = marksOf("boot_ready")[0];
 
@@ -376,7 +409,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
 
   return {
     format: "scannerlab-diag-report",
-    version: 3,
+    version: 4,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -403,6 +436,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
           shotToProcessedMs: median(shotToProcessedMs),
           processedToWriteMs: median(processedToWriteMs),
         },
+        ...(burst ? { burst } : {}),
       },
       editor: {
         openMs: editorOpenMs,
@@ -473,7 +507,7 @@ export function buildDiagTxt(r: DiagReport): string {
   push("==============================================");
   push(`Generado : ${new Date(r.generatedAt).toLocaleString()}`);
   push(`Build    : ${r.app.build}`);
-  push("Formato  : diag-report v3");
+  push("Formato  : diag-report v4");
   if (r.qa) {
     push();
     push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
@@ -550,6 +584,18 @@ export function buildDiagTxt(r: DiagReport): string {
       : DASH;
   push(`Captura → guardada (ms)   : ${savedList} (mediana ${s.pages.medianMs ?? DASH})`);
   push(`  tramos: procesado ${fmtMs(s.pages.segments.shotToProcessedMs)} · escritura ${fmtMs(s.pages.segments.processedToWriteMs)} (medianas)`);
+  // v4 (burst-budget) — línea de captura con la adquisición presupuestada:
+  // conteo por razón de salida + gap disparo→foto (capture_fired→shot).
+  if (s.pages.burst) {
+    const br = s.pages.burst.byReason;
+    const reasons = ["photo", "stable", "time_cap", "frame_cap", "legacy", "error"]
+      .filter((k) => (br[k] ?? 0) > 0)
+      .map((k) => `${k} ${br[k]}`)
+      .join(" · ");
+    push(
+      `  burst: ${reasons || DASH} — gap disparo→foto mediana ${fmtMs(s.pages.burst.acquisitionMsMedian)}`
+    );
+  }
   const renders2 = s.editor.firstRenders[1];
   push(
     `Editor: apertura/render   : ${s.editor.openMs !== null ? `${s.editor.openMs} ms` : DASH} / ${fmtMs(s.editor.firstRenderMs)}${renders2 !== null && renders2 !== undefined ? ` · 2ª: ${fmtMs(renders2)}` : ""}`

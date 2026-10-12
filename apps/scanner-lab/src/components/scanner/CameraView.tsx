@@ -70,6 +70,15 @@ import {
 } from "@jg-stevan/scanner-core/sensor-profiler";
 import { dataUrlBytes } from "@jg-stevan/scanner-core/format";
 import { perfProbe } from "@/lib/perf-probe";
+import {
+  getBurstConfig,
+  makeThumbSampler,
+  recordBurst,
+  waitForPhotoBudget,
+  type BurstExitReason,
+  type BurstStats,
+} from "@/lib/burst-budget";
+import { readBlobLongSide } from "@/lib/image-size";
 
 type CameraStatus = "idle" | "live" | "synthetic" | "simulated";
 
@@ -882,6 +891,12 @@ export default function CameraView() {
     []
   );
 
+  /** PERF/burst-budget — estadísticas de la adquisición EN VUELO: se cuelgan
+   *  del mark `capture_shot` (meta aditiva) cuando la imagen llega al
+   *  pipeline y se limpian en cada captura nueva y en los caminos de fallo
+   *  del dispatch (nada dispara capture_shot → nada que telemetrizar). */
+  const pendingBurstRef = useRef<BurstStats | null>(null);
+
   /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2):
    *  flash → decode → downscale → calidad → store → EDITOR INMEDIATO.
    *  El editor abre con un marco provisional y la detección de bordes
@@ -905,7 +920,21 @@ export default function CameraView() {
         // DIAG v1.1 (spec sub-marks) — el frame/foto del sensor YA está en
         // mano (blob→dataURL o frame→dataURL): empieza el procesado. Tramo
         // 1 de la descomposición captura→guardada.
-        perfProbe.mark("capture_shot");
+        // PERF/burst-budget — meta ADITIVA: cómo terminó la adquisición de
+        // ESTA captura (burstExitReason/burstFrames). Ausente en los caminos
+        // sin burst (demo, galería, cámara nativa iOS) — marks v1/v1.1
+        // intactos, solo campos nuevos.
+        const burstMeta = pendingBurstRef.current;
+        perfProbe.mark(
+          "capture_shot",
+          burstMeta === null
+            ? undefined
+            : {
+                burstExitReason: burstMeta.exitReason,
+                burstFrames: burstMeta.frames,
+              }
+        );
+        pendingBurstRef.current = null;
         // Decode ÚNICO de la captura (antes: downscale + detect + quality
         // decodificaban la misma foto de 12 MP tres veces). El elemento se
         // reutiliza en las etapas; solo se re-decodifica si hubo que
@@ -1017,14 +1046,42 @@ export default function CameraView() {
     [addCapturePage, setView, applyAutoQuad]
   );
 
-  /** Blob → data URL (para el takePhoto hi-res). */
+  /** Blob → data URL (para el takePhoto hi-res).
+   *  PERF/burst-budget — `deadlineAt` opcional: el muro de la captura puede
+   *  ABORTAR el FileReader a mitad (spec §3 «cancelación»: abortar promesas)
+   *  y resolver null — el flujo cae al dispatch de frames. Sin deadline el
+   *  comportamiento es el de siempre (rechaza si el reader falla). */
   const blobToDataUrl = useCallback(
-    (blob: Blob) =>
-      new Promise<string>((resolve, reject) => {
+    (blob: Blob, deadlineAt?: number) =>
+      new Promise<string | null>((resolve, reject) => {
         const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result ?? ""));
-        fr.onerror = () => reject(new Error("FileReader falló"));
-        fr.readAsDataURL(blob);
+        let settled = false;
+        let watch = 0;
+        const done = (settle: () => void) => {
+          if (settled) return;
+          settled = true;
+          if (watch) window.clearTimeout(watch);
+          settle();
+        };
+        fr.onload = () => done(() => resolve(String(fr.result ?? "")));
+        fr.onerror = () =>
+          done(() =>
+            deadlineAt === undefined
+              ? reject(new Error("FileReader falló"))
+              : resolve(null)
+          );
+        fr.onabort = () => done(() => resolve(null));
+        if (deadlineAt !== undefined) {
+          watch = window.setTimeout(() => {
+            try {
+              fr.abort();
+            } catch {
+              /* ya terminó */
+            }
+            done(() => resolve(null));
+          }, Math.max(0, deadlineAt - performance.now()));
+        }
+        void fr.readAsDataURL(blob);
       }),
     []
   );
@@ -1042,7 +1099,8 @@ export default function CameraView() {
    *  (takePhotoBrokenRef) para que captureSmart no vuelva a colgar 5 s en
    *  cada disparo. Devuelve el blob y el flag timedOut (el llamador evalúa
    *  la salud del stream tras un timeout — fix 4.3). */
-  const takePhotoBlob = useCallback(async (): Promise<{ blob: Blob | null; timedOut: boolean }> => {
+  const takePhotoBlob = useCallback(
+    async (deadlineAt?: number): Promise<{ blob: Blob | null; timedOut: boolean }> => {
     // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
     // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
     // disparo). Fuera de Android/Chrome ni se intenta.
@@ -1059,11 +1117,28 @@ export default function CameraView() {
       const profile = sensorProfileRef.current;
       const settings = profile ? buildCappedPhotoSettings(profile) : undefined;
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
+        // PERF/burst-budget — cada carrera de takePhoto queda ACOTADA por el
+        // presupuesto global de la captura (legacy sin deadline: 5 s exactos
+        // como siempre). Si no queda presupuesto, ni se dispara la foto.
+        let raceMs = 5000;
+        if (deadlineAt !== undefined) {
+          raceMs = Math.min(5000, deadlineAt - performance.now());
+          if (raceMs <= 50) {
+            return {
+              blob: null,
+              err: new Error("burst budget agotado antes de takePhoto"),
+              timedOut: false,
+            };
+          }
+        }
         try {
           const blob = await Promise.race([
             capture.takePhoto(ps),
             new Promise<never>((_, reject) =>
-              window.setTimeout(() => reject(new Error("takePhoto timeout 5s")), 5000)
+              window.setTimeout(
+                () => reject(new Error(`takePhoto timeout ${Math.round(raceMs)}ms`)),
+                raceMs
+              )
             ),
           ]);
           return {
@@ -1084,7 +1159,14 @@ export default function CameraView() {
       // (constraints del profiler rechazadas, InvalidStateError…): mejor
       // foto sin tope que perder la captura. Si expiró por timeout, el
       // sensor quedó colgado — reintentar solo doblaría la espera.
-      if (!res.blob && settings && !res.timedOut && res.err) {
+      // PERF/burst-budget: tampoco con el presupuesto ya agotado.
+      if (
+        !res.blob &&
+        settings &&
+        !res.timedOut &&
+        res.err &&
+        (deadlineAt === undefined || deadlineAt - performance.now() > 50)
+      ) {
         res = await attempt(undefined);
       }
       // FIX v4 4.1 — lista negra temporal: marcar si expiró, rehabilitar si
@@ -1094,7 +1176,23 @@ export default function CameraView() {
       if (!res.blob) return { blob: null, timedOut: res.timedOut };
       // Capa 2 — red de seguridad post-decode (solo recorta si el blob
       // excede el tope; si no, el blob original pasa intacto).
-      const clamped = await clampBlobToSafeCap(res.blob, profile?.safeCapPx ?? getSensorSafeCap());
+      // PERF/burst-budget — con presupuesto, el tope se lee de la CABECERA
+      // (readBlobLongSide, ~192 KB): el createImageBitmap de 12 MP que había
+      // aquí era un decode completo SOLO para leer width/height — segundos
+      // enteros en gama baja DENTRO del tramo captura→guardada. Blob dentro
+      // del tope → clamp saltado (intacto); desconocido o gigante → clamp
+      // íntegro como siempre. Legacy sin deadline: camino exacto de antes.
+      const capPx = profile?.safeCapPx ?? getSensorSafeCap();
+      let clamped: Blob;
+      if (deadlineAt !== undefined) {
+        const sniffed = await readBlobLongSide(res.blob);
+        clamped =
+          sniffed !== null && sniffed <= capPx
+            ? res.blob
+            : await clampBlobToSafeCap(res.blob, capPx);
+      } else {
+        clamped = await clampBlobToSafeCap(res.blob, capPx);
+      }
       return { blob: clamped, timedOut: false };
     } catch {
       return { blob: null, timedOut: false };
@@ -1208,7 +1306,8 @@ export default function CameraView() {
    *  la FOTO FULL-SENSOR MANDA (12–48 MP vía takePhoto, independiente
    *  del preview de 540p):
    *  1. Frame A: solo píxeles + medidas (respaldo sin coste).
-   *  2. Foto hi-res del sensor (takePhoto, carrera de 5 s — FIX v4 4.1) → data URL.
+   *  2. Foto hi-res del sensor (takePhoto, carrera ≤5 s ACOTADA por el
+   *     presupuesto global de burst-budget — PERF) → data URL.
    *  3. Si hay foto → dispatch YA (los frames se descartan, R-14).
    *  Fallback premium si takePhoto no existe o cuelga: el ganador ZSL
    *  pre-tap (80–450 ms antes del disparo, anti tap-shock) del buffer
@@ -1232,6 +1331,18 @@ export default function CameraView() {
     // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
     // si estaba dormido — el disparo es interacción explícita).
     exitStandby();
+
+    /* PERF/burst-budget — presupuesto de la adquisición (spec §2.7: este
+     *  tramo ES el fix). El muro se cronometra desde capture_fired con
+     *  performance.now() (monotónico, NUNCA rAF). Legacy (enabled:false) =
+     *  cadena de esperas EXACTA de antes (race de 5 s propia del takePhoto,
+     *  clamp incondicional, FileReader sin abort). */
+    const burstCfg = getBurstConfig();
+    const burstT0 = performance.now();
+    const burstDeadline = burstCfg.enabled
+      ? burstT0 + burstCfg.timeBudgetMs
+      : undefined;
+    pendingBurstRef.current = null; // captura nueva: sin meta heredada
 
     /** F-ZSL — recupera el ganador pre-tap del buffer Best-Shot (mayor
      *  lapVar entre 80 y 450 ms antes del disparo: el impacto del dedo
@@ -1262,8 +1373,13 @@ export default function CameraView() {
       return { canvas: winner.canvas, m: { lapVar: winner.lapVar, exposure: 0 } };
     };
 
-    /** Mejor frame por lapVar → encode SOLO del ganador → dispatch. */
-    const dispatchBestFrame = async (framesRaw: Array<BurstFrame | null>) => {
+    /** Mejor frame por lapVar → encode SOLO del ganador → dispatch.
+     *  PERF/burst-budget — devuelve si despachó (para telemetría) y limpia
+     *  la meta pendiente en los caminos de fallo (nada dispara
+     *  capture_shot → nada que telemetrizar). */
+    const dispatchBestFrame = async (
+      framesRaw: Array<BurstFrame | null>
+    ): Promise<boolean> => {
       const frames = framesRaw.filter((f): f is BurstFrame => f !== null);
       if (frames.length === 0) {
         // FIX v4 4.4 — burst 100 % nulo: si el stream está MUERTO, recuperar
@@ -1272,12 +1388,14 @@ export default function CameraView() {
         // reportado por el propietario).
         if (isStreamDead()) {
           recoverStream();
-          return; // el toast de recoverStream ya informa al usuario
+          pendingBurstRef.current = null;
+          return false; // el toast de recoverStream ya informa al usuario
         }
         // B8: el disparo no debe perderse en silencio (stream vivo, frames
         // vacíos por otra causa).
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
-        return;
+        pendingBurstRef.current = null;
+        return false;
       }
       const measured = frames.filter((f) => f.m !== null);
       let winner: BurstFrame;
@@ -1305,9 +1423,12 @@ export default function CameraView() {
       for (const f of frames) releaseFrame(f);
       if (url) {
         void handleCaptureDataUrl(url);
+        return true;
       } else {
         // B8: encode falló → feedback en vez de descartar el disparo.
         toast.error("No se pudo capturar", { description: "Inténtalo de nuevo." });
+        pendingBurstRef.current = null;
+        return false;
       }
     };
 
@@ -1339,8 +1460,67 @@ export default function CameraView() {
     // FIX v4 4.1 — lista negra temporal: si un takePhoto ya expiró en este
     // stream, NO se vuelve a intentar (cada disparo volvería a congelar el
     // visor 5 s) — directo al fallback de frames hasta un stream nuevo.
-    const shot =
-      canTakePhotoRef.current && !takePhotoBrokenRef.current ? await takePhotoBlob() : null;
+    /* PERF/burst-budget — LA ADQUISICIÓN BAJO PRESUPUESTO. Principio (spec
+     *  §3): la adquisición termina cuando (a) la foto llega, (b) el preview
+     *  lleva `stabilityFrames` muestras estables (§B — señal barata 64×64),
+     *  o (c) se agota el muro global (§A) — lo primero que ocurra. Cancelación
+     *  (§3): el takePhoto huérfano no es abortable (ImageCapture no expone
+     *  cancelación — documentado en el PR): su carrera interna muere con el
+     *  deadline compartido y su blob, si llega, no se referencia; el
+     *  FileReader de la conversión SÍ se aborta de verdad. Cooldown,
+     *  estabilidad del shutter y photoSettings: INTACTOS. */
+    const canPhoto = canTakePhotoRef.current && !takePhotoBrokenRef.current;
+    let shot: { blob: Blob | null; timedOut: boolean } | null = null;
+    let bail: "time_cap" | "stable" | null = null;
+    let burstSamples = 0;
+    let burstSampleCost: number | null = null;
+    if (burstDeadline !== undefined) {
+      if (performance.now() >= burstDeadline) {
+        // El torch/flash (applyConstraints no abortable) consumió el muro
+        // ENTERO: la foto ni se dispara — frames YA, sin toast engañoso.
+        bail = "time_cap";
+      } else {
+        const sampler = makeThumbSampler(() => videoRef.current);
+        sampler.baseline();
+        const w = await waitForPhotoBudget(
+          () =>
+            canPhoto
+              ? takePhotoBlob(burstDeadline)
+              : Promise.resolve({ blob: null, timedOut: false }),
+          { deadlineAt: burstDeadline, sampler }
+        );
+        burstSamples = w.samples;
+        burstSampleCost = w.lastSampleCostMs;
+        if (w.settled === "value") {
+          shot =
+            (w.value as { blob: Blob | null; timedOut: boolean } | null) ??
+            { blob: null, timedOut: false };
+        } else {
+          bail = w.settled;
+        }
+      }
+    } else {
+      shot = canPhoto ? await takePhotoBlob() : null;
+    }
+    const burstExtra = {
+      samples: burstSamples,
+      lastSampleCostMs: burstSampleCost,
+    };
+
+    if (bail !== null) {
+      // §A/§B — el presupuesto cortó la espera: dispatch con lo recogido.
+      // El ganador ZSL de la ventana 80–450 ms (el ring siguió alimentándose
+      // durante la espera) compite con snapA (frame del instante del
+      // disparo) y un frame fresco; el ring se drena (disciplina RAM).
+      const cands = [takeZslFallback(), snapA, snapshotVideo()];
+      const n = cands.filter((f): f is BurstFrame => f !== null).length;
+      pendingBurstRef.current = recordBurst(bail, n, performance.now() - burstT0, burstExtra);
+      if (!(await dispatchBestFrame(cands))) {
+        pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
+      }
+      return;
+    }
+
     const photoBlob = shot?.blob ?? null;
     if (!photoBlob) {
       // FIX v4 4.3 — chequeo post-timeout: un takePhoto colgado puede dejar
@@ -1379,8 +1559,20 @@ export default function CameraView() {
       }
       // DUAL PIPELINE — fallback: el ganador ZSL pre-tap (estable, anti
       // tap-shock) compite por lapVar con snapA y el frame actual.
+      // PERF/burst-budget — §C: este dispatch ya recolecta ≤3 candidatos
+      // (techo de frames como MÁXIMO, nunca requisito) → `frame_cap`.
       const zsl = takeZslFallback();
-      await dispatchBestFrame([zsl, snapA, snapshotVideo()]);
+      const cands = [zsl, snapA, snapshotVideo()];
+      const n = cands.filter((f): f is BurstFrame => f !== null).length;
+      pendingBurstRef.current = recordBurst(
+        burstDeadline !== undefined ? "frame_cap" : "legacy",
+        n,
+        performance.now() - burstT0,
+        burstExtra
+      );
+      if (!(await dispatchBestFrame(cands))) {
+        pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
+      }
       return;
     }
 
@@ -1394,15 +1586,44 @@ export default function CameraView() {
     // intocable: una foto algo blanda a 3264 px siempre supera a un frame
     // perfecto de 720p (el enhance afina; retomar cuesta un toque).
     let photoUrl: string | null = null;
-    try {
-      photoUrl = await blobToDataUrl(photoBlob);
-    } catch {
-      photoUrl = null; // FileReader falló (rarísimo) → burst de frames
+    if (burstDeadline !== undefined) {
+      if (burstDeadline - performance.now() <= 50) {
+        // Foto en mano pero SIN presupuesto para el FileReader (un 12 MP
+        // cuesta 1–3 s en gama baja): el muro se respeta → frames YA.
+        photoUrl = null;
+      } else {
+        photoUrl = await blobToDataUrl(photoBlob, burstDeadline);
+      }
+    } else {
+      try {
+        photoUrl = await blobToDataUrl(photoBlob);
+      } catch {
+        photoUrl = null; // FileReader falló (rarísimo) → burst de frames
+      }
     }
     if (photoUrl) {
       releaseFrame(snapA);
       releaseFrame(snapB);
+      pendingBurstRef.current = recordBurst(
+        burstDeadline !== undefined ? "photo" : "legacy",
+        1,
+        performance.now() - burstT0,
+        { ...burstExtra, photoBytes: photoBlob.size }
+      );
       void handleCaptureDataUrl(photoUrl);
+      return;
+    }
+    if (burstDeadline !== undefined) {
+      // El muro abortó la conversión (o el reader cayó) con la foto en mano
+      // → dispatch de frames: ganador ZSL + bracket snapA/snapB.
+      const exit: BurstExitReason =
+        performance.now() >= burstDeadline ? "time_cap" : "error";
+      const cands = [takeZslFallback(), snapA, snapB];
+      const n = cands.filter((f): f is BurstFrame => f !== null).length;
+      pendingBurstRef.current = recordBurst(exit, n, performance.now() - burstT0, burstExtra);
+      if (!(await dispatchBestFrame(cands))) {
+        pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
+      }
       return;
     }
     await dispatchBestFrame([snapA, snapB]);
