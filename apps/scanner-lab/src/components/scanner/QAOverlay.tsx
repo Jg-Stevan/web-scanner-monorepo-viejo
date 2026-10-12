@@ -47,6 +47,7 @@ export default function QAOverlay() {
   const slow = useQaTestStore((s) => s.slow);
   const startedAt = useQaTestStore((s) => s.startedAt);
   const shareResult = useQaTestStore((s) => s.shareResult);
+  const runId = useQaTestStore((s) => s.runId);
 
   // Reloj del tiempo acumulado (solo mientras corre — re-render por segundo).
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -57,6 +58,14 @@ export default function QAOverlay() {
     const t = window.setInterval(update, 1000);
     return () => window.clearInterval(t);
   }, [running, startedAt]);
+
+  // «Listo» oculta la tarjeta PERO el estado del guión (log) persiste: el
+  // informe de Diagnóstico sigue llevando la sección qa. Se re-arma la
+  // tarjeta en cada nueva corrida (runId).
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    setDismissed(false);
+  }, [runId]);
 
   // Paso «report»: intentar compartir YA (con fallback a descarga); el
   // botón del panel queda para reintentar con gesto real del usuario.
@@ -72,6 +81,7 @@ export default function QAOverlay() {
   // ── Nada que pintar ──
   if (!armed && !running && !finished) return null;
   if (armed && !running && !finished && view !== "camera") return null;
+  if (!running && finished && dismissed) return null;
 
   // ── Paso 0: cámara armada → botón destacado «Iniciar test» ──
   if (armed && !running && !finished) {
@@ -160,7 +170,7 @@ export default function QAOverlay() {
             <button
               type="button"
               data-qa-dismiss
-              onClick={() => qaStandardTest.dismiss()}
+              onClick={() => setDismissed(true)}
               className="flex min-h-[40px] w-full items-center justify-center rounded-2xl bg-white/10 text-[14px] font-medium text-white/80 ring-1 ring-inset ring-white/10 transition-transform active:scale-[0.98]"
             >
               Listo

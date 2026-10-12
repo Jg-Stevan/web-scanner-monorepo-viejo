@@ -83,7 +83,7 @@ import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { perfProbe } from "@/lib/perf-probe";
 import { readImageLongSide } from "@/lib/image-size";
-import { useQaTestStore } from "@/lib/qa-standard-test";
+import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -2013,17 +2013,21 @@ export default function EditorView() {
     if (qaExecutedRef.current === execKey) return;
     switch (qaStep) {
       case "filter-text":
+      case "filter-bw": {
         if (page) {
           qaExecutedRef.current = execKey;
-          handleFilter("text", "Texto claro");
+          const want = qaStep === "filter-text" ? "text" : "bw";
+          // Cache hit (v11): si el preview de ESTE filtro ya está cacheado,
+          // el review no reprocesa y no habrá filter_applied → avisar al
+          // guión para que complete el paso con la aplicación instantánea.
+          const nextKey = capturePageKey({ ...page, filter: want });
+          handleFilter(want, want === "text" ? "Texto claro" : "B/N adaptativo");
+          if (previewCache.current.has(nextKey)) {
+            qaStandardTest.noteFilterCached(want);
+          }
         }
         break;
-      case "filter-bw":
-        if (page) {
-          qaExecutedRef.current = execKey;
-          handleFilter("bw", "B/N adaptativo");
-        }
-        break;
+      }
       case "ocr-cold":
       case "ocr-warm":
         if (!ocrRunning && !previewLoading) {

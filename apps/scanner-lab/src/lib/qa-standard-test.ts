@@ -445,6 +445,9 @@ function onTick(): void {
         stepDone(def, fa.ts - startedAt);
         advance(fa.ts);
       }
+      // Cache hit (preview YA procesado con este filtro → el review NO
+      // reprocesa, diseño v11, y no hay mark): la obediencia del editor lo
+      // detecta vía previewCache y lo notifica con noteFilterCached().
       break;
     }
     case "ocr-cold":
@@ -586,6 +589,21 @@ export const qaStandardTest = {
     } catch {
       set({ shareResult: "failed" });
     }
+  },
+
+  /** Obediencia del editor: el filtro pedido se aplicó sobre un preview YA
+   *  cacheado (v11: cache hit → sin reproceso → sin filter_applied). El
+   *  paso completa AHORA con la aplicación instantánea que vivió el
+   *  usuario — sin esperar un mark que por diseño no va a llegar. */
+  noteFilterCached(filter: "text" | "bw"): void {
+    if (!state.running) return;
+    const id = `filter-${filter}`;
+    if (state.step !== id) return;
+    if (state.log.some((l) => l.id === id)) return; // ya completado vía mark
+    const def = stepDef(id);
+    if (!def || state.stepStartedAt === null) return;
+    stepDone(def, now() - state.stepStartedAt);
+    advance();
   },
 
   /** Cierra el overlay del guión (el estado queda para el informe). */
