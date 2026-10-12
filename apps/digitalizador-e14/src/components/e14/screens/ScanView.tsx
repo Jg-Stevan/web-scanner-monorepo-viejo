@@ -4,7 +4,7 @@
  * ESCANEAR (§7.1) — CYBER-NEÓN PANTALLA CÁMARA (SPEC-e14-cyber-neon-
  * captura Rev. 1): visor full-bleed #030504 limpio fuera de CÁMARA, pill de
  * modos con chip blanco data-driven (IA/cuadrícula/AUTO), HUD ámbar + ⋮,
- * fila de estado, chips de calidad decorativos y fila de disparo con
+ * fila de estado, chips de calidad y fila de disparo con
  * obturador-documento. La LÓGICA de cámara (fallbacks, disparo por
  * plataforma, linterna, ZSL, gate) queda INTACTA — solo capa visual.
  * CÁMARA FUNCIONAL (SPEC-e14-camara-funcional Rev. 1 — ronda de
@@ -13,6 +13,13 @@
  * reintento y fin del rebote silencioso (§E), fila de estado centrada sin
  * «ISO: 1600» (§A). La lógica intocable (disparo por plataforma, cascada,
  * sondas, gate, ZSL) queda byte a byte.
+ * SIMULACIÓN DE SCORES (SPEC-e14-simulacion-scores Rev. 1): los 3 chips de
+ * calidad encima del obturador pasan de decorativos a <button> — BOTONES de
+ * simulación (§D2): mismo visual exacto del mock, área táctil ≥44px
+ * invisible, disabled durante análisis, funcionan en los 3 modos y disparan
+ * store.simularScore(banda) → pipeline real con el asset FIJO del dueño y
+ * score inyectado (§D3 — la completa = óptima · la cortada = intermedio ·
+ * la borrosa = bajo). Nada visual cambia salvo cursor/feedback de toque.
  * Historial previo: marco con corner brackets, retícula central, botón
  * disparo, ghost IMPORTAR y PANEL DE SIMULACIÓN para forzar el resultado.
  * FASE LÓGICA L2 (§7): chips de FUENTE (SIMULACIÓN · CÁMARA · IMPORTAR);
@@ -80,7 +87,7 @@ import { fileToCaptureDataUrl, loadImage } from "@jg-stevan/scanner-core/image-p
 import { CameraFrameLoop, type FrameLoopTelemetry } from "@jg-stevan/scanner-core/frame-loop";
 import { SHUTTER_SCORE } from "@jg-stevan/scanner-core/quality";
 import type { Quad } from "@jg-stevan/scanner-core/types";
-import { useE14Store } from "@/lib/e14/store";
+import { useE14Store, type BandaSim } from "@/lib/e14/store";
 import {
   BoltIcon,
   CameraNavIcon,
@@ -91,17 +98,24 @@ import {
   ScanFrameIcon,
 } from "../icons";
 
-/* ── Leyenda de calidad del gate (SPEC-e14-cyber-neon-captura §5/§7) —───
- *  Decorativa: los scores de bracket son ilustrativos de cada sabor,
- *  fijados por la spec porque el mock es ilegible (valores coherentes con
- *  el gate: ≥8 / 6.5-8 / <6.5). No interactiva. */
+/* ── Chips de calidad = BOTONES DE SIMULACIÓN (SPEC-e14-simulacion-scores
+ *  §D2/§D3) ────
+ *  Antes: leyenda decorativa del gate. Ahora: cada chip es un <button> que
+ *  dispara un análisis determinista con la foto de ejemplo del dueño y el
+ *  score inyectado de su banda (la completa = óptima · la cortada =
+ *  intermedio · la borrosa = bajo); el desenlace real lo decide el gate
+ *  (ÓPTIMA → 10.0 enviada · MEDIO → EN_REVISION_HUMANA · BAJA → RECHAZADA).
+ *  Estética neón INTACTA (mismas clases del mock aprobado) — solo se añade
+ *  cursor/feedback de toque, área táctil ≥44px invisible y disabled durante
+ *  el análisis (AC7/AC8). Los scores de bracket son los que INYECTA el chip. */
 const NIVELES_CALIDAD: {
-  id: string;
+  id: BandaSim;
   label: string;
   score: string;
   chip: string;
   dot: string;
   anillo: string;
+  aria: string;
 }[] = [
   {
     id: "optima",
@@ -110,6 +124,7 @@ const NIVELES_CALIDAD: {
     chip: "bg-[rgba(11,242,130,0.12)] border-[rgba(11,242,130,0.40)] text-ok-tint",
     dot: "bg-ok-tint",
     anillo: "border-ok-tint",
+    aria: "Simular acta óptima (10.0 — envío automático)",
   },
   {
     id: "medio",
@@ -118,6 +133,7 @@ const NIVELES_CALIDAD: {
     chip: "bg-[rgba(255,214,0,0.12)] border-[rgba(255,214,0,0.40)] text-warn",
     dot: "bg-warn",
     anillo: "border-warn",
+    aria: "Simular acta intermedia (7.0 — revisión)",
   },
   {
     id: "baja",
@@ -126,6 +142,7 @@ const NIVELES_CALIDAD: {
     chip: "bg-[rgba(255,82,82,0.12)] border-[rgba(255,82,82,0.40)] text-crit",
     dot: "bg-crit",
     anillo: "border-crit",
+    aria: "Simular acta baja (4.3 — rechazada)",
   },
 ];
 
@@ -465,6 +482,9 @@ export function ScanView() {
   const dispararEscaneo = useE14Store((s) => s.dispararEscaneo);
   const fuente = useE14Store((s) => s.fuente);
   const setFuente = useE14Store((s) => s.setFuente);
+  // §D2/§D3 (SPEC-e14-simulacion-scores): los chips disparan la simulación
+  // determinista (store.simularScore — mismo camino de dispararEscaneo).
+  const simularScore = useE14Store((s) => s.simularScore);
   const setArchivoPendiente = useE14Store((s) => s.setArchivoPendiente);
   const setFramePendiente = useE14Store((s) => s.setFramePendiente);
   const notificar = useE14Store((s) => s.notificar);
@@ -1884,19 +1904,28 @@ export function ScanView() {
         </span>
       </div>
 
-      {/* §5 Chips de calidad — leyenda DECORATIVA del gate (SPEC §7): no
-          interactivos; scores ilustrativos en brackets (aria-hidden) y
-          anillo colgante medio solapado al borde inferior de cada chip. */}
+      {/* §D2 (SPEC-e14-simulacion-scores) Chips de calidad — BOTONES de
+          simulación (en los 3 modos, sin depender de la cámara): visual EXACTO
+          del mock aprobado (mismas clases/tamaños — AC8); el <div> pasa a
+          <button> con cursor/feedback de toque (active:scale-95), área táctil
+          ≥44px SIN deformar el visual (after invisible — padding de toque) y
+          disabled+opacidad durante el análisis (un double-tap = 1 análisis,
+          AC7 — el segundo guard vive en simularScore). El anillo colgante
+          medio solapado queda idéntico. */}
       <div className="flex justify-center gap-2 px-4 py-2 shrink-0">
-        {NIVELES_CALIDAD.map(({ id, label, score, chip, dot, anillo }) => (
+        {NIVELES_CALIDAD.map(({ id, label, score, chip, dot, anillo, aria }) => (
           <div key={id} className="flex flex-col items-center">
-            <div
-              className={`h-[30px] px-3 rounded-[10px] border flex items-center gap-1.5 text-[9.5px] font-bold tracking-[0.10em] ${chip}`}
+            <button
+              type="button"
+              aria-label={aria}
+              disabled={procesando}
+              onClick={() => simularScore(id)}
+              className={`relative h-[30px] px-3 rounded-[10px] border flex items-center gap-1.5 text-[9.5px] font-bold tracking-[0.10em] ${chip} cursor-pointer transition active:scale-95 disabled:cursor-default disabled:opacity-50 after:content-[''] after:absolute after:-inset-y-[7px] after:-inset-x-2`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden />
               {label}
               <span className="tabular-nums" aria-hidden>[{score}]</span>
-            </div>
+            </button>
             <span
               className={`w-2.5 h-2.5 rounded-full border-2 ${anillo} bg-visor-bg -mt-[5px]`}
               aria-hidden
