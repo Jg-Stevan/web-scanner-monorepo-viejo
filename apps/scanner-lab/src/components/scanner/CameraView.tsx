@@ -68,6 +68,8 @@ import {
   profileSensor,
   type SensorProfile,
 } from "@jg-stevan/scanner-core/sensor-profiler";
+import { dataUrlBytes } from "@jg-stevan/scanner-core/format";
+import { perfProbe } from "@/lib/perf-probe";
 
 type CameraStatus = "idle" | "live" | "synthetic" | "simulated";
 
@@ -608,6 +610,10 @@ export default function CameraView() {
   // (permiso revocado, otra app roba la cámara) — antes el preview quedaba
   // congelado sin recuperación.
   const [camRestartNonce, setCamRestartNonce] = useState(0);
+  // DIAG (spec diag §5) — solo instrumentación de la sonda: t0 de apertura
+  // de la sesión de cámara y guardas 1-vez (camera_ready / fps early).
+  const diagCameraOpenT0Ref = useRef(0);
+  const diagCameraReadyRef = useRef(false);
   /** FIX v4 4.3 — anti-bucle de recuperación: mientras corre un
    *  recoverStream no se dispara otro (el watchdog vuelve a vigilar a los
    *  4 s, cuando el nuevo stream ya está abriéndose). */
@@ -969,6 +975,13 @@ export default function CameraView() {
           quality,
         };
         addCapturePage(page);
+        // DIAG (spec diag §6) — la página ATERRIZÓ en la sesión (bytes y lado
+        // mayor del original persistido). Base del derivado captura→editor
+        // (editor_open.ts − page_saved.ts) y de captureToSavedMs.
+        perfProbe.mark("page_saved", {
+          bytes: dataUrlBytes(dataUrl),
+          pxLong: Math.max(sourceNaturalWidth(source), sourceNaturalHeight(source)),
+        });
         // F-FLOW: directo al editor (modo revisión) — igual que Adobe Scan.
         setView("editor");
         // FIX v5 (5.2): con quad nato del overlay NO se re-detecta (era la
@@ -1200,6 +1213,9 @@ export default function CameraView() {
     if (cooldownRef.current > Date.now()) return;
     loopRef.current?.notifyCaptured();
     cooldownRef.current = Date.now() + 1500;
+    // DIAG (spec diag §6) — instrumentación de la sonda local (sin tocar
+    // lógica): el disparo salió (manual o auto).
+    perfProbe.mark("capture_fired");
     // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
     // si estaba dormido — el disparo es interacción explícita).
     exitStandby();
@@ -1518,6 +1534,12 @@ export default function CameraView() {
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof navigator === "undefined") return;
+    // DIAG (spec diag §5) — sesión de cámara: apertura del visor (t0).
+    // SOLO instrumentación (el timer de FPS tarde vive en su propio efecto
+    // con cleanup, para cubrir también el return temprano de abajo).
+    diagCameraOpenT0Ref.current = performance.now();
+    diagCameraReadyRef.current = false;
+    perfProbe.mark("camera_open");
     let cancelled = false;
     const media = navigator.mediaDevices;
     if (!media || typeof media.getUserMedia !== "function" || !window.isSecureContext) {
@@ -1830,6 +1852,18 @@ export default function CameraView() {
     };
   }, [applySavedTorchWithRetry, camRestartNonce, upgradeStreamResolution]);
 
+  // DIAG (spec diag §5) — 2ª muestra de FPS de la vista de cámara a los 30 s
+  // de sesión (frío vs caliente dentro de una MISMA sesión). Su propio
+  // efecto con cleanup: nunca dispara tras cerrar la cámara.
+  useEffect(() => {
+    const diagLateFpsTimer = window.setTimeout(() => {
+      void perfProbe.fpsSample(3000).then((s) => {
+        if (s) perfProbe.mark("fps_camera", { fps: s.fps, phase: "late" });
+      });
+    }, 30_000);
+    return () => window.clearTimeout(diagLateFpsTimer);
+  }, []);
+
   // Asigna el stream al <video> (real o sintético)
   useEffect(() => {
     if (!hasStream) return;
@@ -1843,6 +1877,18 @@ export default function CameraView() {
     // "playing" la preferencia sigue pendiente, se vuelve a aplicar.
     const onPlaying = () => {
       if (flashRef.current && !torchOnRef.current) applySavedTorchWithRetry();
+      // DIAG (spec diag §5) — primer frame decodificado: cámara lista (ms
+      // desde camera_open) + 1ª muestra de FPS de la vista de cámara
+      // (phase "early"). UNA vez por sesión de cámara.
+      if (!diagCameraReadyRef.current) {
+        diagCameraReadyRef.current = true;
+        perfProbe.mark("camera_ready", {
+          ms: Math.max(0, Math.round(performance.now() - diagCameraOpenT0Ref.current)),
+        });
+        void perfProbe.fpsSample(3000).then((s) => {
+          if (s) perfProbe.mark("fps_camera", { fps: s.fps, phase: "early" });
+        });
+      }
     };
     video.addEventListener("playing", onPlaying);
     // FIX v6 (6.2) — LATIDO de frames: bucle rVFC que actualiza

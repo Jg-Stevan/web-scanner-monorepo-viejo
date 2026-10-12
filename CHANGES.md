@@ -376,6 +376,24 @@ Ciclo verificado: 4 disparos consumen [0]→[1]→[2]→[0] (d1 y d4 = 10.0 ÓPT
 
 ---
 
+## 0-decimoseptimo. DIAG — Informe de diagnóstico por dispositivo, datos reales medidos (rama `diag/informe-dispositivo`, base `main` @ `bb2aa8f` — rama SOLO de instrumentación, cero cambios de comportamiento)
+
+**Base:** INSTRUCCIONES-diag-informe-dispositivo.md. Nueva funcionalidad pedida por el dueño: un informe que se diligencia SOLO con datos reales medidos en el dispositivo — info del hardware (CPU/RAM/GPU/almacenamiento/pantalla/red/batería) + tiempos del proceso completo (cámara, captura, editor, filtros, OCR, export) + FPS (editor Y cámara) + benchmarks — descargable y compartible por WhatsApp para el asistente de análisis. **Línea base**: mide cómo está el proyecto HOY con el MISMO instrumental que luego medirá las optimizaciones (Plan A/B se rebasearán sobre esta rama).
+
+**Arquitectura (3 piezas + sonda, solo `apps/scanner-lab`):**
+
+- **`lib/perf-probe.ts` NUEVO** — sonda §6 del Plan A replicada VERBATIM de la implementación del Plan B (API exacta: `marks` 600 cap · `mark` · `memory` · `longTasks` PerformanceObserver buffered · `fpsSample` con seguro de vida · `report` console.table → comparabilidad 1:1 con ambos planes). Añadido `PERF_PROBE_T0`/`PERF_PROBE_T0_AT` (instante de carga del módulo — base de `boot_ready` y `session.startedAt`).
+- **`lib/device-profile.ts` NUEVO** — snapshot §4a (modelo real por `userAgentData.getHighEntropyValues` con fallback UA clásico · SO/navegador/arquitectura · núcleos · RAM · GPU por WebGPU `adapter.info` con fallback `WEBGL_debug_renderer_info` + `MAX_TEXTURE_SIZE` · pantalla con REFRESH REAL medido por mediana de deltas rAF ~1 s redondeado a 60/90/120/144 · `storage.estimate` · `getBattery` · `connection` · heap límite) + benchmarks §4b (mediana de 3 corridas, try/catch INDIVIDUAL → null, jamás excepción): CPU single-core en Web Worker desde Blob URL (5M iter enteras + string concat) · downscale 4032→2048 y 4032→3200 (canvas sintético determinista, `imageSmoothingQuality:'high'`) · JPEG encode 3200 q0.92 · decode `createImageBitmap` · sondeo canvas máx 4096→8192→16384. Cacheados en `localStorage["scannerlab-diag-bench-v1"]` (TTL 7 días, re-medir solo con `__diagTools.bench(true)`); programados en `requestIdleCallback` (fallback `setTimeout 3000`) tras el arranque, NUNCA en background; todos los canvas/blobs/bitmaps liberados. Sampler de heap pico cada 5 s (solo pestaña visible).
+- **`lib/diag-report.ts` NUEVO** — ensambla el informe **JSON** (`format:"scannerlab-diag-report"`, `version:1`) y el **TXT** compartible (plantilla exacta §6b: DISPOSITIVO / BENCHMARKS / TIER / SESIÓN / PRIVACIDAD). Derivados calculados sin marks nuevos: captura→editor (`editor_open.ts − page_saved.ts`), captureToSavedMs y su mediana, OCR frío (1ª) vs tibio (mediana del resto), medianas de filtros. `window.__diagTools = { snapshot, bench, report, txt, download, share, copy }`: `download()` guarda `scannerlab-diag-{modelo}-{YYYYMMDD-HHmm}.json` (modelo saneado) · `share()` comparte el TXT por Web Share (fallback automático a descarga + toast) · `copy()` al portapapeles. **Tier condicional**: feature-check de `__tierTools`/`__perfProbe.tier` — en main no existe → `tier:null` y en el TXT «— (no disponible en esta build)»; cuando plan-a se rebase, se enciende solo.
+- **`SettingsView.tsx`** — sección «Diagnóstico» al final (patrón de grupos iOS del archivo): fila con resumen compacto (`Modelo · RAM · bench CPU · refresh`) + 3 acciones (**Compartir informe** primaria · **Descargar JSON** · **Copiar TXT**) + botón secundario **Re-medir benchmarks** con AlertDialog de confirmación (~2 s) + nota de privacidad.
+- **Marks instrumentales (§5) — diff de vistas 100 % aditivo, cero lógica tocada:** `page.tsx` `boot_ready{ms}` · `CameraView` `capture_fired` (mismo punto que Plan B), `page_saved{bytes,pxLong}` AL ATERRIZAR la página en la sesión (base del derivado captura→editor de la spec), `camera_open`, `camera_ready{ms}` (primer frame, `onPlaying`) y `fps_camera{fps,phase}` early (tras ready) + late (30 s, efecto propio con cleanup) · `EditorView` `editor_open`/`editor_close{durationMs}` por sesión de edición, `editor_first_render` (cacheada y procesada), `filter_applied{ms,engine,filter}`, `save_done{ms,bytes}`, `export_start/end{type,ms,bytes}` (pdf e imagen), `ocr_start`/`ocr_done{ms,chars,ok,site}` en los 3 call sites (current/all/auto) y `fps_auto{fps}` al PRIMER gesto pan/zoom (táctil o rueda, 1 vez por sesión) · `LibraryView` `ocr_start`/`ocr_done` del OCR por lotes (site library).
+
+**Privacidad (⛔ verificada):** el informe NO contiene imágenes, contenido de documentos, nombres ni texto OCR — solo métricas, dimensiones y tamaños. Jamás referencia blobs, data URLs ni `ocrText`. 100 % local, sin red.
+
+**Notas de comparabilidad:** `page_saved` dispara al ATERRIZAR la captura en la sesión (bytes = original persistido) — así el derivado «captura→editor» de la spec §5 es medible; en el guardado del documento queda `save_done{ms,bytes}` (bytes = procesadas totales). El Plan A solo instrumentó `editor_open`; el Plan B puso `page_saved` al guardar — la divergencia queda documentada en el PR.
+
+---
+
 ## Resumen de commits
 
 | # | Commit | Título |
@@ -387,6 +405,7 @@ Ciclo verificado: 4 disparos consumen [0]→[1]→[2]→[0] (d1 y d4 = 10.0 ÓPT
 | 5 | `740f7a2` | fix(scanner): F-TEXT-CLEAN — filtro Texto claro sin ruido amplificado, halos de croma ni unsharp global |
 
 ---
+
 
 ## 1. Estabilizador + rendimiento del bucle de frames (gama baja y alta)
 
