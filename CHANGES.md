@@ -528,3 +528,40 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 ## Notas conocidas (preexistentes, fuera de alcance)
 
 - El aplanado de regiones oscuras GRANDES (sello grande lavado a blanco) es comportamiento del modelo de sombras del worker OpenCV, común a ambos pipelines y anterior a estos cambios.
+
+---
+
+## 0-decimoctavo. DIAG v1.1 — Sub-marks de descomposición: POR QUÉ son grandes los números (addendum sobre `diag/informe-dispositivo`, ya fusionado; PR nuevo en la misma rama)
+
+**Base:** INSTRUCCIONES-diag-v1-1-sub-marks.md. El informe v1 YA respondía «¿está bien?» (iPhone ✅ 519 ms/captura · A56 ✅ · PC ✅ · A13 🔴 17.2 s/captura). v1.1 responde «¿por qué dentro de los números grandes»: descompone los totales en tramos, separa por filtro, cuenta páginas en los exports y numera las aperturas del editor. **100 % aditiva** — ninguna marca renombrada ni eliminada → los informes de los lotes 1 y 2 siguen comparables 1:1.
+
+**Cambios (formato diag-report v1 → v2, solo campos adicionales):**
+
+- **Sub-marks de captura** — `capture_shot` (frame del sensor en mano) · `capture_processed{pxLong,bytes}` (decodificada/capada/medida) · `capture_write` (persistida en el store), 3 líneas de mark en `handleCaptureDataUrl` sin tocar flujo ni photoSettings. El informe descompone `captura → guardada` en `procesado` y `escritura` (medianas) — responde dónde se van los 17.2 s del A13.
+- **`filter_applied` gana `filterId` + `inputPx`** — el tamaño de entrada se lee de la CABECERA PNG/JPEG SIN decodificar (`image-size.ts`, nuevo, best-effort con cache FIFO: medirlo decodificando costaría otro decode de 12 MP). El informe separa medianas por filterId (responde: ¿qué filtro es caro? 4.7 s vs 1.16 s en el MISMO A56) y el TXT añade «Filtro más caro: <id> · X ms mediana (n)».
+- **`export_end` gana `pages` + `pxLong`** — PNG=1 página; PDF=N páginas y lado largo de la fuente (precision del doc o cabecera). Responde «¿cuántas páginas tenía el PDF de 21.7 s?».
+- **Aperturas de editor numeradas** — `editor_open{openIndex}` (derivado del anillo de marcas, sin estado extra) → informe `editor.firstRenders[]` (cap 5): si la 2ª apertura cae a <1.5 s, el costo de la 1ª es chunk-red/compile → solución de bundle, no de pipeline. TXT: «Editor: apertura/render: 70 ms / 28.5 s · 2ª: 1.1 s».
+- **Long tasks con soporte explícito** — `longTasks.supported` (PerformanceObserver.supportedEntryTypes + fallback observe): Safari reporta «no soportado en este navegador», JAMÁS «0 tareas» (mentía: Safari sí tiene jank, solo no lo reporta).
+- **Batería arreglada** — la llamada estaba DETACHADA del receiver (`const fn = navigator.getBattery; fn()`) → «Illegal invocation» en Chrome → null en TODO (incluido Android donde EXISTE). Ahora `navigator.getBattery()` como método + lectura FRESCA al generar el informe (nivel+enchufe interpretan fpsEarly bajos).
+- **fpsLate 30 s → 10 s** — el iPhone cerraba la cámara antes de los 30 s y perdía el sample tardío (lote 2).
+
+**Verificado:** `tsc` core/app 0 · `eslint` 0 · diff: e14 = 0, ocr.ts = 0, CameraView = 3 sub-marks + umbral fpsLate, EditorView = solo instrumentación, packages = 0, deps = 0. Marks v1 emitidos EXACTAMENTE igual.
+
+---
+
+## 0-decimonoveno. QA — Test estándar v1.1: guión automatizado de USO con captura automática nativa (la espera del shutter pasa de input fijo a RESULTADO MEDIDO)
+
+**Base:** INSTRUCCIONES-diag-test-estandar-qa.md. Reemplaza el protocolo que dependía de que el dueño recordara los pasos: **abrir cámara + encuadrar + pulsar Iniciar** → el resto es automático (3 capturas con auto-shutter → editor ×2 → 2 filtros → OCR frío+tibio → PNG → PDF → informe compartido), con overlay visible de «lo que está haciendo». Decisión del dueño (2026-10-12): la captura automática NO se apaga durante el test — «No importa si se demora — es lo que haría un usuario normalmente»: el guión MIDE la demora del shutter en gama baja, no la esconde.
+
+**Cambios (formato diag-report v2 → v3, solo aditivos):**
+
+- **`qa-standard-test.ts` (nuevo)** — máquina de estados (armar → 12 pasos → informe/abortar) sin dependencias nuevas (micro-store con `useSyncExternalStore`). La detección de fin de paso es un ESCANEO idempotente del anillo de marcas cada 250 ms (inmune a lotes de marcas que llegan juntas). Cero lógica de pipeline: solo observa `__perfProbe` y dispara rutas existentes (los mismos handlers/store-actions de los botones reales).
+- **Métrica clave: la espera del shutter** — marca nueva `capture_stable` (flanco de subida del estado `overlayStable` existente en CameraView — pura instrumentación, cero cambios en estabilidad/shutter/ZSL/burst). Por página: `autoShutterWaitMs = capture_fired − capture_stable` y `mode: auto|manual` (toque en el shutter detectado por listener pasivo sobre `data-qa-shutter`). Informe: `camera.autoShutterWaitMs[]` (v3) + TXT «Shutter auto (estable→disparo): 2.1 s · 1.8 s · 2.0 s (mediana 2.0 s) · modo auto» — la línea de trabajo que `fix/auto-shutter-fps-v9` anticipaba, cuantificada.
+- **QAOverlay (componente nuevo)** — checklist por paso (pendiente/en curso/✓ con ms) + tiempo acumulado + Abortar SIEMPRE; banner «Sostén el documento…»/«Reencuadra (2/3)»; fallback honesto a los 60 s («toca el botón de captura», paso taggeado manual — NUNCA aborta por timeout); «sigue trabajando…» >90 s en pasos pesados; tarjeta final con reintento de compartir por gesto real.
+- **Fallback honesto** — >60 s sin disparo → el overlay pide el toque manual (lo que haría un usuario impaciente) y el paso queda `mode:'manual'`.
+- **Ubicación UI** — tarjeta «Test estándar QA» en Ajustes › Diagnóstico (sección existente): «Preparar test» arma y navega a cámara (auto-shutter en su estado por defecto: activado) + «Borrar datos del test» (elimina los documentos QA-estandar, papelera incluida). Botón destacado «Iniciar test (3 páginas)» en cámara armada.
+- **Editor obediente** — cada paso se ejecuta con los MISMOS handlers de los botones reales (`handleFilter('text')`, `runOcrCurrent`, `handleSaveImage`, `handleSave` + `downloadFromOverlay`), guard por runId+step. El lote QA se guarda como documento normal renombrado «QA-estandar».
+- **Informe v3** — `qa: { standard: true, script: "qa-standard-v1.1", steps: [{id, ms, mode?, waitMs?, ok}], aborted? }` SOLO cuando el guión corrió; TXT: cabecera «TEST ESTÁNDAR v1.1» + línea de protocolo (ahorro batería OFF · dispositivo frío · captura automática nativa · mismo documento con texto).
+- **No persiste** — recarga = desarmado (el estado vive en el módulo).
+
+**Verificado:** `tsc` core/app 0 · `eslint` 0 · diff: e14 = 0, ocr.ts = 0, CameraView = marca `capture_stable` + atributo `data-qa-shutter` (cero cambios en lógica de captura/shutter/ZSL/burst), EditorView = solo obediencia al guión, packages = 0, deps = 0. Marks v1/v1.1 intactos → informes de lotes 1-2 comparables 1:1.

@@ -19,13 +19,31 @@ import {
   runBenchmarks,
   getBenchCache,
   getPeakHeapMB,
+  readBattery,
   type DiagDeviceSnapshot,
   type DiagBenchResults,
 } from "./device-profile";
+import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "diag/informe-dispositivo @ 859f0c6";
+export const DIAG_BUILD = "diag/test-estandar-qa @ 97dbe66";
+
+/** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
+ *  cuando el guión corrió (o se abortó a mitad). */
+export interface DiagQaSection {
+  standard: true;
+  script: "qa-standard-v1.1";
+  steps: Array<{
+    id: string;
+    label: string;
+    ms: number | null;
+    ok: boolean;
+    mode?: "auto" | "manual";
+    waitMs?: number | null;
+  }>;
+  aborted?: boolean;
+}
 
 /* ------------------------------------------------------------------ */
 /* Tipos del informe (spec §6a)                                         */
@@ -41,7 +59,10 @@ export interface DiagTier {
 
 export interface DiagReport {
   format: "scannerlab-diag-report";
-  version: 1;
+  /** v1 → v2 (sub-marks) → v3 (test estándar QA): SOLO campos
+   *  adicionales — todo campo v1 conserva nombre y significado (informes
+   *  de los lotes 1-2 comparables 1:1). */
+  version: 3;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -55,19 +76,36 @@ export interface DiagReport {
       readyMs: number | null;
       fpsEarly: number | null;
       fpsLate: number | null;
+      /** v3 — espera del auto-shutter por página (capture_fired −
+       *  capture_stable): el dato que cuantifica la demora del shutter en
+       *  gama baja, con o sin guión QA. */
+      autoShutterWaitMs: number[];
     };
     pages: {
       count: number;
       resolutions: number[];
       captureToSavedMs: number[];
       medianMs: number | null;
+      /** v1.1 — descomposición de captura→guardada (medianas):
+       *  shot→processed (decode+downscale+calidad) y processed→write
+       *  (persistencia en el store). */
+      segments: {
+        shotToProcessedMs: number | null;
+        processedToWriteMs: number | null;
+      };
     };
     editor: {
       openMs: number | null;
       firstRenderMs: number | null;
+      /** v1.1 — primer render POR APERTURA (índice = openIndex−1, cap 5;
+       *  null = apertura sin render medido). Si la 2ª cae <1.5 s, el costo
+       *  de la 1ª es chunk-red/compile → solución de bundle, no pipeline). */
+      firstRenders: Array<number | null>;
       fpsAuto: number | null;
       filterMedianMs: number | null;
       filterCount: number;
+      /** v1.1 — mediana de filtros POR filterId (¿cuál es el caro?). */
+      filters: Array<{ filterId: string; count: number; medianMs: number }>;
       sessionMs: number | null;
     };
     ocr: {
@@ -76,11 +114,20 @@ export interface DiagReport {
       medianWarmMs: number | null;
       charsTotal: number;
     };
-    exports: Array<{ type: string; ms: number; bytes: number }>;
+    /** v1.1 — exports con páginas y lado largo de la fuente. */
+    exports: Array<{
+      type: string;
+      ms: number;
+      bytes: number;
+      pages: number | null;
+      pxLong: number | null;
+    }>;
     memory: { peakHeapMB: number | null };
-    longTasks: { count: number; totalMs: number };
+    longTasks: { count: number; totalMs: number; supported: boolean };
   };
   settings: { ocrEnabled: boolean };
+  /** v3 — presente SOLO si el test estándar QA corrió en esta sesión. */
+  qa?: DiagQaSection;
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +151,16 @@ function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const s = [...values].sort((a, b) => a - b);
   return s[Math.floor(s.length / 2)]!;
+}
+
+/** Marca más reciente con ts ≤ límite (para aparear tramos secuenciales). */
+function lastBefore(marks: PerfProbeMark[], ts: number): PerfProbeMark | null {
+  let found: PerfProbeMark | null = null;
+  for (const m of marks) {
+    if (m.ts <= ts) found = m;
+    else break;
+  }
+  return found;
 }
 
 /** Feature-check del tier-2: en main el módulo device-tier NO existe.
@@ -185,7 +242,31 @@ export async function buildDiagReport(): Promise<DiagReport> {
   }
   if (firstRenderMs === null) firstRenderMs = firstRenderCached;
 
-  // Cámara: ready (última sesión) + FPS early/late.
+  // v1.1 — firstRender POR APERTURA: cada editor_first_render se asigna a
+  // la apertura numerada que lo precede (openIndex del editor_open previo;
+  // si la marca vieja no trae openIndex, se deriva contando aperturas).
+  const firstRenders: Array<number | null> = [];
+  for (const fr of marksOf("editor_first_render")) {
+    let prevOpen: PerfProbeMark | null = null;
+    let opensBefore = 0;
+    for (const e of editorOpens) {
+      if (e.ts <= fr.ts) {
+        prevOpen = e;
+        opensBefore += 1;
+      }
+    }
+    if (!prevOpen) continue;
+    const openIndex = metaNum(prevOpen, "openIndex") ?? opensBefore;
+    if (openIndex < 1) continue;
+    const delta = Math.max(0, fr.ts - prevOpen.ts);
+    while (firstRenders.length < openIndex) firstRenders.push(null);
+    firstRenders[openIndex - 1] = delta;
+  }
+  if (firstRenders.length > 5) firstRenders.length = 5; // cap 5 (spec)
+
+  // Cámara: ready (última sesión) + FPS early/late. v3 — esperas del
+  // auto-shutter: cada capture_fired apareado con el capture_stable más
+  // cercano ANTES del disparo (estable→disparo).
   const cameraReady = marksOf("camera_ready");
   let fpsEarly: number | null = null;
   let fpsLate: number | null = null;
@@ -193,12 +274,39 @@ export async function buildDiagReport(): Promise<DiagReport> {
     if (m.meta?.phase === "early" && typeof m.meta.fps === "number") fpsEarly = m.meta.fps;
     if (m.meta?.phase === "late" && typeof m.meta.fps === "number") fpsLate = m.meta.fps;
   }
+  const autoShutterWaitMs: number[] = [];
+  for (const f of firedShots) {
+    const stable = lastBefore(marksOf("capture_stable"), f.ts);
+    if (stable) autoShutterWaitMs.push(Math.max(0, f.ts - stable.ts));
+  }
 
-  // Filtros: mediana de ms + contador.
+  // Filtros: mediana de ms + contador. v1.1 — ADEMÁS por filterId (el mark
+  // viejo sin id cae en "?" — comparable con lotes 1-2).
   const filterMs = marksOf("filter_applied")
     .map((m) => metaNum(m, "ms"))
     .filter((v): v is number => v !== null);
   const filterCount = marksOf("filter_applied").length;
+  const filtersById = new Map<string, number[]>();
+  for (const m of marksOf("filter_applied")) {
+    const id =
+      typeof m.meta?.filterId === "string"
+        ? (m.meta.filterId as string)
+        : typeof m.meta?.filter === "string"
+          ? (m.meta.filter as string)
+          : "?";
+    const ms = metaNum(m, "ms");
+    if (ms === null) continue;
+    const arr = filtersById.get(id) ?? [];
+    arr.push(ms);
+    filtersById.set(id, arr);
+  }
+  const filtersByFilterId = [...filtersById.entries()]
+    .map(([filterId, arr]) => ({
+      filterId,
+      count: arr.length,
+      medianMs: median(arr) ?? 0,
+    }))
+    .sort((a, b) => b.medianMs - a.medianMs);
 
   // OCR: 1ª (frío, incluye CDN del motor) vs mediana del resto (tibio).
   const ocrDones = marksOf("ocr_done");
@@ -207,14 +315,30 @@ export async function buildDiagReport(): Promise<DiagReport> {
     .filter((v): v is number => v !== null);
   const charsTotal = ocrDones.reduce((n, m) => n + (metaNum(m, "chars") ?? 0), 0);
 
-  // Exports completados.
+  // Exports completados. v1.1 — con páginas y lado largo de la fuente.
   const exports = marksOf("export_end")
     .map((m) => ({
       type: typeof m.meta?.type === "string" ? (m.meta.type as string) : "?",
       ms: metaNum(m, "ms") ?? 0,
       bytes: metaNum(m, "bytes") ?? 0,
+      pages: metaNum(m, "pages"),
+      pxLong: metaNum(m, "pxLong"),
     }))
     .filter((e) => e.ms > 0);
+
+  // v1.1 — tramos de captura: shot→processed (procesado) y
+  // processed→write (escritura), medianas de la sesión.
+  const shotToProcessedMs: number[] = [];
+  const processedToWriteMs: number[] = [];
+  const shotMarks = marksOf("capture_shot");
+  const processedMarks = marksOf("capture_processed");
+  const writeMarks = marksOf("capture_write");
+  for (const p of processedMarks) {
+    const shot = lastBefore(shotMarks, p.ts);
+    if (shot) shotToProcessedMs.push(Math.max(0, p.ts - shot.ts));
+    const write = writeMarks.find((w) => w.ts >= p.ts);
+    if (write) processedToWriteMs.push(Math.max(0, write.ts - p.ts));
+  }
 
   const lastClose = marksOf("editor_close");
   const bootMark = marksOf("boot_ready")[0];
@@ -226,9 +350,33 @@ export async function buildDiagReport(): Promise<DiagReport> {
     /* store no disponible: queda false */
   }
 
+  // v1.1 — batería FRESCA al momento del informe (el snapshot cacheado la
+  // leyó al arrancar; nivel+enchufe ayudan a interpretar fpsEarly bajos).
+  const freshBattery = await readBattery();
+  if (freshBattery) device.battery = freshBattery;
+
+  // v3 — sección QA: SOLO si el guión corrió (log no vacío o abortado).
+  const qaState = getQaTestState();
+  const qaRan = qaState.log.length > 0 || qaState.aborted;
+  const qa: DiagQaSection | undefined = qaRan
+    ? {
+        standard: true,
+        script: "qa-standard-v1.1",
+        steps: qaState.log.map((l: QaStepLog) => ({
+          id: l.id,
+          label: l.label,
+          ms: l.ms,
+          ok: l.ok,
+          ...(l.mode !== undefined ? { mode: l.mode } : {}),
+          ...(l.waitMs !== undefined ? { waitMs: l.waitMs } : {}),
+        })),
+        ...(qaState.aborted ? { aborted: true } : {}),
+      }
+    : undefined;
+
   return {
     format: "scannerlab-diag-report",
-    version: 1,
+    version: 3,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -242,6 +390,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
         readyMs: metaNum(cameraReady[cameraReady.length - 1], "ms"),
         fpsEarly,
         fpsLate,
+        autoShutterWaitMs,
       },
       pages: {
         count: savedPages.length,
@@ -250,13 +399,19 @@ export async function buildDiagReport(): Promise<DiagReport> {
           .filter((v): v is number => v !== null),
         captureToSavedMs,
         medianMs: median(captureToSavedMs),
+        segments: {
+          shotToProcessedMs: median(shotToProcessedMs),
+          processedToWriteMs: median(processedToWriteMs),
+        },
       },
       editor: {
         openMs: editorOpenMs,
         firstRenderMs,
+        firstRenders,
         fpsAuto: metaNum(marksOf("fps_auto").pop(), "fps"),
         filterMedianMs: median(filterMs),
         filterCount,
+        filters: filtersByFilterId,
         sessionMs: metaNum(lastClose[lastClose.length - 1], "durationMs"),
       },
       ocr: {
@@ -270,9 +425,11 @@ export async function buildDiagReport(): Promise<DiagReport> {
       longTasks: {
         count: perfProbe.longTasks.count,
         totalMs: Math.round(perfProbe.longTasks.totalMs),
+        supported: perfProbe.longTasks.supported,
       },
     },
     settings: { ocrEnabled },
+    ...(qa ? { qa } : {}),
   };
 }
 
@@ -316,7 +473,14 @@ export function buildDiagTxt(r: DiagReport): string {
   push("==============================================");
   push(`Generado : ${new Date(r.generatedAt).toLocaleString()}`);
   push(`Build    : ${r.app.build}`);
-  push("Formato  : diag-report v1");
+  push("Formato  : diag-report v3");
+  if (r.qa) {
+    push();
+    push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
+    push("Protocolo: ahorro batería OFF · dispositivo");
+    push("frío · captura automática nativa · mismo");
+    push("documento con texto");
+  }
   push();
   push("-- DISPOSITIVO -------------------------------");
   push(`Modelo       : ${d.model ?? DASH}`);
@@ -355,6 +519,27 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`Arranque app → lista      : ${fmtMs(s.boot.appReadyMs)}`);
   push(`Cámara: abrir → lista     : ${fmtMs(s.camera.readyMs)}`);
   push(`FPS cámara                : ${s.camera.fpsEarly ?? DASH} · tarde: ${s.camera.fpsLate ?? DASH}`);
+  // v3 — espera del auto-shutter (estable→disparo) por página + modo del
+  // guión (auto/manual/mixto — solo cuando el test QA corrió).
+  if (s.camera.autoShutterWaitMs.length > 0) {
+    const waits = s.camera.autoShutterWaitMs
+      .slice(0, 5)
+      .map((v) => `${(v / 1000).toFixed(1)} s`)
+      .join(" · ");
+    const med = median(s.camera.autoShutterWaitMs);
+    const qaCaptures = (r.qa?.steps ?? []).filter((st) => st.mode !== undefined);
+    const mode =
+      qaCaptures.length === 0
+        ? ""
+        : qaCaptures.every((st) => st.mode === "auto")
+          ? " · modo auto"
+          : qaCaptures.every((st) => st.mode === "manual")
+            ? " · modo manual"
+            : " · modo mixto";
+    push(
+      `Shutter auto (estable→disparo): ${waits} (mediana ${med !== null ? `${(med / 1000).toFixed(1)} s` : DASH})${mode}`
+    );
+  }
   const resolutions =
     s.pages.resolutions.length > 0 ? s.pages.resolutions.join(", ") + " px" : DASH;
   push(`Páginas capturadas        : ${s.pages.count} · guardadas a ${resolutions}`);
@@ -364,9 +549,17 @@ export function buildDiagTxt(r: DiagReport): string {
         (s.pages.captureToSavedMs.length > 8 ? " · …" : "")
       : DASH;
   push(`Captura → guardada (ms)   : ${savedList} (mediana ${s.pages.medianMs ?? DASH})`);
-  push(`Editor: apertura/render   : ${s.editor.openMs !== null ? `${s.editor.openMs} ms` : DASH} / ${fmtMs(s.editor.firstRenderMs)}`);
+  push(`  tramos: procesado ${fmtMs(s.pages.segments.shotToProcessedMs)} · escritura ${fmtMs(s.pages.segments.processedToWriteMs)} (medianas)`);
+  const renders2 = s.editor.firstRenders[1];
+  push(
+    `Editor: apertura/render   : ${s.editor.openMs !== null ? `${s.editor.openMs} ms` : DASH} / ${fmtMs(s.editor.firstRenderMs)}${renders2 !== null && renders2 !== undefined ? ` · 2ª: ${fmtMs(renders2)}` : ""}`
+  );
   push(`FPS pan/zoom (auto)       : ${s.editor.fpsAuto ?? DASH}`);
   push(`Filtros aplicados         : ${s.editor.filterCount} · mediana ${fmtMs(s.editor.filterMedianMs)}`);
+  const topFilter = s.editor.filters[0];
+  if (topFilter) {
+    push(`Filtro más caro           : ${topFilter.filterId} · ${fmtMs(topFilter.medianMs)} mediana (${topFilter.count})`);
+  }
   push(
     `OCR                       : ${s.ocr.count} págs · 1ª ${fmtMs(s.ocr.firstColdMs)} (frío) · tibio ${fmtMs(s.ocr.medianWarmMs)} · ${s.ocr.charsTotal} chars`
   );
@@ -376,7 +569,11 @@ export function buildDiagTxt(r: DiagReport): string {
       : DASH;
   push(`Exports                   : ${exportsTxt}`);
   push(`Heap pico (JS)            : ${s.memory.peakHeapMB !== null ? `${s.memory.peakHeapMB} MB` : DASH}`);
-  push(`Long tasks                : ${s.longTasks.count} tareas >50 ms · total ${fmtMs(s.longTasks.totalMs)}`);
+  push(
+    s.longTasks.supported
+      ? `Long tasks                : ${s.longTasks.count} tareas >50 ms · total ${fmtMs(s.longTasks.totalMs)}`
+      : "Long tasks                : no soportado en este navegador"
+  );
   push();
   push("-- PRIVACIDAD ---------------------------------");
   push("Este informe NO contiene imágenes, contenido de");

@@ -902,6 +902,10 @@ export default function CameraView() {
         navigator.vibrate(30);
       }
       try {
+        // DIAG v1.1 (spec sub-marks) — el frame/foto del sensor YA está en
+        // mano (blob→dataURL o frame→dataURL): empieza el procesado. Tramo
+        // 1 de la descomposición captura→guardada.
+        perfProbe.mark("capture_shot");
         // Decode ÚNICO de la captura (antes: downscale + detect + quality
         // decodificaban la misma foto de 12 MP tres veces). El elemento se
         // reutiliza en las etapas; solo se re-decodifica si hubo que
@@ -975,6 +979,15 @@ export default function CameraView() {
           quality,
         };
         addCapturePage(page);
+        // DIAG v1.1 (spec sub-marks) — tramo 2: imagen ya decodificada,
+        // capada a 4032 y medida (px y bytes FINALES que van al store).
+        perfProbe.mark("capture_processed", {
+          pxLong: Math.max(sourceNaturalWidth(source), sourceNaturalHeight(source)),
+          bytes: dataUrlBytes(dataUrl),
+        });
+        // DIAG v1.1 (spec sub-marks) — tramo 3: la página quedó persistida
+        // en el store de la sesión (addCapturePage resuelto).
+        perfProbe.mark("capture_write");
         // DIAG (spec diag §6) — la página ATERRIZÓ en la sesión (bytes y lado
         // mayor del original persistido). Base del derivado captura→editor
         // (editor_open.ts − page_saved.ts) y de captureToSavedMs.
@@ -1852,15 +1865,16 @@ export default function CameraView() {
     };
   }, [applySavedTorchWithRetry, camRestartNonce, upgradeStreamResolution]);
 
-  // DIAG (spec diag §5) — 2ª muestra de FPS de la vista de cámara a los 30 s
-  // de sesión (frío vs caliente dentro de una MISMA sesión). Su propio
-  // efecto con cleanup: nunca dispara tras cerrar la cámara.
+  // DIAG (spec diag §5 · v1.1) — 2ª muestra de FPS de la vista de cámara a
+  // los 10 s de sesión (frío vs caliente dentro de una MISMA sesión). Antes
+  // eran 30 s: el iPhone cerraba la cámara antes y perdía el sample tardío
+  // (lote 2). Su propio efecto con cleanup: nunca dispara tras cerrar.
   useEffect(() => {
     const diagLateFpsTimer = window.setTimeout(() => {
       void perfProbe.fpsSample(3000).then((s) => {
         if (s) perfProbe.mark("fps_camera", { fps: s.fps, phase: "late" });
       });
-    }, 30_000);
+    }, 10_000);
     return () => window.clearTimeout(diagLateFpsTimer);
   }, []);
 
@@ -2276,6 +2290,19 @@ export default function CameraView() {
     ? (live.score ?? 0) > SHUTTER_SCORE
     : stable;
   const scorePct = live.score !== null ? Math.round(live.score * 100) : null;
+
+  // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
+  // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
+  // overlayStable, el mismo estado que ve el shutter). Con capture_fired
+  // mide la espera del auto-shutter (estable→disparo). Pura instrumentación:
+  // cero cambios en estabilidad, shutter, ZSL o burst.
+  const prevOverlayStableRef = useRef(false);
+  useEffect(() => {
+    if (overlayStable && !prevOverlayStableRef.current) {
+      perfProbe.mark("capture_stable");
+    }
+    prevOverlayStableRef.current = overlayStable;
+  }, [overlayStable]);
 
   return (
     <div
@@ -2831,6 +2858,7 @@ export default function CameraView() {
           <button
             type="button"
             aria-label="Capturar página"
+            data-qa-shutter
             onClick={onShutter}
             disabled={processing || isCapturing}
             className={cn(

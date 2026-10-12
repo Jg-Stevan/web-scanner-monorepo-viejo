@@ -15,6 +15,8 @@
  *                                   // export_start/export_end{type,ms,bytes}
  *     memory()                      // {heapMB, limitMB, ts} de performance.memory
  *     longTasks                     // PerformanceObserver('longtask'): count+totalMs
+ *                                     // v1.1: + supported (Safari no lo tiene → el
+ *                                     // informe dice "no soportado", jamás "0 tareas")
  *     fpsSample(ms=3000)            // FPS durante interacción (pan/zoom editor)
  *     report()                      // JSON resumen imprimible (console.table)
  *   }
@@ -49,11 +51,19 @@ export interface PerfFpsSample {
   durationMs: number;
 }
 
+export interface PerfLongTasks {
+  count: number;
+  totalMs: number;
+  /** v1.1 — ¿este navegador soporta PerformanceObserver('longtask')?
+   *  Safari/iOS: false → el informe reporta "no soportado", no 0. */
+  supported: boolean;
+}
+
 export interface PerfProbeApi {
   marks: PerfProbeMark[];
   mark(ev: string, meta?: Record<string, number | string | boolean | null>): void;
   memory(): PerfMemorySnapshot;
-  longTasks: { count: number; totalMs: number };
+  longTasks: PerfLongTasks;
   fpsSample(ms?: number): Promise<PerfFpsSample | null>;
   report(): Record<string, unknown> | null;
 }
@@ -72,7 +82,7 @@ const MAX_MARKS = 600;
 
 function makeProbe(): PerfProbeApi {
   const marks: PerfProbeMark[] = [];
-  const longTasks = { count: 0, totalMs: 0 };
+  const longTasks: PerfLongTasks = { count: 0, totalMs: 0, supported: false };
 
   const probe: PerfProbeApi = {
     marks,
@@ -196,7 +206,7 @@ const noopProbe: PerfProbeApi = {
   marks: [],
   mark: () => undefined,
   memory: () => ({ heapMB: null, limitMB: null, ts: 0 }),
-  longTasks: { count: 0, totalMs: 0 },
+  longTasks: { count: 0, totalMs: 0, supported: false },
   fpsSample: async () => null,
   report: () => null,
 };
@@ -214,18 +224,34 @@ if (typeof window !== "undefined") {
   try {
     window.__perfProbe = perfProbe;
     // longTasks: PerformanceObserver('longtask') con buffer (Chrome/Android —
-    // el dispositivo objetivo del plan). Safari no lo soporta → queda a 0.
+    // el dispositivo objetivo del plan). v1.1 — soporte EXPLÍCITO: Safari no
+    // expone 'longtask' → supported=false y el informe dice "no soportado"
+    // (antes quedaba en 0 tareas, que mentía: Safari sí tiene jank, solo
+    // que no lo reporta).
     if (typeof PerformanceObserver === "function") {
       try {
-        const obs = new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            perfProbe.longTasks.count += 1;
-            perfProbe.longTasks.totalMs += entry.duration;
-          }
-        });
-        obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+        const Ctor = PerformanceObserver as typeof PerformanceObserver & {
+          supportedEntryTypes?: readonly string[];
+        };
+        const declared = Array.isArray(Ctor.supportedEntryTypes)
+          ? Ctor.supportedEntryTypes.includes("longtask")
+          : null;
+        if (declared === false) {
+          // El navegador declara que 'longtask' NO existe (Safari moderno):
+          // ni se intenta el observe.
+        } else {
+          const obs = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              perfProbe.longTasks.count += 1;
+              perfProbe.longTasks.totalMs += entry.duration;
+            }
+          });
+          obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+          // El observe fue aceptado → la entrada existe en este navegador.
+          perfProbe.longTasks.supported = true;
+        }
       } catch {
-        /* 'longtask' no soportado */
+        /* 'longtask' no soportado → supported queda false */
       }
     }
   } catch {

@@ -82,6 +82,8 @@ import { ocrTextOfPages } from "@jg-stevan/scanner-core/text-export";
 import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { perfProbe } from "@/lib/perf-probe";
+import { readImageLongSide } from "@/lib/image-size";
+import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -535,11 +537,17 @@ export default function EditorView() {
     setPortalEl(document.getElementById("app-phone"));
   }, []);
 
-  // DIAG (spec diag §5/§6) — sesión del editor: apertura + cierre (duración
-  // total de la edición). El AnimatePresence de page.tsx REMONTA la vista en
-  // cada entrada → un par editor_open/editor_close por sesión de edición.
+  // DIAG (spec diag §5/§6 · v1.1) — sesión del editor: apertura NUMERADA
+  // (1, 2, 3… de la sesión — derivada del propio anillo de marcas, sin
+  // estado extra) + cierre (duración total de la edición). El
+  // AnimatePresence de page.tsx REMONTA la vista en cada entrada → un par
+  // editor_open/editor_close por sesión de edición.
   useEffect(() => {
-    perfProbe.mark("editor_open");
+    let openIndex = 1;
+    for (const m of perfProbe.marks) {
+      if (m.ev === "editor_open") openIndex += 1;
+    }
+    perfProbe.mark("editor_open", { openIndex });
     diagEditorOpenT0Ref.current = performance.now();
     return () => {
       perfProbe.mark("editor_close", {
@@ -639,12 +647,16 @@ export default function EditorView() {
         };
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
-        // DIAG (spec diag §6) — filtro aplicado (ms del pipeline) + primer
-        // render de esta página en la vista (recién procesada).
+        // DIAG (spec diag §6 · v1.1) — filtro aplicado (ms del pipeline) +
+        // id EXPLÍCITO + tamaño de ENTRADA (lado largo del original, leído
+        // de la cabecera SIN decodificar — medirlo costaría otro decode de
+        // 12 MP) + primer render de esta página en la vista.
         perfProbe.mark("filter_applied", {
           ms: filterMs,
           engine: entry.engine,
           filter: page.filter,
+          filterId: page.filter,
+          inputPx: readImageLongSide(`p:${page.id}`, page.original) ?? null,
         });
         if (firstRenderPidRef.current !== page.id) {
           firstRenderPidRef.current = page.id;
@@ -1359,8 +1371,9 @@ export default function EditorView() {
       return;
     }
     setExportingImg(true);
-    // DIAG (spec diag §6) — export de imagen (PNG/JPG) con ms y bytes.
-    perfProbe.mark("export_start", { type: "png" });
+    // DIAG (spec diag §6 · v1.1) — export de imagen (PNG/JPG) con ms, bytes,
+    // páginas (siempre 1) y lado largo de la fuente.
+    perfProbe.mark("export_start", { type: "png", pages: 1 });
     const tExport = performance.now();
     try {
       const blob = await dataUrlToBlob(entry.url);
@@ -1373,6 +1386,11 @@ export default function EditorView() {
         type: ext,
         ms: Math.round(performance.now() - tExport),
         bytes: blob.size,
+        pages: 1,
+        pxLong:
+          Math.max(entry.w, entry.h) > 0
+            ? Math.max(entry.w, entry.h)
+            : readImageLongSide(`e:${p.id}:${cacheKey}`, entry.url) ?? null,
       });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
@@ -1493,7 +1511,18 @@ export default function EditorView() {
     const s = useScannerStore.getState();
     const doc = s.documents.find((d) => d.id === docId);
     if (!doc || doc.pages.length === 0) return;
-    // DIAG (spec diag §6) — export PDF (inicio/fin con tipo, ms y bytes).
+    // Lado largo de la fuente del PDF (v1.1): máx entre páginas — precision
+    // si existe (docs guardados), si no cabecera SIN decodificar.
+    const docPxLong = doc.pages.reduce((mx, p) => {
+      const fromPrecision =
+        p.precision && p.precision.width > 0
+          ? Math.max(p.precision.width, p.precision.height ?? 0)
+          : null;
+      const side =
+        fromPrecision ?? readImageLongSide(`d:${doc.id}:${p.id}`, p.processed) ?? 0;
+      return Math.max(mx, side);
+    }, 0);
+    // DIAG (spec diag §6 · v1.1) — export PDF: ms, bytes, PÁGINAS y px fuente.
     perfProbe.mark("export_start", { type: "pdf", pages: doc.pages.length });
     const tExport = performance.now();
     try {
@@ -1503,6 +1532,8 @@ export default function EditorView() {
         type: "pdf",
         ms: Math.round(performance.now() - tExport),
         bytes,
+        pages: doc.pages.length,
+        pxLong: docPxLong > 0 ? docPxLong : null,
       });
       toast.success(
         `PDF exportado · ${doc.pages.length} ${doc.pages.length === 1 ? "página" : "páginas"} · ${formatBytes(bytes)}`
@@ -1966,6 +1997,87 @@ export default function EditorView() {
     runNext();
     runNext(); // concurrencia 2 — EXPERIMENTO v11: SE MANTIENE (evita decodificar N PNG de 4032 px a la vez en la apertura)
   }, []);
+
+  /* ── QA (spec test estándar v1.1) — OBEDIENCIA AL GUIÓN ────────────────
+   * Cada paso del test se ejecuta con los MISMOS handlers que usan los
+   * botones reales del editor (handleFilter / runOcrCurrent /
+   * handleSaveImage / handleSave): cero lógica nueva, cero duplicación.
+   * El guard por runId+step garantiza una sola ejecución por paso. */
+  const qaRunId = useQaTestStore((s) => s.runId);
+  const qaStep = useQaTestStore((s) => s.step);
+  const qaRunning = useQaTestStore((s) => s.running);
+  const qaExecutedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!qaRunning || !qaStep || mode !== "review") return;
+    const execKey = `${qaRunId}:${qaStep}`;
+    if (qaExecutedRef.current === execKey) return;
+    switch (qaStep) {
+      case "filter-text":
+      case "filter-bw": {
+        if (page) {
+          qaExecutedRef.current = execKey;
+          const want = qaStep === "filter-text" ? "text" : "bw";
+          // Cache hit (v11): si el preview de ESTE filtro ya está cacheado,
+          // el review no reprocesa y no habrá filter_applied → avisar al
+          // guión para que complete el paso con la aplicación instantánea.
+          const nextKey = capturePageKey({ ...page, filter: want });
+          handleFilter(want, want === "text" ? "Texto claro" : "B/N adaptativo");
+          if (previewCache.current.has(nextKey)) {
+            qaStandardTest.noteFilterCached(want);
+          }
+        }
+        break;
+      }
+      case "ocr-cold":
+      case "ocr-warm":
+        if (!ocrRunning && !previewLoading) {
+          qaExecutedRef.current = execKey;
+          void runOcrCurrent();
+        }
+        break;
+      case "export-png":
+        if (!exportingImg) {
+          qaExecutedRef.current = execKey;
+          void handleSaveImage();
+        }
+        break;
+      case "export-pdf":
+        if (!saving && !savedInfo) {
+          qaExecutedRef.current = execKey;
+          void handleSave();
+        }
+        break;
+      default:
+        break;
+    }
+  }, [
+    qaRunning,
+    qaStep,
+    qaRunId,
+    mode,
+    page,
+    ocrRunning,
+    previewLoading,
+    exportingImg,
+    saving,
+    savedInfo,
+    handleFilter,
+    runOcrCurrent,
+    handleSaveImage,
+    handleSave,
+  ]);
+
+  // QA — export-pdf, 2ª fase: el overlay de éxito del guardado aparece →
+  // descargar el PDF con el MISMO handler de su botón («Guardar PDF» del
+  // SaveSuccessOverlay), que es quien emite export_start/end del PDF.
+  const qaPdfDownloadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!qaRunning || qaStep !== "export-pdf" || !savedInfo) return;
+    const execKey = `${qaRunId}:pdf-download`;
+    if (qaPdfDownloadedRef.current === execKey) return;
+    qaPdfDownloadedRef.current = execKey;
+    downloadFromOverlay();
+  }, [qaRunning, qaStep, qaRunId, savedInfo, downloadFromOverlay]);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
 
