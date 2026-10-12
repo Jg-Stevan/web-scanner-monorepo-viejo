@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Copy, Download, FileText, Gauge, Layers, Loader2, Monitor, Moon, PlusSquare, ScanText, Share2, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
+import { Check, Copy, Download, FileText, Gauge, Layers, Loader2, Monitor, Moon, PlayCircle, PlusSquare, ScanText, Share2, Star, Sun, Tags, Trash2, Type, HardDrive } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -30,6 +30,7 @@ import {
 } from "@jg-stevan/scanner-core/pwa";
 import { cn } from "@/lib/utils";
 import { diagTools } from "@/lib/diag-report";
+import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
 import {
   getDeviceSnapshot,
   getBenchCache,
@@ -974,6 +975,110 @@ function DiagSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* QA (spec test estándar v1.1) — tarjeta del guión automatizado */}
+      <QaTestCard />
     </SettingsGroup>
+  );
+}
+
+/** QA (spec diag-test-estandar-qa) — Tarjeta «Test estándar QA»: arma el
+ *  guión (navega a la cámara con el auto-shutter en su estado por defecto)
+ *  y, tras un test, borra sus datos. El guión mide lo que un usuario viviría
+ *  — incluida la demora del shutter automático en gama baja. */
+function QaTestCard() {
+  const armed = useQaTestStore((s) => s.armed);
+  const running = useQaTestStore((s) => s.running);
+  const finished = useQaTestStore((s) => s.finished);
+  const aborted = useQaTestStore((s) => s.aborted);
+  const docIds = useQaTestStore((s) => s.docIds);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const onDelete = () => {
+    setConfirmDelete(false);
+    qaStandardTest.deleteTestData();
+    toast.success("Datos del test eliminados");
+  };
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-[#f2f2f7] px-4 py-3 dark:border-[#38383a]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[15px] font-semibold text-[#3c3c43] dark:text-white">
+          Test estándar QA
+        </span>
+        {armed && !running && (
+          <span className="rounded-full bg-[#007aff]/12 px-2 py-0.5 text-[11px] font-semibold text-[#007aff]">
+            armado
+          </span>
+        )}
+        {finished && (
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+              aborted
+                ? "bg-[#ff9f0a]/15 text-[#c25000] dark:text-[#ff9f0a]"
+                : "bg-[#34c759]/15 text-[#1d7a34] dark:text-[#30d158]"
+            )}
+          >
+            {aborted ? "abortado · informe parcial" : "completado"}
+          </span>
+        )}
+      </div>
+      <p className="text-[12px] leading-snug text-[#8e8e93]">
+        Guión automatizado con captura automática: 3 páginas + editor + filtros
+        + OCR + PDF. ~1 min en gama alta; en gama baja el shutter automático
+        puede tardar — eso también se mide.
+      </p>
+      <div className="flex flex-col gap-2 pt-0.5">
+        <button
+          type="button"
+          aria-label="Preparar test estándar QA"
+          data-qa-prepare
+          onClick={() => qaStandardTest.arm()}
+          disabled={running}
+          className={cn(
+            "flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#007aff] px-4 py-2.5 text-[15px] font-semibold text-white transition-transform active:scale-[0.98]",
+            running && "opacity-60"
+          )}
+        >
+          <PlayCircle className="h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
+          {running ? "Test en curso…" : "Preparar test"}
+        </button>
+        {(docIds.length > 0 || finished) && (
+          <button
+            type="button"
+            aria-label="Borrar datos del test estándar QA"
+            onClick={() => setConfirmDelete(true)}
+            className="flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-[#e5e5ea] px-3 py-2 text-[13.5px] font-medium text-[#3c3c43] transition-transform active:scale-[0.98] dark:border-[#3a3a3c] dark:text-white/85"
+          >
+            <Trash2 className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+            Borrar datos del test
+          </button>
+        )}
+      </div>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent className="max-w-[320px] rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Borrar datos del test?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Elimina los documentos «QA-estandar» creados por el guión y
+              resetea el test. El informe ya compartido no se ve afectado.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-2">
+            <AlertDialogCancel className="mt-0 flex-1 rounded-full bg-[#f2f2f7] text-[15px] font-semibold text-[#3c3c43] hover:bg-[#e5e5ea] dark:bg-[#2c2c2e] dark:text-white dark:hover:bg-[#3a3a3c]">
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onDelete}
+              className="flex-1 rounded-full border-0 bg-[#ff453a] text-[15px] font-semibold text-white hover:bg-[#ff6961]"
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }

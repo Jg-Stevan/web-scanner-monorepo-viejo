@@ -25,6 +25,7 @@ import EditorView from "@/components/scanner/EditorView";
 import SettingsView from "@/components/scanner/SettingsView";
 import BottomNav from "@/components/scanner/BottomNav";
 import OnboardingView from "@/components/scanner/OnboardingView";
+import QAOverlay from "@/components/scanner/QAOverlay";
 import { installCrashReporter } from "@/lib/crash-reporter";
 import { perfProbe, PERF_PROBE_T0 } from "@/lib/perf-probe";
 import { scheduleDiagIdle } from "@/lib/device-profile";
@@ -214,6 +215,12 @@ export default function Home() {
             </AnimatePresence>
           )}
         </main>
+
+        {/* QA (spec test estándar v1.1) — overlay del guión: botón Iniciar en
+            cámara armada, checklist permanente durante el test y tarjeta final
+            con el informe. Fuera de AnimatePresence: vive SOBRE todas las
+            vistas sin intervenir en las transiciones. */}
+        {!showOnboarding && <QAOverlay />}
 
         {!showOnboarding && (view === "library" || view === "settings") && <BottomNav />}
       </div>

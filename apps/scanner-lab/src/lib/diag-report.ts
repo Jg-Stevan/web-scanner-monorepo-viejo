@@ -23,10 +23,27 @@ import {
   type DiagDeviceSnapshot,
   type DiagBenchResults,
 } from "./device-profile";
+import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
 export const DIAG_BUILD = "diag/v1.1-sub-marks (fingerprint pendiente)";
+
+/** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
+ *  cuando el guión corrió (o se abortó a mitad). */
+export interface DiagQaSection {
+  standard: true;
+  script: "qa-standard-v1.1";
+  steps: Array<{
+    id: string;
+    label: string;
+    ms: number | null;
+    ok: boolean;
+    mode?: "auto" | "manual";
+    waitMs?: number | null;
+  }>;
+  aborted?: boolean;
+}
 
 /* ------------------------------------------------------------------ */
 /* Tipos del informe (spec §6a)                                         */
@@ -42,9 +59,10 @@ export interface DiagTier {
 
 export interface DiagReport {
   format: "scannerlab-diag-report";
-  /** v1 → v2 (sub-marks): SOLO campos adicionales — todo campo v1 conserva
-   *  nombre y significado (informes de los lotes 1-2 comparables 1:1). */
-  version: 2;
+  /** v1 → v2 (sub-marks) → v3 (test estándar QA): SOLO campos
+   *  adicionales — todo campo v1 conserva nombre y significado (informes
+   *  de los lotes 1-2 comparables 1:1). */
+  version: 3;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -58,6 +76,10 @@ export interface DiagReport {
       readyMs: number | null;
       fpsEarly: number | null;
       fpsLate: number | null;
+      /** v3 — espera del auto-shutter por página (capture_fired −
+       *  capture_stable): el dato que cuantifica la demora del shutter en
+       *  gama baja, con o sin guión QA. */
+      autoShutterWaitMs: number[];
     };
     pages: {
       count: number;
@@ -104,6 +126,8 @@ export interface DiagReport {
     longTasks: { count: number; totalMs: number; supported: boolean };
   };
   settings: { ocrEnabled: boolean };
+  /** v3 — presente SOLO si el test estándar QA corrió en esta sesión. */
+  qa?: DiagQaSection;
 }
 
 /* ------------------------------------------------------------------ */
@@ -240,13 +264,20 @@ export async function buildDiagReport(): Promise<DiagReport> {
   }
   if (firstRenders.length > 5) firstRenders.length = 5; // cap 5 (spec)
 
-  // Cámara: ready (última sesión) + FPS early/late.
+  // Cámara: ready (última sesión) + FPS early/late. v3 — esperas del
+  // auto-shutter: cada capture_fired apareado con el capture_stable más
+  // cercano ANTES del disparo (estable→disparo).
   const cameraReady = marksOf("camera_ready");
   let fpsEarly: number | null = null;
   let fpsLate: number | null = null;
   for (const m of marksOf("fps_camera")) {
     if (m.meta?.phase === "early" && typeof m.meta.fps === "number") fpsEarly = m.meta.fps;
     if (m.meta?.phase === "late" && typeof m.meta.fps === "number") fpsLate = m.meta.fps;
+  }
+  const autoShutterWaitMs: number[] = [];
+  for (const f of firedShots) {
+    const stable = lastBefore(marksOf("capture_stable"), f.ts);
+    if (stable) autoShutterWaitMs.push(Math.max(0, f.ts - stable.ts));
   }
 
   // Filtros: mediana de ms + contador. v1.1 — ADEMÁS por filterId (el mark
@@ -324,9 +355,28 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const freshBattery = await readBattery();
   if (freshBattery) device.battery = freshBattery;
 
+  // v3 — sección QA: SOLO si el guión corrió (log no vacío o abortado).
+  const qaState = getQaTestState();
+  const qaRan = qaState.log.length > 0 || qaState.aborted;
+  const qa: DiagQaSection | undefined = qaRan
+    ? {
+        standard: true,
+        script: "qa-standard-v1.1",
+        steps: qaState.log.map((l: QaStepLog) => ({
+          id: l.id,
+          label: l.label,
+          ms: l.ms,
+          ok: l.ok,
+          ...(l.mode !== undefined ? { mode: l.mode } : {}),
+          ...(l.waitMs !== undefined ? { waitMs: l.waitMs } : {}),
+        })),
+        ...(qaState.aborted ? { aborted: true } : {}),
+      }
+    : undefined;
+
   return {
     format: "scannerlab-diag-report",
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -340,6 +390,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
         readyMs: metaNum(cameraReady[cameraReady.length - 1], "ms"),
         fpsEarly,
         fpsLate,
+        autoShutterWaitMs,
       },
       pages: {
         count: savedPages.length,
@@ -378,6 +429,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
       },
     },
     settings: { ocrEnabled },
+    ...(qa ? { qa } : {}),
   };
 }
 
@@ -421,7 +473,14 @@ export function buildDiagTxt(r: DiagReport): string {
   push("==============================================");
   push(`Generado : ${new Date(r.generatedAt).toLocaleString()}`);
   push(`Build    : ${r.app.build}`);
-  push("Formato  : diag-report v2");
+  push("Formato  : diag-report v3");
+  if (r.qa) {
+    push();
+    push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
+    push("Protocolo: ahorro batería OFF · dispositivo");
+    push("frío · captura automática nativa · mismo");
+    push("documento con texto");
+  }
   push();
   push("-- DISPOSITIVO -------------------------------");
   push(`Modelo       : ${d.model ?? DASH}`);
@@ -460,6 +519,27 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`Arranque app → lista      : ${fmtMs(s.boot.appReadyMs)}`);
   push(`Cámara: abrir → lista     : ${fmtMs(s.camera.readyMs)}`);
   push(`FPS cámara                : ${s.camera.fpsEarly ?? DASH} · tarde: ${s.camera.fpsLate ?? DASH}`);
+  // v3 — espera del auto-shutter (estable→disparo) por página + modo del
+  // guión (auto/manual/mixto — solo cuando el test QA corrió).
+  if (s.camera.autoShutterWaitMs.length > 0) {
+    const waits = s.camera.autoShutterWaitMs
+      .slice(0, 5)
+      .map((v) => `${(v / 1000).toFixed(1)} s`)
+      .join(" · ");
+    const med = median(s.camera.autoShutterWaitMs);
+    const qaCaptures = (r.qa?.steps ?? []).filter((st) => st.mode !== undefined);
+    const mode =
+      qaCaptures.length === 0
+        ? ""
+        : qaCaptures.every((st) => st.mode === "auto")
+          ? " · modo auto"
+          : qaCaptures.every((st) => st.mode === "manual")
+            ? " · modo manual"
+            : " · modo mixto";
+    push(
+      `Shutter auto (estable→disparo): ${waits} (mediana ${med !== null ? `${(med / 1000).toFixed(1)} s` : DASH})${mode}`
+    );
+  }
   const resolutions =
     s.pages.resolutions.length > 0 ? s.pages.resolutions.join(", ") + " px" : DASH;
   push(`Páginas capturadas        : ${s.pages.count} · guardadas a ${resolutions}`);

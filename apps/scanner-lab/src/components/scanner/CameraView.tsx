@@ -2291,6 +2291,19 @@ export default function CameraView() {
     : stable;
   const scorePct = live.score !== null ? Math.round(live.score * 100) : null;
 
+  // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
+  // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
+  // overlayStable, el mismo estado que ve el shutter). Con capture_fired
+  // mide la espera del auto-shutter (estable→disparo). Pura instrumentación:
+  // cero cambios en estabilidad, shutter, ZSL o burst.
+  const prevOverlayStableRef = useRef(false);
+  useEffect(() => {
+    if (overlayStable && !prevOverlayStableRef.current) {
+      perfProbe.mark("capture_stable");
+    }
+    prevOverlayStableRef.current = overlayStable;
+  }, [overlayStable]);
+
   return (
     <div
       className="relative flex h-full w-full flex-col bg-black"
@@ -2845,6 +2858,7 @@ export default function CameraView() {
           <button
             type="button"
             aria-label="Capturar página"
+            data-qa-shutter
             onClick={onShutter}
             disabled={processing || isCapturing}
             className={cn(

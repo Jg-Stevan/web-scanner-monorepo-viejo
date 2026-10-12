@@ -83,6 +83,7 @@ import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { perfProbe } from "@/lib/perf-probe";
 import { readImageLongSide } from "@/lib/image-size";
+import { useQaTestStore } from "@/lib/qa-standard-test";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -1996,6 +1997,83 @@ export default function EditorView() {
     runNext();
     runNext(); // concurrencia 2 — EXPERIMENTO v11: SE MANTIENE (evita decodificar N PNG de 4032 px a la vez en la apertura)
   }, []);
+
+  /* ── QA (spec test estándar v1.1) — OBEDIENCIA AL GUIÓN ────────────────
+   * Cada paso del test se ejecuta con los MISMOS handlers que usan los
+   * botones reales del editor (handleFilter / runOcrCurrent /
+   * handleSaveImage / handleSave): cero lógica nueva, cero duplicación.
+   * El guard por runId+step garantiza una sola ejecución por paso. */
+  const qaRunId = useQaTestStore((s) => s.runId);
+  const qaStep = useQaTestStore((s) => s.step);
+  const qaRunning = useQaTestStore((s) => s.running);
+  const qaExecutedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!qaRunning || !qaStep || mode !== "review") return;
+    const execKey = `${qaRunId}:${qaStep}`;
+    if (qaExecutedRef.current === execKey) return;
+    switch (qaStep) {
+      case "filter-text":
+        if (page) {
+          qaExecutedRef.current = execKey;
+          handleFilter("text", "Texto claro");
+        }
+        break;
+      case "filter-bw":
+        if (page) {
+          qaExecutedRef.current = execKey;
+          handleFilter("bw", "B/N adaptativo");
+        }
+        break;
+      case "ocr-cold":
+      case "ocr-warm":
+        if (!ocrRunning && !previewLoading) {
+          qaExecutedRef.current = execKey;
+          void runOcrCurrent();
+        }
+        break;
+      case "export-png":
+        if (!exportingImg) {
+          qaExecutedRef.current = execKey;
+          void handleSaveImage();
+        }
+        break;
+      case "export-pdf":
+        if (!saving && !savedInfo) {
+          qaExecutedRef.current = execKey;
+          void handleSave();
+        }
+        break;
+      default:
+        break;
+    }
+  }, [
+    qaRunning,
+    qaStep,
+    qaRunId,
+    mode,
+    page,
+    ocrRunning,
+    previewLoading,
+    exportingImg,
+    saving,
+    savedInfo,
+    handleFilter,
+    runOcrCurrent,
+    handleSaveImage,
+    handleSave,
+  ]);
+
+  // QA — export-pdf, 2ª fase: el overlay de éxito del guardado aparece →
+  // descargar el PDF con el MISMO handler de su botón («Guardar PDF» del
+  // SaveSuccessOverlay), que es quien emite export_start/end del PDF.
+  const qaPdfDownloadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!qaRunning || qaStep !== "export-pdf" || !savedInfo) return;
+    const execKey = `${qaRunId}:pdf-download`;
+    if (qaPdfDownloadedRef.current === execKey) return;
+    qaPdfDownloadedRef.current = execKey;
+    downloadFromOverlay();
+  }, [qaRunning, qaStep, qaRunId, savedInfo, downloadFromOverlay]);
 
   const poorQuality = page?.quality?.level === "poor" || page?.quality?.level === "fair";
 
