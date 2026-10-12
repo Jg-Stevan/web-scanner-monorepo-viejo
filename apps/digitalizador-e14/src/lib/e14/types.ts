@@ -59,7 +59,11 @@ export interface Acta {
   score: number; // 0..10 SIEMPRE /10 (D2)
   status: ActaStatus;
   /** Motivo del rechazo → define la variante visual (§7.5) */
-  rechazo: null | { tipo: "ILEGIBLE"; detalle: string } | { tipo: "GENERICO"; detalle: string };
+  rechazo:
+    | null
+    | { tipo: "ILEGIBLE"; detalle: string }
+    | { tipo: "GENERICO"; detalle: string }
+    | { tipo: "INCOMPLETA"; detalle: string };
   intento: number;
   maxIntentos: number; // "INTENTO 1 DE 4"
   enviadoAutomaticamente?: string; // "16:42:00"

@@ -44,6 +44,10 @@
   --color-green-bar-border: #27473c;
   --color-green-inset: #0f261c;
   --color-ring-dim: #01512a;
+  /* HUD de cámara (SPEC-e14-cyber-neon-captura §2) */
+  --color-visor-bg: #030504;
+  --color-amber-hud: #e8c84a;
+  --color-hud-blue: #24357a;
   /* Tipos */
   --font-sans: var(--font-hanken);
   --font-mono: var(--font-jbmono);

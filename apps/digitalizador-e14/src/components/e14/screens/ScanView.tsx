@@ -1,7 +1,19 @@
 "use client";
 
 /**
- * ESCANEAR (§7.1) — marco con corner brackets, retícula central, botón
+ * ESCANEAR (§7.1) — CYBER-NEÓN PANTALLA CÁMARA (SPEC-e14-cyber-neon-
+ * captura Rev. 1): visor full-bleed #030504 limpio fuera de CÁMARA, pill de
+ * modos con chip blanco data-driven (IA/cuadrícula/AUTO), HUD ámbar + ⋮,
+ * fila de estado, chips de calidad decorativos y fila de disparo con
+ * obturador-documento. La LÓGICA de cámara (fallbacks, disparo por
+ * plataforma, linterna, ZSL, gate) queda INTACTA — solo capa visual.
+ * CÁMARA FUNCIONAL (SPEC-e14-camara-funcional Rev. 1 — ronda de
+ * FUNCIONALIDAD, estética neón conservada al píxel): botón ámbar = captura
+ * automática (§B), menú ⋮ (§C), flash honesto (§D), aviso de cámara con
+ * reintento y fin del rebote silencioso (§E), fila de estado centrada sin
+ * «ISO: 1600» (§A). La lógica intocable (disparo por plataforma, cascada,
+ * sondas, gate, ZSL) queda byte a byte.
+ * Historial previo: marco con corner brackets, retícula central, botón
  * disparo, ghost IMPORTAR y PANEL DE SIMULACIÓN para forzar el resultado.
  * FASE LÓGICA L2 (§7): chips de FUENTE (SIMULACIÓN · CÁMARA · IMPORTAR);
  * IMPORTAR IMAGEN real (input file → setArchivoPendiente → análisis);
@@ -69,13 +81,52 @@ import { CameraFrameLoop, type FrameLoopTelemetry } from "@jg-stevan/scanner-cor
 import { SHUTTER_SCORE } from "@jg-stevan/scanner-core/quality";
 import type { Quad } from "@jg-stevan/scanner-core/types";
 import { useE14Store } from "@/lib/e14/store";
-import type { FuenteCaptura } from "@/lib/e14/types";
-import { FlashIcon, ImportIcon, ScanFrameIcon } from "../icons";
+import {
+  BoltIcon,
+  CameraNavIcon,
+  FileDocIcon,
+  FocusFrameIcon,
+  FolderImportIcon,
+  GridIcon,
+  ScanFrameIcon,
+} from "../icons";
 
-const FUENTES: { valor: FuenteCaptura; label: string }[] = [
-  { valor: "SIMULACION", label: "SIMULACIÓN" },
-  { valor: "CAMARA", label: "CÁMARA" },
-  { valor: "ARCHIVO", label: "IMPORTAR" },
+/* ── Leyenda de calidad del gate (SPEC-e14-cyber-neon-captura §5/§7) —───
+ *  Decorativa: los scores de bracket son ilustrativos de cada sabor,
+ *  fijados por la spec porque el mock es ilegible (valores coherentes con
+ *  el gate: ≥8 / 6.5-8 / <6.5). No interactiva. */
+const NIVELES_CALIDAD: {
+  id: string;
+  label: string;
+  score: string;
+  chip: string;
+  dot: string;
+  anillo: string;
+}[] = [
+  {
+    id: "optima",
+    label: "ÓPTIMA",
+    score: "8.2",
+    chip: "bg-[rgba(11,242,130,0.12)] border-[rgba(11,242,130,0.40)] text-ok-tint",
+    dot: "bg-ok-tint",
+    anillo: "border-ok-tint",
+  },
+  {
+    id: "medio",
+    label: "MEDIO",
+    score: "7.0",
+    chip: "bg-[rgba(255,214,0,0.12)] border-[rgba(255,214,0,0.40)] text-warn",
+    dot: "bg-warn",
+    anillo: "border-warn",
+  },
+  {
+    id: "baja",
+    label: "BAJA",
+    score: "4.3",
+    chip: "bg-[rgba(255,82,82,0.12)] border-[rgba(255,82,82,0.40)] text-crit",
+    dot: "bg-crit",
+    anillo: "border-crit",
+  },
 ];
 
 /* ── Constantes de cámara (lab CameraView.tsx, adaptadas al task §2) ─────── */
@@ -441,6 +492,15 @@ export function ScanView() {
   const [torchOn, setTorchOn] = useState(false);
   const [torchDisponible, setTorchDisponible] = useState(false);
   const [camEstado, setCamEstado] = useState<CamEstado>("iniciando");
+  // §E (SPEC-camara-funcional): aviso de cámara (denied/perdido) con
+  // reintento — fin del rebote silencioso a SIMULACIÓN. reintentoCamara es
+  // el token que re-dispara el efecto de arranque ([ACTIVAR CÁMARA]).
+  const [avisoCamara, setAvisoCamara] = useState<null | "denied" | "perdido">(null);
+  const [reintentoCamara, setReintentoCamara] = useState(0);
+  // §C (SPEC-camara-funcional): menú ⋮ funcional — menuMontado es la fase
+  // de entrada (opacidad + scale 150 ms) del panel.
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const [menuMontado, setMenuMontado] = useState(false);
   const [live, setLive] = useState<LiveUi>({ corners: null, score: null });
   const [procesando, setProcesando] = useState(false);
   const [destelloKey, setDestelloKey] = useState(0);
@@ -474,6 +534,29 @@ export function ScanView() {
   useEffect(() => {
     warmUpScannerWorker();
   }, []);
+
+  // §C (SPEC-camara-funcional): Escape cierra el menú ⋮; menuMontado pasa
+  // a true un frame tras el montaje para que la transición de entrada
+  // (150 ms, opacidad + scale-0.97→1) corra en CSS puro (sin framer-motion).
+  useEffect(() => {
+    if (!menuAbierto) {
+      setMenuMontado(false);
+      return;
+    }
+    const alTecla = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuAbierto(false);
+    };
+    window.addEventListener("keydown", alTecla);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setMenuMontado(true));
+    });
+    return () => {
+      window.removeEventListener("keydown", alTecla);
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [menuAbierto]);
 
   /* ── Linterna — F-FLASH v3 (lab L473-520) ─────────────────────────── */
 
@@ -872,12 +955,11 @@ export function ScanView() {
 
     const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
     if (!media || typeof media.getUserMedia !== "function" || !window.isSecureContext) {
-      notificar(
-        "warn",
-        "CÁMARA NO DISPONIBLE",
-        "Sin acceso a la cámara en este entorno (se requiere HTTPS y permiso). VOLVIENDO A SIMULACIÓN.",
-      );
-      setFuente("SIMULACION");
+      // §E (SPEC-camara-funcional): fin del rebote silencioso — la app SE
+      // QUEDA en modo CÁMARA con el overlay de aviso + reintento (paridad
+      // con el aviso B2 del lab); el toast es redundante con el overlay.
+      setCamEstado("no-disponible");
+      setAvisoCamara("denied");
       return;
     }
 
@@ -1048,14 +1130,11 @@ export function ScanView() {
       if (!stream) stream = await abrirConCascada();
       if (!stream) {
         if (cancelado) return;
-        // Permiso denegado / sin cámara / sin HTTPS (headless cae aquí):
-        // toast warn + vuelta automática a SIMULACIÓN (spec §7).
-        notificar(
-          "warn",
-          "CÁMARA NO DISPONIBLE",
-          "No hay cámara accesible (permiso denegado, sin hardware o sin conexión segura). VOLVIENDO A SIMULACIÓN.",
-        );
-        setFuente("SIMULACION");
+        // §E (SPEC-camara-funcional): fracaso tras sondas+cascada → overlay
+        // con [ACTIVAR CÁMARA] (reintento) / [VOLVER A SIMULACIÓN] — SIN
+        // rebote automático. abrirCamaraPrincipal/abrirConCascada intactas.
+        setCamEstado("no-disponible");
+        setAvisoCamara("denied");
         return;
       }
       if (cancelado) {
@@ -1081,13 +1160,17 @@ export function ScanView() {
         );
       }
       // B3 (lab): si el track muere (permiso revocado, otra app roba la
-      // cámara) → aviso + vuelta a SIMULACIÓN (el visor no queda congelado).
+      // cámara) → overlay §E «SE PERDIÓ LA CÁMARA» sin cambio de modo (el
+      // visor no queda congelado; el reintento revive el stream).
       const track = stream.getVideoTracks()[0];
       if (track) {
         track.onended = () => {
           if (cancelado) return;
-          notificar("warn", "SE PERDIÓ LA CÁMARA", "El stream se cortó. VOLVIENDO A SIMULACIÓN.");
-          setFuente("SIMULACION");
+          // §E (SPEC-camara-funcional): stream perdido → overlay «SE PERDIÓ
+          // LA CÁMARA» SIN cambio de modo (el visor no queda congelado; el
+          // reintento revive el stream).
+          setCamEstado("no-disponible");
+          setAvisoCamara("perdido");
         };
       }
       // F-FLASH v3: botón habilitado SIEMPRE con cámara real (la verdad del
@@ -1110,10 +1193,11 @@ export function ScanView() {
       streamRef.current = null;
       setFramePendiente(null);
       setCamEstado("iniciando");
+      setAvisoCamara(null); // §E: el aviso NO sobrevive al ciclo de arranque
       procesandoRef.current = false;
       cooldownRef.current = 0;
     };
-  }, [fuente]);
+  }, [fuente, reintentoCamara]);
 
   /** Re-asigna el stream al <video> (lab L1255-1261) por si el elemento se
    *  remontó (cambio de vista ida/vuelta manteniendo la fuente viva). */
@@ -1207,6 +1291,23 @@ export function ScanView() {
       notificar("warn", "LINTERNA NO CONTROLADA", TORCH_HINT);
     }
   }, [camEstado, torchOn, ponerLinterna, notificar]);
+
+  /** §B (SPEC-camara-funcional): botón ámbar = CAPTURA AUTOMÁTICA (paridad
+   *  con el lab CameraView L2350-2382): en CÁMARA alterna el MISMO autoArmado
+   *  del botón inferior «Auto» (quedan sincronizados — mismo useState);
+   *  en SIMULACIÓN/IMPORTAR el tap NO se queda mudo: avisa que la función
+   *  vive con la cámara viva. */
+  const alternarAutoHUD = useCallback(() => {
+    if (!modoCamara) {
+      notificar(
+        "warn",
+        "CAPTURA AUTOMÁTICA EN CÁMARA",
+        "La captura automática funciona con la cámara viva. Cambia al modo AUTO (cámara).",
+      );
+      return;
+    }
+    setAutoArmado((v) => !v);
+  }, [modoCamara, notificar]);
 
   /* ── Disparo por plataforma (lab onShutter L902-925) ──────────────── */
 
@@ -1323,6 +1424,28 @@ export function ScanView() {
 
   /* ── Render ──────────────────────────────────────────────────────────── */
 
+  // §4: label del modo ACTIVO para la fila de estado (data-driven).
+  const labelModo =
+    fuente === "CAMARA" ? "CÁMARA" : fuente === "ARCHIVO" ? "IMPORTAR" : "SIMULACIÓN";
+
+  // §8: obturador Ø72 con icono de DOCUMENTO (el mock sustituye el círculo
+  // liso — es un escáner de actas). MISMO disparo existente por plataforma.
+  const obturador = (
+    <button
+      type="button"
+      aria-label="Escanear acta"
+      onClick={alDisparar}
+      disabled={procesando}
+      className={`w-[72px] h-[72px] rounded-full border-[2.5px] border-white flex items-center justify-center active:scale-95 transition ${
+        modoCamara && scoreAlto ? "shadow-[0_0_24px_-4px_rgba(11,242,130,0.8)]" : ""
+      } ${procesando ? "opacity-50" : ""}`}
+    >
+      <span className="w-[56px] h-[56px] rounded-full border border-[rgba(20,46,37,0.9)] bg-[rgba(16,43,34,0.35)] flex items-center justify-center">
+        <FileDocIcon className="w-[30px] h-[30px] text-white" />
+      </span>
+    </button>
+  );
+
   return (
     <div className="flex-1 flex flex-col bg-bg pt-safe">
       {/* Inputs ocultos: IMPORTAR (galería) + cámara nativa iOS (capture).
@@ -1348,20 +1471,201 @@ export function ScanView() {
         onChange={alElegirFotoCamara}
       />
 
-      {/* Marco tipo visor (mismo marco + corner brackets en TODAS las fuentes) */}
-      <div className="flex-1 min-h-0 px-4 pt-4 pb-2 flex">
+      {/* §5 VISOR — full-bleed `--visor-bg` (#030504) ocupando todo el alto
+          entre la top bar y la fila de estado (SPEC-e14-cyber-neon-captura
+          §3): limpio, SIN corner brackets y SIN retícula fuera de CÁMARA
+          (el mock no los tiene; «ESPERANDO CAPTURA · MODO SIMULACIÓN»
+          desaparece — la info de modo vive en la fila de estado §4). En
+          modo CÁMARA se conservan TODOS los overlays funcionales actuales,
+          re-vestidos a los tokens neón (§5 de la spec). */}
+      <div className="flex-1 min-h-0 flex">
         <div
           ref={visorRef}
-          className="relative flex-1 rounded-xl border border-line bg-surface-1 flex items-center justify-center overflow-hidden"
+          className="relative flex-1 bg-visor-bg flex items-center justify-center overflow-hidden"
         >
-          {/* Corner brackets (2px, 24px) — el marco existente de e14 (el
-              video vive DENTRO, spec §7); por encima de la máscara del quad. */}
-          <div className="absolute inset-3 pointer-events-none z-30" aria-hidden>
-            <div className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-ok-tint" />
-            <div className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-ok-tint" />
-            <div className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-ok-tint" />
-            <div className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-ok-tint" />
+          {/* §1+§2 Fila HUD superior flotando sobre el visor (todos los
+              modos, como en el mock): pill de modos a la izquierda + botón
+              HUD ámbar y menú ⋮ a la derecha. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-3 px-4 py-2">
+            {/* §1 Pill de modos — REEMPLAZA la fila de chips de fuente con la
+                MISMA acción de cambio de modo (SIMULACIÓN→CÁMARA→IMPORTAR,
+                con sus fallbacks). El chip BLANCO SIEMPRE marca el modo
+                activo (data-driven del store; prohibido hardcodear). */}
+            <div
+              role="group"
+              aria-label="Fuente de captura"
+              className="pointer-events-auto h-[40px] rounded-full bg-[#0C1018]/90 border border-white/10 px-2 flex items-center gap-2.5 backdrop-blur-sm"
+            >
+              {/* IA → SIMULACIÓN */}
+              <button
+                type="button"
+                aria-pressed={fuente === "SIMULACION"}
+                aria-label="Modo simulación (IA)"
+                onClick={() => setFuente("SIMULACION")}
+                className="flex items-center rounded-[8px] transition-transform active:scale-95"
+              >
+                {fuente === "SIMULACION" ? (
+                  <span className="h-[28px] px-3 rounded-[8px] bg-white text-black text-[11px] font-bold tracking-[0.08em] flex items-center">
+                    IA
+                  </span>
+                ) : (
+                  <span className="px-1 text-white font-bold text-[11px] tracking-[0.08em]">
+                    IA
+                  </span>
+                )}
+              </button>
+              {/* cuadrícula → IMPORTAR (abre el picker real) */}
+              <button
+                type="button"
+                aria-pressed={fuente === "ARCHIVO"}
+                aria-label="Importar imagen"
+                onClick={() => inputRef.current?.click()}
+                className="flex items-center rounded-[8px] transition-transform active:scale-95"
+              >
+                {fuente === "ARCHIVO" ? (
+                  <span className="h-[28px] w-[34px] rounded-[8px] bg-white flex items-center justify-center">
+                    <GridIcon className="w-[14px] text-black" />
+                  </span>
+                ) : (
+                  <span className="px-0.5 flex items-center justify-center">
+                    <GridIcon className="w-[14px] text-white" />
+                  </span>
+                )}
+              </button>
+              {/* punto azul del pill (decorativo, como el mock) */}
+              <span className="w-2 h-2 rounded-full bg-hud-blue" aria-hidden />
+              {/* AUTO → CÁMARA */}
+              <button
+                type="button"
+                aria-pressed={fuente === "CAMARA"}
+                aria-label="Modo cámara (AUTO)"
+                onClick={() => setFuente("CAMARA")}
+                className="flex items-center rounded-[8px] transition-transform active:scale-95"
+              >
+                {fuente === "CAMARA" ? (
+                  <span className="h-[28px] px-3 rounded-[8px] bg-white text-black text-[11px] font-bold tracking-[0.08em] flex items-center">
+                    AUTO
+                  </span>
+                ) : (
+                  <span className="px-1 text-white font-bold text-[11px] tracking-[0.08em]">
+                    AUTO
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* §B (SPEC-camara-funcional): HUD ámbar = CAPTURA AUTOMÁTICA
+                (paridad con el lab): en CÁMARA alterna el MISMO estado del
+                botón inferior «Auto» — ON = mock ámbar + glow · OFF = blanco
+                tenue sin glow. En SIM/IMPORT se ve como el mock y el tap
+                avisa (ningún control mudo). */}
+            <div className="pointer-events-auto flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Captura automática"
+                aria-pressed={modoCamara ? autoArmado : undefined}
+                title={
+                  modoCamara
+                    ? "Captura automática (dispara sola con el acta quieta y nítida)"
+                    : "Captura automática (disponible en modo cámara)"
+                }
+                onClick={alternarAutoHUD}
+                className={
+                  modoCamara && !autoArmado
+                    ? "w-[44px] h-[44px] rounded-full border-2 border-white/25 flex items-center justify-center transition-transform active:scale-95"
+                    : "w-[44px] h-[44px] rounded-full border-2 border-amber-hud shadow-[0_0_12px_rgba(232,200,74,0.35)] flex items-center justify-center transition-transform active:scale-95"
+                }
+              >
+                <FocusFrameIcon
+                  className={`w-[18px] ${modoCamara && !autoArmado ? "text-white/60" : "text-amber-hud"}`}
+                />
+              </button>
+              {/* §C (SPEC-camara-funcional): menú ⋮ FUNCIONAL — abre/cierra
+                  con el botón, el fondo o Escape; filas según modo. */}
+              <button
+                type="button"
+                aria-label="Más opciones"
+                aria-haspopup="menu"
+                aria-expanded={menuAbierto}
+                onClick={() => setMenuAbierto((v) => !v)}
+                className="w-10 h-10 flex items-center justify-center text-[#C7CEDA] text-[20px] font-bold leading-none"
+              >
+                ⋮
+              </button>
+            </div>
           </div>
+
+          {/* §C (SPEC-camara-funcional) — MENÚ ⋮ (paridad con el lab
+              L2383-2392 + L2878-2911, vestido neón): fondo clickeable a
+              pantalla del visor que cierra; panel anclado bajo el HUD
+              derecho (right-3 top-[60px]) con filas según modo. Entrada:
+              150 ms opacidad + scale 0.97→1 en CSS puro. */}
+          {menuAbierto && (
+            <>
+              <button
+                type="button"
+                aria-label="Cerrar menú"
+                onClick={() => setMenuAbierto(false)}
+                className="absolute inset-0 z-50 cursor-default"
+              />
+              <div
+                role="menu"
+                aria-label="Opciones de escaneo"
+                className={`absolute right-3 top-[60px] z-50 w-64 origin-top-right rounded-2xl border border-white/10 bg-[#0C1018]/95 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-xl divide-y divide-white/[0.08] transition-[opacity,transform] duration-150 ${
+                  menuMontado ? "opacity-100 scale-100" : "opacity-0 scale-[0.97]"
+                }`}
+              >
+                {modoCamara && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setAutoArmado((v) => !v)}
+                    className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                  >
+                    <ScanFrameIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                    <span className="text-[13px] font-medium text-white">
+                      Captura automática
+                    </span>
+                    <span
+                      className={`ml-auto text-[13px] font-semibold ${
+                        autoArmado ? "text-ok-tint" : "text-white"
+                      }`}
+                    >
+                      {autoArmado ? "Sí" : "No"}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuAbierto(false);
+                    setFuente("CAMARA");
+                  }}
+                  className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                >
+                  <CameraNavIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                  <span className="text-[13px] font-medium text-white">
+                    Escanear con cámara
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuAbierto(false);
+                    inputRef.current?.click();
+                  }}
+                  className="flex w-full items-center gap-3 min-h-[44px] px-4 active:bg-white/10"
+                >
+                  <FolderImportIcon className="w-[18px] h-[18px] text-[#C7CEDA]" />
+                  <span className="text-[13px] font-medium text-white">
+                    Importar desde galería
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
 
           {modoCamara ? (
             <>
@@ -1380,9 +1684,49 @@ export function ScanView() {
               {camEstado === "iniciando" && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-bg/60">
                   <span className="h-6 w-6 rounded-full border-2 border-ok-tint/30 border-t-ok-tint animate-spin" aria-hidden />
-                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint">
+                  <span className="text-[10px] font-bold tracking-[0.2em] text-white/60">
                     INICIANDO CÁMARA…
                   </span>
+                </div>
+              )}
+
+              {/* §E (SPEC-camara-funcional): aviso de cámara con REINTENTO —
+                  paridad con el aviso B2 del lab. La app PERMANECE en CÁMARA;
+                  [ACTIVAR CÁMARA] re-ejecuta el arranque (spinner visible),
+                  [VOLVER A SIMULACIÓN] regresa al modo SIM. */}
+              {avisoCamara && camEstado !== "viva" && (
+                <div className="absolute inset-x-4 top-[64px] z-40 rounded-2xl border border-white/10 bg-[#0C1018]/95 p-4 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md">
+                  <p className="text-[15px] font-bold text-white">
+                    {avisoCamara === "denied" ? "SIN ACCESO A LA CÁMARA" : "SE PERDIÓ LA CÁMARA"}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-snug text-white/70">
+                    {avisoCamara === "denied"
+                      ? "Permiso denegado o cámara ocupada. Toca el candado 🔒 en la barra de direcciones › Permisos › Cámara › Permitir, o cierra otra app que use la cámara."
+                      : "El stream se cortó (permiso revocado o otra app tomó la cámara)."}
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvisoCamara(null);
+                        setCamEstado("iniciando");
+                        setReintentoCamara((n) => n + 1); // re-dispara el efecto
+                      }}
+                      className="h-9 rounded-full px-4 text-[12px] font-bold text-black bg-ok-tint transition-transform active:scale-95"
+                    >
+                      ACTIVAR CÁMARA
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvisoCamara(null);
+                        setFuente("SIMULACION");
+                      }}
+                      className="h-9 rounded-full px-4 text-[12px] font-bold text-white/80 bg-white/10 ring-1 ring-inset ring-white/15 transition-transform active:scale-95"
+                    >
+                      VOLVER A SIMULACIÓN
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1426,38 +1770,41 @@ export function ScanView() {
               )}
 
               {/* Pill "BUSCANDO ACTA…" (lab L1737-1753): superior centrada
-                  mientras corners === null; desaparece al detectar. */}
+                  mientras corners === null; desaparece al detectar. Baja a
+                  top-[72px] para no chocar con la fila HUD del visor (§1/§2). */}
               {buscando && !procesando && (
-                <div className="pointer-events-none absolute inset-x-0 top-5 z-30 flex justify-center px-6">
-                  <div className="flex items-center gap-2 rounded-full bg-black/60 px-3.5 py-1.5 backdrop-blur-sm">
+                <div className="pointer-events-none absolute inset-x-0 top-[72px] z-30 flex justify-center px-6">
+                  <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3.5 py-1.5 backdrop-blur-sm">
                     <span
                       className="h-3.5 w-3.5 rounded-full border-2 border-ok-tint border-t-transparent animate-spin"
                       aria-hidden
                     />
-                    <p className="text-[12px] font-medium text-white/85">BUSCANDO ACTA…</p>
+                    <p className="text-[11px] font-bold tracking-[0.08em] text-white/85">BUSCANDO ACTA…</p>
                   </div>
                 </div>
               )}
 
-              {/* HUD (§7 rev.3): CALIDAD % + estado de detección + pill IA·AUTO */}
+              {/* HUD (§7 rev.3): CALIDAD % + estado de detección + pill IA·AUTO
+                  — posición y función intactas; re-vestidos a los tokens neón
+                  (cápsulas con borde white/10, tipografía bold mono). */}
               {camaraViva && !procesando && (
                 <>
                   <div
-                    className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full bg-black/55 px-2.5 py-1.5 backdrop-blur-sm"
+                    className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-white/10 bg-black/55 px-2.5 py-1.5 backdrop-blur-sm"
                     role="status"
                     aria-label={`Calidad de encuadre ${scorePct ?? 0} por ciento`}
                   >
                     <span
-                      className={`font-data text-[10px] font-semibold tabular-nums ${
+                      className={`text-[10px] font-bold tracking-[0.12em] tabular-nums ${
                         scoreAlto ? "text-ok-tint" : "text-white/85"
                       }`}
                     >
                       CALIDAD {scorePct !== null ? `${scorePct}%` : "--%"}
                     </span>
                   </div>
-                  <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-full bg-black/55 px-2.5 py-1.5 backdrop-blur-sm">
+                  <div className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-full border border-white/10 bg-black/55 px-2.5 py-1.5 backdrop-blur-sm">
                     <span
-                      className={`font-data text-[10px] font-semibold ${
+                      className={`text-[10px] font-bold tracking-[0.12em] ${
                         live.corners ? "text-ok-tint" : "text-white/60"
                       }`}
                     >
@@ -1466,14 +1813,14 @@ export function ScanView() {
                   </div>
                   {/* Pill IA · AUTO (lab L1553-1566) — punto pulsante verde
                       ok-tint + label del modo de disparo. */}
-                  <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1.5 backdrop-blur-sm">
+                  <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/55 px-2.5 py-1.5 backdrop-blur-sm">
                     <span
                       className={`h-1.5 w-1.5 rounded-full bg-ok-tint ${
                         !scoreAlto ? "animate-pulse-sync" : ""
                       }`}
                       aria-hidden
                     />
-                    <span className="font-data text-[10px] font-semibold tracking-wider text-white/90">
+                    <span className="text-[10px] font-bold tracking-[0.12em] text-white/90">
                       IA · {autoArmado ? "AUTO" : "MANUAL"}
                     </span>
                   </div>
@@ -1481,12 +1828,12 @@ export function ScanView() {
               )}
 
               {/* Overlay "armado" (lab L1802): pill centrada cuando AUTO está
-                  armado y el score supera el umbral del disparo. */}
+                  armado y el score supera el umbral del disparo (cápsula). */}
               {camaraViva && autoArmado && scoreAlto && !procesando && (
                 <div className="pointer-events-none absolute inset-x-0 top-[42%] z-30 flex justify-center px-6">
-                  <div className="flex items-center gap-2.5 rounded-[20px] bg-black/75 px-4 py-2.5 shadow-[0_4px_12px_rgba(0,0,0,0.3)] backdrop-blur-sm">
+                  <div className="flex items-center gap-2.5 rounded-full bg-black/75 border border-white/10 px-4 py-2.5 shadow-[0_4px_12px_rgba(0,0,0,0.3)] backdrop-blur-sm">
                     <span className="h-2 w-2 rounded-full bg-ok-tint" aria-hidden />
-                    <p className="text-[13px] font-medium text-white">
+                    <p className="text-[13px] font-bold text-white">
                       MANTÉN INMÓVIL EL ACTA…
                     </p>
                   </div>
@@ -1504,8 +1851,8 @@ export function ScanView() {
                     className="h-10 w-10 rounded-full border-[3px] border-white/15 border-t-ok-tint animate-spin"
                     aria-hidden
                   />
-                  <p className="text-[13px] font-medium text-white">CAPTURANDO…</p>
-                  <p className="font-data text-[10px] tracking-[0.2em] text-white/55">
+                  <p className="text-[13px] font-bold text-white">CAPTURANDO…</p>
+                  <p className="text-[10px] font-bold tracking-[0.2em] text-white/55">
                     CAPTURA RECIBIDA · PASANDO A ANÁLISIS
                   </p>
                 </div>
@@ -1520,222 +1867,134 @@ export function ScanView() {
                 />
               )}
             </>
-          ) : (
-            /* Retícula central (SIMULACIÓN/ARCHIVO — exacto a L2) */
-            <div className="flex flex-col items-center gap-3 select-none" aria-hidden>
-              <div className="relative w-16 h-16">
-                <div className="absolute inset-x-0 top-1/2 h-px bg-outline-dim" />
-                <div className="absolute inset-y-0 left-1/2 w-px bg-outline-dim" />
-                <div className="absolute inset-[22px] border border-outline-dim rounded-sm" />
-              </div>
-              <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint">
-                {fuente === "ARCHIVO"
-                  ? "ESPERANDO IMAGEN · IMPORTAR ARCHIVO"
-                  : "ESPERANDO CAPTURA · MODO SIMULACIÓN"}
-              </span>
-            </div>
-          )}
+          ) : null /* SIMULACIÓN/ARCHIVO: visor limpio 1:1 al mock (§5) */}
         </div>
       </div>
 
-      {/* Botón disparo: en CÁMARA la fila es [FLASH | shutter 72px | AUTO]
-          (lab bottom bar L1939-2034, re-vestida); en SIM/ARCHIVO exacto a L2. */}
-      {modoCamara ? (
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-4">
-          {/* FLASH — F-FLASH v3: SIEMPRE activo con cámara (la verdad se
-              descubre al pulsar); sin stream → hint. */}
-          <div className="flex justify-start pl-1">
-            <button
-              type="button"
-              aria-pressed={torchOn}
-              aria-label={
-                torchOn
-                  ? "Apagar la linterna"
-                  : torchDisponible
-                    ? "Encender la linterna"
-                    : "Linterna — toca para ver el motivo"
-              }
-              onClick={() => void alternarLinterna()}
-              className={`flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg border transition-colors active:scale-95 ${
-                torchOn
-                  ? "border-warn/40 bg-warn/10 text-warn"
-                  : "border-line text-ink-faint hover:bg-hover"
-              }`}
-            >
-              <FlashIcon className="w-4 h-4" />
-              <span className="label-caps !text-[9px]">FLASH</span>
-            </button>
-          </div>
+      {/* §4/§A (SPEC-camara-funcional) Fila de estado — entre visor y chips,
+          sobre fondo de página (sin cápsula): punto + label del modo ACTIVO
+          (data-driven) CENTRADO — «ISO: 1600» ELIMINADO y la fila pasa de
+          justify-between a justify-center (petición explícita del dueño). */}
+      <div className="flex items-center justify-center px-4 h-[24px] shrink-0">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-ok-tint" aria-hidden />
+          <span className="text-[10px] font-bold tracking-[0.14em] text-[#C7CEDA]">
+            {labelModo}
+          </span>
+        </span>
+      </div>
 
+      {/* §5 Chips de calidad — leyenda DECORATIVA del gate (SPEC §7): no
+          interactivos; scores ilustrativos en brackets (aria-hidden) y
+          anillo colgante medio solapado al borde inferior de cada chip. */}
+      <div className="flex justify-center gap-2 px-4 py-2 shrink-0">
+        {NIVELES_CALIDAD.map(({ id, label, score, chip, dot, anillo }) => (
+          <div key={id} className="flex flex-col items-center">
+            <div
+              className={`h-[30px] px-3 rounded-[10px] border flex items-center gap-1.5 text-[9.5px] font-bold tracking-[0.10em] ${chip}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden />
+              {label}
+              <span className="tabular-nums" aria-hidden>[{score}]</span>
+            </div>
+            <span
+              className={`w-2.5 h-2.5 rounded-full border-2 ${anillo} bg-visor-bg -mt-[5px]`}
+              aria-hidden
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* §6 Fila de disparo — en CÁMARA conserva los CONTROLES FUNCIONALES
+          existentes re-vestidos ([FLASH(linterna real) | obturador | AUTO
+          (armado)]); en SIMULACIÓN/ARCHIVO es 1:1 al mock: [Importar |
+          obturador | Flash decorativo]. MISMA lógica de disparo por
+          plataforma (~L1211+), intocada. */}
+      {modoCamara ? (
+        <div className="flex items-center justify-center gap-[52px] pb-4 shrink-0">
+          {/* FLASH — F-FLASH v3: SIEMPRE activo con cámara (la verdad se
+              descubre al pulsar); sin stream → hint. Icono rayo del mock. */}
           <button
             type="button"
-            aria-label="Escanear acta"
-            onClick={alDisparar}
-            disabled={procesando}
-            className={`w-[72px] h-[72px] rounded-full bg-white ring-4 transition-transform flex items-center justify-center active:scale-95 ${
-              scoreAlto
-                ? "ring-ok-tint shadow-[0_0_24px_-4px_rgba(63,229,108,0.8)]"
-                : "ring-ok-tint/50 shadow-[0_0_24px_-4px_rgba(63,229,108,0.5)]"
-            } ${procesando ? "opacity-50" : ""}`}
+            aria-pressed={torchOn}
+            aria-label={
+              torchOn
+                ? "Apagar la linterna"
+                : torchDisponible
+                  ? "Encender la linterna"
+                  : "Linterna — toca para ver el motivo"
+            }
+            onClick={() => void alternarLinterna()}
+            className={`flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 ${
+              torchOn ? "text-amber-hud" : "text-white"
+            }`}
           >
-            <span className="w-[58px] h-[58px] rounded-full border-2 border-neutral-300" aria-hidden />
+            <BoltIcon className="w-[24px] h-[24px]" />
+            <span
+              className={`text-[10px] font-bold ${torchOn ? "text-amber-hud" : "text-[#C7CEDA]"}`}
+            >
+              Flash
+            </span>
           </button>
+
+          {obturador}
 
           {/* AUTO (D22/D24: default OFF — el gate fino vive en el core). */}
-          <div className="flex justify-end pr-1">
-            <button
-              type="button"
-              aria-pressed={autoArmado}
-              aria-label={`Auto-captura: ${autoArmado ? "armada" : "desactivada"}`}
-              title="Auto-captura (dispara sola con el acta quieta y nítida)"
-              onClick={() => setAutoArmado((v) => !v)}
-              className={`flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg border transition-colors active:scale-95 ${
-                autoArmado
-                  ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
-                  : "border-line text-ink-faint hover:bg-hover"
-              }`}
-            >
-              <ScanFrameIcon className="w-4 h-4" />
-              <span className="label-caps !text-[9px]">AUTO</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex justify-center py-4">
           <button
             type="button"
-            aria-label="Escanear acta"
-            onClick={() => dispararEscaneo()}
-            className="w-[72px] h-[72px] rounded-full bg-white ring-4 ring-ok-tint/50 shadow-[0_0_24px_-4px_rgba(63,229,108,0.5)] active:scale-95 transition-transform flex items-center justify-center"
+            aria-pressed={autoArmado}
+            aria-label={`Auto-captura: ${autoArmado ? "armada" : "desactivada"}`}
+            title="Auto-captura (dispara sola con el acta quieta y nítida)"
+            onClick={() => setAutoArmado((v) => !v)}
+            className={`flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 ${
+              autoArmado ? "text-ok-tint" : "text-white"
+            }`}
           >
-            <span className="w-[58px] h-[58px] rounded-full border-2 border-neutral-300" aria-hidden />
+            <ScanFrameIcon className="w-[24px] h-[24px]" />
+            <span
+              className={`text-[10px] font-bold ${autoArmado ? "text-ok-tint" : "text-[#C7CEDA]"}`}
+            >
+              Auto
+            </span>
           </button>
         </div>
-      )}
-
-      {/* IMPORTAR IMAGEN — REAL en L2 (oculto en CÁMARA: el visor ES la
-          fuente; IMPORTAR sigue accesible en el chip de fuente) */}
-      {fuente !== "CAMARA" && (
-        <div className="px-4 pb-3 flex justify-center">
+      ) : (
+        <div className="flex items-center justify-center gap-[52px] pb-4 shrink-0">
+          {/* Importar (izquierda) — MISMA función existente: abre el file
+              picker (input → setArchivoPendiente → análisis). */}
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-outline-dim text-ink-dim hover:bg-hover active:scale-95 transition-all"
+            aria-label="Importar imagen"
+            className="flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 text-white"
           >
-            <ImportIcon className="w-4 h-4" />
-            <span className="label-caps !text-[10px]">IMPORTAR IMAGEN</span>
+            <FolderImportIcon className="w-[26px] h-[26px]" />
+            <span className="text-[10px] font-bold text-[#C7CEDA]">Importar</span>
+          </button>
+
+          {obturador}
+
+          {/* §D (SPEC-camara-funcional): Flash con feedback honesto — la
+              linterna REAL vive en el modo CÁMARA (F-FLASH v3, botón de la
+              fila superior); aquí el tap avisa en vez de quedarse mudo.
+              Mismo visual exacto (BoltIcon 24px + label «Flash»). */}
+          <button
+            type="button"
+            aria-label="Flash (disponible en modo cámara)"
+            onClick={() =>
+              notificar(
+                "warn",
+                "LINTERNA EN CÁMARA",
+                "La linterna se controla con la cámara viva. Cambia al modo AUTO (cámara).",
+              )
+            }
+            className="flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 text-white"
+          >
+            <BoltIcon className="w-[24px] h-[24px]" />
+            <span className="text-[10px] font-bold text-[#C7CEDA]">Flash</span>
           </button>
         </div>
       )}
-
-      {/* Fila de chips de FUENTE (L2 §7) — encima del panel de simulación */}
-      <div className="px-4 pb-2">
-        <div className="flex flex-wrap gap-1.5">
-          {FUENTES.map(({ valor, label }) => {
-            const activo = fuente === valor;
-            return (
-              <button
-                key={valor}
-                type="button"
-                aria-pressed={activo}
-                onClick={() => {
-                  if (valor === "CAMARA") {
-                    // L3: activa el visor de cámara real (con fallback
-                    // automático a SIMULACIÓN si no hay acceso).
-                    setFuente("CAMARA");
-                    return;
-                  }
-                  if (valor === "ARCHIVO") {
-                    inputRef.current?.click();
-                    return;
-                  }
-                  setFuente("SIMULACION");
-                }}
-                className={`label-caps !text-[9px] px-2.5 py-1.5 rounded border transition-colors ${
-                  activo
-                    ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
-                    : "border-line text-ink-faint hover:bg-hover"
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Panel de simulación — discreto: border-line + tint 10%.
-          En fuente !== SIMULACIÓN muestra el estado de la fuente + IMPORTAR.
-          D35 (F1.4): los chips de forzado ÓPTIMA/ADVERTENCIA/RECHAZADA se
-          ELIMINARON — SIMULACIÓN es un escaneo REAL (determinista) del acta
-          E-14 incluida; solo queda la línea estática + el toggle offline. */}
-      <div className="px-4 pb-4">
-        <div className="rounded-lg border border-line bg-surface-1/60 px-2.5 py-2">
-          {fuente === "SIMULACION" ? (
-            <>
-              <span className="font-data text-[8px] tracking-[0.25em] text-ink-faint uppercase block mb-1.5">
-                Simulación
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-data text-[9px] tracking-wide text-ok-tint">
-                  IMAGEN REAL INCLUIDA · ACTA E-14 (KIT 745 — CONSULADO FRANKFURT)
-                </span>
-                <button
-                  type="button"
-                  onClick={alternarConexion}
-                  aria-pressed={!online}
-                  className={`label-caps !text-[9px] px-2 py-1 rounded border transition-colors ${
-                    online
-                      ? "border-line text-ink-faint hover:bg-hover"
-                      : "border-warn/40 bg-warn/10 text-warn"
-                  }`}
-                >
-                  {online ? "PASAR A OFFLINE" : "VOLVER EN LÍNEA"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="font-data text-[8px] tracking-[0.25em] text-ink-faint uppercase block mb-1.5">
-                Fuente de captura
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-data text-[9px] tracking-wide text-ok-tint">
-                  {fuente === "ARCHIVO"
-                    ? "IMPORTAR · LA IMAGEN SE ANALIZA AL ELEGIRLA"
-                    : camEstado === "viva"
-                      ? `CÁMARA · EN VIVO${autoArmado ? " — AUTO ARMADO" : " — DISPARO MANUAL"}`
-                      : camEstado === "iniciando"
-                        ? "CÁMARA · INICIANDO…"
-                        : "CÁMARA · NO DISPONIBLE"}
-                </span>
-                {fuente === "ARCHIVO" && (
-                  <button
-                    type="button"
-                    onClick={() => inputRef.current?.click()}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded border border-outline-dim text-ink-dim hover:bg-hover active:scale-95 transition-all"
-                  >
-                    <ImportIcon className="w-3.5 h-3.5" />
-                    <span className="label-caps !text-[9px]">IMPORTAR</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={alternarConexion}
-                  aria-pressed={!online}
-                  className={`label-caps !text-[9px] px-2 py-1 rounded border transition-colors ${
-                    online
-                      ? "border-line text-ink-faint hover:bg-hover"
-                      : "border-warn/40 bg-warn/10 text-warn"
-                  }`}
-                >
-                  {online ? "PASAR A OFFLINE" : "VOLVER EN LÍNEA"}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
