@@ -22,6 +22,10 @@ import {
   type EnhanceMode,
   type ScannerWorkerClient,
 } from "./detector-client";
+// PLAN B (B2/B3) — decodificación WebCodecs y realce WebGPU. Ambas con
+// fallback POR LLAMADA: cualquier fallo cae a la ruta actual intacta.
+import { decodeDataUrlToBitmap, webcodecsDecodeAvailable } from "./webcodecs-decode";
+import { enhanceViaWebGPU, unsharpViaWebGPU } from "./webgpu-enhance";
 
 export { warmUpScannerWorker, getScannerWorker } from "./detector-client";
 
@@ -253,23 +257,27 @@ export async function fileToCaptureDataUrl(file: File): Promise<string> {
 }
 
 /** Fuente de imagen para el pipeline: data URL o elemento YA decodificado
- *  (HTMLImageElement/HTMLCanvasElement). Pasar el elemento evita re-decodificar
- *  la foto de 12 MP en cada etapa de la captura (downscale→detect→quality).
- *  La ruta crítica pasa de 3 decodes a 1 (2 solo si hubo que re-escalar). */
-export type ImageSource = string | HTMLImageElement | HTMLCanvasElement;
+ *  (HTMLImageElement/HTMLCanvasElement/ImageBitmap). Pasar el elemento evita
+ *  re-decodificar la foto de 12 MP en cada etapa de la captura
+ *  (downscale→detect→quality). La ruta crítica pasa de 3 decodes a 1
+ *  (2 solo si hubo que re-escalar).
+ *  PLAN B (B2): ImageBitmap llega de la decodificación WebCodecs
+ *  (ImageDecoder — fuera del hilo principal, sin <img>). */
+export type ImageSource = string | HTMLImageElement | HTMLCanvasElement | ImageBitmap;
+
+/** Elemento ya decodificado consumible por drawImage/warp. */
+type DecodedSource = HTMLImageElement | HTMLCanvasElement | ImageBitmap;
 
 /** Decodifica solo si hace falta (string); el elemento pasa tal cual. */
-function ensureDecoded(
-  src: ImageSource
-): Promise<HTMLImageElement | HTMLCanvasElement> {
+function ensureDecoded(src: ImageSource): Promise<DecodedSource> {
   return typeof src === "string" ? loadImage(src) : Promise.resolve(src);
 }
 
-function sourceWidth(el: HTMLImageElement | HTMLCanvasElement): number {
+function sourceWidth(el: DecodedSource): number {
   return el instanceof HTMLImageElement ? el.naturalWidth || el.width : el.width;
 }
 
-function sourceHeight(el: HTMLImageElement | HTMLCanvasElement): number {
+function sourceHeight(el: DecodedSource): number {
   return el instanceof HTMLImageElement ? el.naturalHeight || el.height : el.height;
 }
 
@@ -639,12 +647,12 @@ function solveHomographyDstToSrc(
  * sin refine, sin shrink — aquí no hay refinado de ninguna clase.
  */
 function warpQuadToCanvas(
-  img: HTMLImageElement,
+  img: DecodedSource,
   quad: Quad,
   maxSize: number
 ): HTMLCanvasElement | null {
-  const sw = img.naturalWidth;
-  const sh = img.naturalHeight;
+  const sw = sourceWidth(img);
+  const sh = sourceHeight(img);
   if (!(sw > 0) || !(sh > 0)) return null;
 
   // Quad en píxeles de la fuente (orden TL, TR, BR, BL).
@@ -755,7 +763,7 @@ function warpQuadToCanvas(
 /** ÚLTIMO recurso del fallback: recorte bbox del quad + rotación (sin
  *  homografía). Solo si warpQuadToCanvas no pudo resolver el sistema. */
 async function cropQuad(
-  img: HTMLImageElement,
+  img: DecodedSource,
   quad: Quad,
   rotation: number,
   maxSize: number
@@ -822,6 +830,11 @@ export function applyFilterToCanvas(
 /**
  * Pipeline completo: rectifica (warp real) → rota → realza (modo real) →
  * devuelve processed + thumbnail. Fallback: recorte canvas + filtro local.
+ *
+ * PLAN B (B2): si la fuente es un data URL y WebCodecs está disponible, la
+ * decodificación va por ImageDecoder (fuera del hilo principal, EXIF
+ * aplicado — ver webcodecs-decode). Fallback POR LLAMADA al <img> clásico:
+ * cualquier fallo de la ruta moderna es invisible para el llamador.
  */
 export async function processImage(
   src: string,
@@ -830,9 +843,28 @@ export async function processImage(
   rotation = 0,
   opts?: ProcessOptions
 ): Promise<ProcessResult> {
-  const precise = await processImagePrecise(src, quad, filter, rotation, opts);
-  if (precise) return precise;
-  return processImageCanvas(src, quad, filter, rotation, opts);
+  let source: ImageSource = src;
+  let ownedBitmap: ImageBitmap | null = null;
+  if (typeof src === "string" && webcodecsDecodeAvailable()) {
+    const bm = await decodeDataUrlToBitmap(src).catch(() => null);
+    if (bm) {
+      source = bm;
+      ownedBitmap = bm;
+    }
+  }
+  try {
+    const precise = await processImagePrecise(source, quad, filter, rotation, opts);
+    if (precise) return precise; // el worker transfirió (y cerró) el bitmap
+    return await processImageCanvas(source, quad, filter, rotation, opts);
+  } finally {
+    if (ownedBitmap) {
+      try {
+        ownedBitmap.close(); // idempotente si ya fue transferido al worker
+      } catch {
+        /* ya cerrado */
+      }
+    }
+  }
 }
 
 /** Nº de esquinas firmes del refinado (fellBack[i]=true ⇒ esquina i cayó al
@@ -844,7 +876,7 @@ function solidCorners(fellBack: readonly boolean[] | null): number | null {
 
 /** Pipeline REAL vía DetectionWorker. null → el llamador usa su fallback. */
 async function processImagePrecise(
-  src: string,
+  src: ImageSource,
   quad: Quad,
   filter: PageFilter,
   rotation: number,
@@ -855,8 +887,8 @@ async function processImagePrecise(
   const ok = await client.waitReady();
   if (!ok) return null;
   try {
-    const img = await loadImage(src);
-    if (!img.naturalWidth || !img.naturalHeight) return null;
+    const img = await ensureDecoded(src);
+    if (!sourceWidth(img) || !sourceHeight(img)) return null;
 
     // 1) Warp: refinado sub-píxel (RANSAC) + shrink 3.5px + homografía
     //    INTER_CUBIC sobre la FOTO completa (la foto es la fuente de verdad).
@@ -871,9 +903,19 @@ async function processImagePrecise(
 
     // 3) Enhance: modo real del producto (modelo de sombras + constantes
     //    exactas). maxLongSide protege la memoria de data URLs en iOS.
+    //    PLAN B (B3): el modo «text» intenta PRIMERO la ruta WebGPU (puerto
+    //    exacto de enhanceToRgba); cualquier fallo → worker WASM (intacto).
     const mode = filterToEnhanceMode(filter);
     const maxLongSide = opts?.maxLongSide ?? PROCESSED_MAX_LONG_SIDE;
-    const enh = await client.enhance(rotated, mode, { maxLongSide });
+    const gpuEnh = await enhanceViaWebGPU(rotated, mode, { maxLongSide });
+    const enh = gpuEnh ?? (await client.enhance(rotated, mode, { maxLongSide }));
+    // PLAN B (QA) — ruta que sirvió el enhance de esta página (gpu|worker):
+    // solo telemetría local, no altera el pipeline.
+    if (typeof window !== "undefined") {
+      (window as unknown as { __lastEnhanceRoute?: string }).__lastEnhanceRoute = gpuEnh
+        ? "gpu"
+        : "worker";
+    }
 
     if (enh && enh.blob.size > 0) {
       let blob = enh.blob;
@@ -882,7 +924,12 @@ async function processImagePrecise(
       // constantes del producto (0.5/1.5, kernel 7).
       if (filter === "original" && opts?.unsharpOriginal === true) {
         try {
-          const canvas = applyUnsharpToCanvas(await blobToCanvas(blob));
+          // PLAN B (B3): unsharp en GPU primero; fallback al canvas local
+          // (applyUnsharpToCanvas) — mismo kernel 7/σ1.5 y constantes.
+          let canvas = await blobToCanvas(blob);
+          const gpu = await unsharpViaWebGPU(canvas);
+          if (gpu) canvas = gpu;
+          else applyUnsharpToCanvas(canvas);
           const reencoded = await new Promise<Blob | null>((resolve) =>
             canvas.toBlob((b) => resolve(b), "image/png")
           );
@@ -983,13 +1030,13 @@ function canvasToDataURL(
  *  3. Filtro con la MISMA matemática del motor (image-modes) + PNG (R-10).
  */
 async function processImageCanvas(
-  src: string,
+  src: ImageSource,
   quad: Quad,
   filter: PageFilter,
   rotation: number,
   opts?: ProcessOptions
 ): Promise<ProcessResult> {
-  const img = await loadImage(src);
+  const img = await ensureDecoded(src);
   const maxLongSide = opts?.maxLongSide ?? PROCESSED_MAX_LONG_SIDE;
   const warped = warpQuadToCanvas(img, quad, maxLongSide);
   const base =

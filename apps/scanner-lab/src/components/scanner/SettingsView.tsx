@@ -22,6 +22,19 @@ import { countWords } from "@jg-stevan/scanner-core/text-export";
 import { getScannerWorker } from "@jg-stevan/scanner-core/image-processor";
 import { PROCESSED_MAX_LONG_SIDE } from "@jg-stevan/scanner-core/image-processor";
 import { storageAvailable } from "@jg-stevan/scanner-core/page-store";
+// PLAN B (B4) — toggle experimental «Captura alta resolución (beta)»:
+// visible SOLO si ImageDecoder + WebGPU(adapter) + ≥8 GB + sensor > 4032 +
+// no iPhone/Safari. El estado vive en localStorage (el store no se toca).
+import {
+  EXPERIMENTAL_CAPTURE_CAP,
+  getRegisteredSensorProfile,
+  getTechCapabilities,
+  isHiResCandidate,
+  isHiResToggleOn,
+  setHiResToggle,
+  type TechCapabilities,
+} from "@jg-stevan/scanner-core/tech-capabilities";
+import type { SensorProfile } from "@jg-stevan/scanner-core/sensor-profiler";
 import {
   getPwaInstallState,
   promptInstall,
@@ -403,6 +416,12 @@ export default function SettingsView() {
           </SettingsRow>
         </SettingsGroup>
 
+        {/* PLAN B (B4) — sección Experimental: INVISIBLE salvo que el
+            dispositivo cumpla TODAS las condiciones (WebCodecs + WebGPU +
+            ≥8 GB + sensor > 4032 + no iPhone/Safari). Cero cambios visuales
+            fuera de aquí. */}
+        <ExperimentalSection />
+
         <SettingsGroup label="Acerca de" delay={0.2}>
           <SettingsRow title="Versión">
             <span className="shrink-0 text-[15px] text-[#8e8e93]">2.0.0</span>
@@ -763,3 +782,61 @@ function InstallSection() {
  * la app procesa y guarda SIEMPRE al máximo del lente (tope técnico único
  * 4032 px). Su hueco lo cubre la fila informativa estática
  * "Resolución de procesado" del grupo Procesamiento. */
+
+/** PLAN B (B4) — «Captura alta resolución (beta)».
+ *
+ * Toggle opt-in del experimento: con ON, la captura pide al ISP hasta
+ * 6000 px de lado mayor y baja por supersampling (UN paso, filtro de
+ * calidad) al export estándar de 4032 — LA pregunta del plan: ¿gana
+ * nitidez/ruido real frente a la captura nativa 4032?
+ *
+ * Visibilidad (regla 5, inmutable): SOLO si se cumplen TODAS —
+ * ImageDecoder && WebGPU(adapter) && deviceMemory ≥ 8 &&
+ * sensorProfile.nativeLongSide > 4032 && NO iPhone/Safari. El perfil del
+ * sensor se registra al abrir la cámara (sesión): si aún no se sondeó,
+ * esta sección directamente no se renderiza.
+ */
+function ExperimentalSection() {
+  const [caps, setCaps] = useState<TechCapabilities | null>(null);
+  const [profile, setProfile] = useState<SensorProfile | null>(null);
+  const [toggleOn, setToggleOn] = useState(false);
+
+  useEffect(() => {
+    void getTechCapabilities()
+      .then((c) => setCaps(c))
+      .catch(() => setCaps(null));
+    setProfile(getRegisteredSensorProfile());
+    setToggleOn(isHiResToggleOn());
+  }, []);
+
+  // B4: TODAS las condiciones o la sección NO existe (ni en el DOM).
+  const candidate = caps !== null && profile !== null && isHiResCandidate(caps, profile);
+  if (!candidate || !profile) return null;
+
+  const native = profile.nativeLongSide ?? 0;
+
+  return (
+    <SettingsGroup label="Experimental" delay={0.18}>
+      <SettingsRow
+        title="Captura alta resolución (beta)"
+        subtitle={`Sensor ${native} px · captura hasta ${EXPERIMENTAL_CAPTURE_CAP} px y baja por supersampling al export estándar (${PROCESSED_MAX_LONG_SIDE}) · en prueba: compara la nitidez y decide`}
+      >
+        <Switch
+          checked={toggleOn}
+          onCheckedChange={(v) => {
+            setHiResToggle(v);
+            setToggleOn(v);
+            toast(
+              v
+                ? `Captura experimental activa (hasta ${EXPERIMENTAL_CAPTURE_CAP} px → ${PROCESSED_MAX_LONG_SIDE})`
+                : "Captura estándar restaurada",
+              { duration: 2600 }
+            );
+          }}
+          aria-label="Captura alta resolución (beta)"
+          className={SWITCH_IOS}
+        />
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}

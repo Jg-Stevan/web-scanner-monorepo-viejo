@@ -4,6 +4,23 @@
 > Todos los cambios están verificados con `eslint`, `tsc --noEmit` y pruebas E2E en navegador (flujo completo: onboarding → biblioteca → cámara con detección OpenCV → captura manual y automática → editor con filtros → exportar PDF → persistencia IndexedDB), sin errores de consola.
 > Rama de trabajo local: `fix/camera-stabilizer-perf`.
 
+## 0-decimocuarto. PLAN B — Tecnologías modernas Android-first: WebCodecs + WebGPU + captura alta resolución experimental (rama `plan-b-tech-moderna`, PR DRAFT sin fusionar)
+
+**Qué es**: experimento opt-in compitiendo con el PLAN A (rama `plan-a-memoria-render`) — la sonda `__perfProbe` (§7) y el protocolo de QA del dueño son IDÉNTICOS en ambos para que la comparación sea válida. TODO feature-detected: sin las APIs nuevas la app es **idéntica a main** (demostrado con el flag QA `scannerlab-qa-empty-tech-caps`). Documentación completa (arquitectura, equivalencia WGSL, evidencia E2E): `apps/scanner-lab/docs/plan-b-tech-moderna.md`.
+
+**Cambios:**
+
+- **B1 — `tech-capabilities.ts` (NUEVO)**: detección por sesión de ImageDecoder/WebGPU(requestAdapter real, compartido)/deviceMemory/hardwareConcurrency/OffscreenCanvas-en-worker/iOS-Safari; `window.__techCaps` (getter). Registro del `SensorProfile` que publica CameraView (solo se CONSUME — sensor-profiler intacto) + toggle B4 en localStorage (el store NO se toca) + `buildHiResPhotoSettings` (pick de rangos idéntico al del profiler, objetivo 6000).
+- **B2 — `webcodecs-decode.ts` (NUEVO)**: Blob→ImageDecoder→ImageBitmap sin `<img>` ni canvas 2D en el hilo principal; lector EXIF propio (tag 0x0112) + transformación canónica (ImageDecoder NO aplica EXIF — correctitud de fotos rotadas); `supersampleBlobToStandardCap` §6 (>4032→4032 en UN paso `resizeQuality:'high'`). `processImage` decodifica strings vía B2 con fallback POR LLAMADA al `<img>`.
+- **B3 — `webgpu-enhance.ts` (NUEVO)**: «Texto claro» en compute shaders WGSL — puerto EXACTO de `enhanceToRgba("text")` (luma entera → mapa de sombras ≤800 px + close 25 → gains bilineales → percentil 0.95 por histograma atómico → LUT de image-modes → afilado edge-aware → rebuild de croma); unsharp separable (pesos de `gaussianKernel1D`); salida por `copyTextureToBuffer`→ImageData→PNG (sin render pass — universal). Fallback por llamada al worker WASM (intacto). `bw` NO portado (imagen integral + despeckle serial — documentado). Equivalencia medida: diff meanAbs 0.001 · pctGt2 0.02 % (worker≡CPU exacto).
+- **B4 — modo «Captura alta resolución (beta)»**: toggle en Ajustes›Experimental visible SOLO con ImageDecoder && WebGPU && deviceMemory≥8 && sensor>4032 && no iOS/Safari; con ON: photoSettings hasta 6000 (capas de defensa intactas) + supersampling UN paso al export estándar (4032 q0.95 intactos); blob ≤4032 pasa intacto; fallo → capa 2 clásica.
+- **§7 — `apps/scanner-lab/src/lib/perf-probe.ts` (NUEVO)**: `window.__perfProbe` con la API exacta (marks/mark/memory/longTasks/fpsSample/report); instrumentados capture_fired, editor_open, editor_first_render, filter_applied{ms,engine}, page_saved{bytes,pxLong}, save_done{ms,bytes}, export_start/export_end{type,ms,bytes} — solo llamadas mark(), cero cambios de lógica.
+- **QA local**: `__techTools` (caps/candidate/toggle/refresh/bench/compareText/exifSelfTest/supersampleTest/lastGpuError/lastHiRes) + `__lastEnhanceRoute` (gpu|worker del último enhance) + flags QA (caps vacías B5, overrides de caps/perfil para probar la UI).
+
+**Verificado**: tsc core+app y eslint 0 errores; E2E con cámara sintética + WebGPU SwiftShader: 8 eventos de la sonda en flujo real, `exifSelfTest` PASS (orientation 6 → rot90 CW por píxeles), `supersampleTest` 5000→4032 vía webcodecs, filtro Texto claro servido por GPU en el flujo real (`__lastEnhanceRoute:"gpu"`, VLM: papel blanco/texto nítido/sin halos), equivalencia compareText 0.001, unsharp OK, toggle B4 E2E (visible solo con condiciones; captura sin regresión con ON), B5 flag caps vacías = app idéntica a main; telemetrías v9/v11 intactas (`__displayMax` 4032, `__editorSource` preview-url, `__crashLog` 0); 0 líneas en `apps/digitalizador-e14`. Nota: `bun run e14:check` falla en main POR PREEXISTENTE (falta type declaration de `@/assets/acta-e14-real.jpg` — verificado con stash).
+
+---
+
 ## 0. FIX v3 — Calidad del editor WYSIWYG + presentación iOS + benchmark fuera (rama `fix/scanner-lab-editor-quality`)
 
 **Regla del propietario:** "guardar la captura en lo máximo del lente, sin ajustes por benchmark". Documentación completa del fix (plan, decisiones, evidencia de verificación): `apps/scanner-lab/docs/fix-editor-quality-v3.md`.

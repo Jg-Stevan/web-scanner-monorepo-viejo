@@ -68,6 +68,17 @@ import {
   profileSensor,
   type SensorProfile,
 } from "@jg-stevan/scanner-core/sensor-profiler";
+// PLAN B — tecnologías modernas Android-first (WebCodecs + WebGPU + captura
+// alta resolución experimental). Todo opt-in y conservador: ante cualquier
+// duda la app se comporta EXACTAMENTE como main.
+import {
+  buildHiResPhotoSettings,
+  getTechCapabilities,
+  isHiResCaptureActive,
+  registerSensorProfile,
+} from "@jg-stevan/scanner-core/tech-capabilities";
+import { supersampleBlobToStandardCap } from "@jg-stevan/scanner-core/webcodecs-decode";
+import { perfProbe } from "@/lib/perf-probe";
 
 type CameraStatus = "idle" | "live" | "synthetic" | "simulated";
 
@@ -694,7 +705,18 @@ export default function CameraView() {
     if (!track) return;
     void profileSensor(track).then((p) => {
       sensorProfileRef.current = p;
+      // PLAN B (B4): el perfil alimenta la visibilidad del toggle «Captura
+      // alta resolución (beta)» en Ajustes > Experimental (caps + sensor
+      // > 4032 + no iOS/Safari). Solo se CONSUME el SensorProfile.
+      registerSensorProfile(p);
     });
+  }, []);
+
+  // PLAN B (B1) — sondea las capacidades modernas (WebCodecs/WebGPU/memoria)
+  // una vez por sesión al montar la cámara. Sin red, try/catch total: si
+  // falla, caps vacías = comportamiento main.
+  useEffect(() => {
+    void getTechCapabilities();
   }, []);
 
   /** FIX v7 (7.2) — subida progresiva de resolución para la auto-captura:
@@ -1030,8 +1052,18 @@ export default function CameraView() {
       // EXCEPTO cuando el sensor excede el tope seguro (48/108 MP): el
       // F-SENSOR-PROFILER pide al ISP una foto dentro del tope EN la captura
       // (capa 1) y el blob del gigante jamás llega a decodificarse.
+      //
+      // PLAN B (B4) — modo experimental «Captura alta resolución (beta)»:
+      // con el toggle ON (y TODAS las condiciones cumplidas) el objetivo del
+      // pick sube a 6000 px con la MISMA lógica de rangos min/max/step — el
+      // blob resultante baja por supersampling §6 al export estándar (abajo).
       const profile = sensorProfileRef.current;
-      const settings = profile ? buildCappedPhotoSettings(profile) : undefined;
+      const hiRes = isHiResCaptureActive();
+      const settings = profile
+        ? hiRes
+          ? buildHiResPhotoSettings(profile)
+          : buildCappedPhotoSettings(profile)
+        : undefined;
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
         try {
           const blob = await Promise.race([
@@ -1066,6 +1098,16 @@ export default function CameraView() {
       if (res.blob) takePhotoBrokenRef.current = false;
       else if (res.timedOut) takePhotoBrokenRef.current = true;
       if (!res.blob) return { blob: null, timedOut: res.timedOut };
+      // PLAN B (B4/§6) — captura alta resolución: el blob (>4032, hasta 6000)
+      // baja por supersampling en UN PASO con filtro de calidad al export
+      // estándar (createImageBitmap resizeQuality 'high' — ver
+      // webcodecs-decode). Si el blob ya es ≤ 4032 (sensor que mintió su
+      // nativa o photoSettings ignorado) pasa INTACTO. Ante cualquier fallo
+      // → red de seguridad clásica (capa 2, intacta).
+      if (hiRes) {
+        const sup = await supersampleBlobToStandardCap(res.blob, PROCESSED_MAX_LONG_SIDE);
+        if (sup) return { blob: sup.blob, timedOut: false };
+      }
       // Capa 2 — red de seguridad post-decode (solo recorta si el blob
       // excede el tope; si no, el blob original pasa intacto).
       const clamped = await clampBlobToSafeCap(res.blob, profile?.safeCapPx ?? getSensorSafeCap());
@@ -1200,6 +1242,8 @@ export default function CameraView() {
     if (cooldownRef.current > Date.now()) return;
     loopRef.current?.notifyCaptured();
     cooldownRef.current = Date.now() + 1500;
+    // PLAN B (§7) — instrumentación de la sonda local (sin tocar lógica).
+    perfProbe.mark("capture_fired");
     // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
     // si estaba dormido — el disparo es interacción explícita).
     exitStandby();

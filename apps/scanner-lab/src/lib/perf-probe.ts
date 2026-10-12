@@ -1,0 +1,216 @@
+"use client";
+
+/**
+ * PLAN B (§7) — Sonda de rendimiento 100 % local.
+ *
+ * API EXACTA de la spec (comparabilidad con el PLAN A — el requisito más
+ * importante del encargo):
+ *
+ *   window.__perfProbe = {
+ *     marks: [],                    // {ev, ts, meta}
+ *     mark(ev, meta?)               // capture_fired | page_saved{bytes,pxLong} |
+ *                                   // editor_open | editor_first_render |
+ *                                   // filter_applied{ms} | save_done{ms,bytes} |
+ *                                   // export_start/export_end{type,ms,bytes}
+ *     memory()                      // {heapMB, limitMB, ts} de performance.memory
+ *     longTasks                     // PerformanceObserver('longtask'): count+totalMs
+ *     fpsSample(ms=3000)            // FPS durante interacción (pan/zoom editor)
+ *     report()                      // JSON resumen imprimible (console.table)
+ *   }
+ *
+ * Reglas: sin red, envuelta en try/catch para no romper producción si algo
+ * falla, instrumenta los eventos SIN tocar lógica (solo llamadas mark()).
+ */
+
+export interface PerfProbeMark {
+  ev: string;
+  ts: number;
+  meta?: Record<string, number | string | boolean | null>;
+}
+
+export interface PerfMemorySnapshot {
+  heapMB: number | null;
+  limitMB: number | null;
+  ts: number;
+}
+
+export interface PerfFpsSample {
+  fps: number;
+  frames: number;
+  durationMs: number;
+}
+
+export interface PerfProbeApi {
+  marks: PerfProbeMark[];
+  mark(ev: string, meta?: Record<string, number | string | boolean | null>): void;
+  memory(): PerfMemorySnapshot;
+  longTasks: { count: number; totalMs: number };
+  fpsSample(ms?: number): Promise<PerfFpsSample | null>;
+  report(): Record<string, unknown> | null;
+}
+
+/** Tope del ring de marcas (descarta la más vieja — memoria acotada). */
+const MAX_MARKS = 600;
+
+function makeProbe(): PerfProbeApi {
+  const marks: PerfProbeMark[] = [];
+  const longTasks = { count: 0, totalMs: 0 };
+
+  const probe: PerfProbeApi = {
+    marks,
+    longTasks,
+    mark(ev, meta) {
+      try {
+        if (typeof ev !== "string" || ev.length === 0) return;
+        marks.push({
+          ev,
+          ts: Math.round(performance.now()),
+          meta: meta === undefined ? undefined : { ...meta },
+        });
+        if (marks.length > MAX_MARKS) marks.splice(0, marks.length - MAX_MARKS);
+      } catch {
+        /* la sonda NUNCA rompe la app */
+      }
+    },
+    memory() {
+      try {
+        const perf = performance as Performance & {
+          memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+        };
+        const m = perf.memory;
+        if (!m || typeof m.usedJSHeapSize !== "number") {
+          return { heapMB: null, limitMB: null, ts: Date.now() };
+        }
+        return {
+          heapMB: +(m.usedJSHeapSize / 1048576).toFixed(1),
+          limitMB: +(m.jsHeapSizeLimit / 1048576).toFixed(1),
+          ts: Date.now(),
+        };
+      } catch {
+        return { heapMB: null, limitMB: null, ts: Date.now() };
+      }
+    },
+    fpsSample(ms = 3000) {
+      return new Promise<PerfFpsSample | null>((resolve) => {
+        try {
+          if (typeof requestAnimationFrame !== "function") {
+            resolve(null);
+            return;
+          }
+          const t0 = performance.now();
+          let frames = 0;
+          let raf = 0;
+          const deadline = t0 + Math.max(250, ms);
+          const tick = () => {
+            frames += 1;
+            const now = performance.now();
+            if (now >= deadline || frames > 100000) {
+              const durationMs = Math.round(now - t0);
+              resolve({
+                fps: Math.round((frames * 1000) / Math.max(1, durationMs)),
+                frames,
+                durationMs,
+              });
+              return;
+            }
+            raf = requestAnimationFrame(tick);
+          };
+          raf = requestAnimationFrame(tick);
+          // Seguro de vida: nunca colgar la promesa si rAF se congela.
+          window.setTimeout(() => {
+            cancelAnimationFrame(raf);
+            const durationMs = Math.round(performance.now() - t0);
+            resolve({
+              fps: Math.round((frames * 1000) / Math.max(1, durationMs)),
+              frames,
+              durationMs,
+            });
+          }, ms + 1500);
+        } catch {
+          resolve(null);
+        }
+      });
+    },
+    report() {
+      try {
+        const byEvent = new Map<
+          string,
+          { ev: string; count: number; lastMs: number | null; avgMs: number | null }
+        >();
+        for (const m of marks) {
+          const row =
+            byEvent.get(m.ev) ??
+            { ev: m.ev, count: 0, lastMs: null as number | null, avgMs: null as number | null };
+          row.count += 1;
+          const ms = typeof m.meta?.ms === "number" ? (m.meta.ms as number) : null;
+          if (ms !== null) {
+            row.lastMs = ms;
+            row.avgMs = row.avgMs === null ? ms : +((row.avgMs + ms) / 2).toFixed(1);
+          }
+          byEvent.set(m.ev, row);
+        }
+        const summary = {
+          generatedAt: new Date().toISOString(),
+          totalMarks: marks.length,
+          events: [...byEvent.values()],
+          memory: probe.memory(),
+          longTasks: { ...longTasks },
+          lastMarks: marks.slice(-12),
+        };
+        try {
+          console.table(summary.events);
+        } catch {
+          /* sin consola */
+        }
+        return summary;
+      } catch {
+        return null;
+      }
+    },
+  };
+  return probe;
+}
+
+/** Instancia única (los eventos se acumulan durante toda la sesión).
+ *  En SSR: sonda no-op — el módulo tiene «use client» pero Next lo evalúa
+ *  también en el servidor para el HTML inicial. */
+const noopProbe: PerfProbeApi = {
+  marks: [],
+  mark: () => undefined,
+  memory: () => ({ heapMB: null, limitMB: null, ts: 0 }),
+  longTasks: { count: 0, totalMs: 0 },
+  fpsSample: async () => null,
+  report: () => null,
+};
+
+export const perfProbe: PerfProbeApi =
+  typeof window !== "undefined" ? makeProbe() : noopProbe;
+
+declare global {
+  interface Window {
+    __perfProbe?: PerfProbeApi;
+  }
+}
+
+if (typeof window !== "undefined") {
+  try {
+    window.__perfProbe = perfProbe;
+    // longTasks: PerformanceObserver('longtask') con buffer (Chrome/Android —
+    // el dispositivo objetivo del plan). Safari no lo soporta → queda a 0.
+    if (typeof PerformanceObserver === "function") {
+      try {
+        const obs = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            perfProbe.longTasks.count += 1;
+            perfProbe.longTasks.totalMs += entry.duration;
+          }
+        });
+        obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+      } catch {
+        /* 'longtask' no soportado */
+      }
+    }
+  } catch {
+    /* la sonda NUNCA rompe la app */
+  }
+}

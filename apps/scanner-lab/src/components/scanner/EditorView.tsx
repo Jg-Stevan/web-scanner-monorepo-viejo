@@ -79,8 +79,9 @@ import type { CapturePage, PageFilter, Point, Quad } from "@jg-stevan/scanner-co
 import { ocrTextIsValid, requestOcr } from "@jg-stevan/scanner-core/ocr";
 import { buildDocPdf, downloadBlob, sanitizeFileName } from "@jg-stevan/scanner-core/pdf-export";
 import { ocrTextOfPages } from "@jg-stevan/scanner-core/text-export";
-import { formatBytes } from "@jg-stevan/scanner-core/format";
+import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
+import { perfProbe } from "@/lib/perf-probe";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
@@ -509,6 +510,8 @@ export default function EditorView() {
   const autoIds = useRef<Set<string>>(new Set());
   const manualIds = useRef<Set<string>>(new Set());
   const badgeTimer = useRef<number>(0);
+  /** PLAN B (§7) — última página cuyo «primer render» ya se marcó en la sonda. */
+  const firstRenderPidRef = useRef<string | null>(null);
 
   // ── Título del header (estilo Adobe Scan: "Digitalización N · fecha") ────
   const headerTitle = reviewDoc ? reviewDoc.title : `Digitalización ${documentsCount + 1}`;
@@ -526,6 +529,13 @@ export default function EditorView() {
   // ── Portal del sheet de filtros dentro del marco del teléfono ────────────
   useEffect(() => {
     setPortalEl(document.getElementById("app-phone"));
+  }, []);
+
+  // PLAN B (§7) — sonda local: el editor abre (manual o auto-captura →
+  // revisión). El AnimatePresence de page.tsx REMONTA la vista en cada
+  // entrada, así que un mark por montaje = un mark por apertura.
+  useEffect(() => {
+    perfProbe.mark("editor_open");
   }, []);
 
   // ── F-NOVIEW: la biblioteca abre el documento directamente en el editor
@@ -579,6 +589,11 @@ export default function EditorView() {
       // EXPERIMENTO v11: sin copia de display — se consume el DATO
       // completo directamente (la generación en 2º plano de displayUrl
       // de v5 5.1 está APAGADA; la entrada se pinta YA con su url).
+      // PLAN B (§7) — primer render de esta página en la vista (cacheada).
+      if (firstRenderPidRef.current !== page.id) {
+        firstRenderPidRef.current = page.id;
+        perfProbe.mark("editor_first_render", { engine: cached.engine, cached: true });
+      }
       return () => {
         cancelled = true;
       };
@@ -593,10 +608,13 @@ export default function EditorView() {
       try {
         // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
         // estricto por construcción: lo que ves ES la imagen guardada.
+        // PLAN B (§7) — tiempo del reproceso completo (warp + filtro).
+        const tFilter = performance.now();
         const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
           manual: page.quadManual === true,
           maxLongSide: PROCESSED_MAX_LONG_SIDE,
         });
+        const filterMs = Math.round(performance.now() - tFilter);
         if (cancelled) return;
         // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
         // con el DATO completo (url/w/h/engine); los <img> del editor
@@ -610,6 +628,16 @@ export default function EditorView() {
         };
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
+        // PLAN B (§7) — filtro aplicado (ms del pipeline) + primer render.
+        perfProbe.mark("filter_applied", {
+          ms: filterMs,
+          engine: entry.engine,
+          filter: page.filter,
+        });
+        if (firstRenderPidRef.current !== page.id) {
+          firstRenderPidRef.current = page.id;
+          perfProbe.mark("editor_first_render", { engine: entry.engine, cached: false, ms: filterMs });
+        }
       } catch {
         if (!cancelled) setPreview({ url: page.original, w: 0, h: 0, engine: "canvas" });
       } finally {
@@ -1302,6 +1330,9 @@ export default function EditorView() {
       return;
     }
     setExportingImg(true);
+    // PLAN B (§7) — export de imagen (PNG/JPG) con ms y bytes.
+    perfProbe.mark("export_start", { type: "png" });
+    const tExport = performance.now();
     try {
       const blob = await dataUrlToBlob(entry.url);
       const ext = blob.type === "image/jpeg" ? "jpg" : "png";
@@ -1309,6 +1340,11 @@ export default function EditorView() {
         `${headerTitle}-página-${activeIdx + 1}.${ext}`
       );
       downloadBlob(blob, name);
+      perfProbe.mark("export_end", {
+        type: ext,
+        ms: Math.round(performance.now() - tExport),
+        bytes: blob.size,
+      });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
       toast.error("No se pudo guardar la imagen");
@@ -1428,9 +1464,17 @@ export default function EditorView() {
     const s = useScannerStore.getState();
     const doc = s.documents.find((d) => d.id === docId);
     if (!doc || doc.pages.length === 0) return;
+    // PLAN B (§7) — export PDF (inicio/fin con tipo, ms y bytes).
+    perfProbe.mark("export_start", { type: "pdf", pages: doc.pages.length });
+    const tExport = performance.now();
     try {
       const { pdf, bytes } = await buildDocPdf(doc, s.settings.exportQuality);
       pdf.save(`${sanitizeFileName(doc.title)}.pdf`);
+      perfProbe.mark("export_end", {
+        type: "pdf",
+        ms: Math.round(performance.now() - tExport),
+        bytes,
+      });
       toast.success(
         `PDF exportado · ${doc.pages.length} ${doc.pages.length === 1 ? "página" : "páginas"} · ${formatBytes(bytes)}`
       );
@@ -1453,10 +1497,31 @@ export default function EditorView() {
       return;
     }
     setSaving(true);
+    // PLAN B (§7) — la sonda mide el guardado completo (proceso+merge).
+    const tSave = performance.now();
+    const markSavedDoc = (doc: { pages: Array<{ processed: string; precision?: { width: number; height: number } }> }) => {
+      let totalBytes = 0;
+      for (const p of doc.pages) {
+        const bytes = dataUrlBytes(p.processed);
+        const pxLong = p.precision
+          ? Math.max(p.precision.width, p.precision.height)
+          : 0;
+        perfProbe.mark("page_saved", { bytes, pxLong });
+        totalBytes += bytes;
+      }
+      perfProbe.mark("save_done", {
+        ms: Math.round(performance.now() - tSave),
+        bytes: totalBytes,
+      });
+    };
     try {
       if (s.reviewDocId) {
         const docId = await s.saveSessionToDocument();
         if (docId) {
+          const saved = useScannerStore
+            .getState()
+            .documents.find((d) => d.id === docId);
+          if (saved) markSavedDoc(saved);
           if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
             navigator.vibrate([28, 60, 28]);
           }
@@ -1474,6 +1539,7 @@ export default function EditorView() {
       const n = s.documents.filter((d) => d.deletedAt === undefined).length + 1;
       const doc = await s.saveSessionAsDocument(`Digitalización ${n}`);
       if (doc) {
+        markSavedDoc(doc);
         const engine = doc.pages.some((p) => p.precision?.engine === "worker")
           ? "opencv"
           : "canvas";

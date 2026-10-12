@@ -22,3 +22,8 @@ export * from "./motion-stabilizer";
 export * from "./frame-loop";
 export * from "./detector-client";
 export * from "./pwa";
+// PLAN B — tecnologías modernas Android-first (WebCodecs + WebGPU):
+// todo feature-detected con fallback por llamada a las rutas actuales.
+export * from "./tech-capabilities";
+export * from "./webcodecs-decode";
+export * from "./webgpu-enhance";
