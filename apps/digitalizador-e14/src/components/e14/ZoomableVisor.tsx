@@ -52,6 +52,18 @@
  *     #007aff → ok-tint, tipografía font-data.
  *   · JSX hint «Pellizca para ampliar…» (L2309–2316) — re-vestido e14.
  *
+ * ZOOM-INLINE v1 (INSTRUCCIONES-e14-zoom-inline §3) — MODO `card`: el MISMO
+ * componente monta inline en la tarjeta de ReviewView. La máquina de gestos
+ * (pinza/pan/clamps/rueda/FIX v3-v6-v8) se REUTILIZA INTACTA — la geometría
+ * es agnóstica al contenedor. Solo cambian: techo del zoom (ZOOM_MAX_CARD=3),
+ * stage relativo con clip de esquinas de la tarjeta, chrome FUERA (chip %,
+ * hint y comparación NO se montan — la tarjeta queda limpia; el fullscreen
+ * conserva los suyos) y la semántica del TAP: a 1× abre fullscreen DIFERIDO
+ * DOBLE_TOQUE_MS (la ventana del doble toque — si llega el 2º toque, es zoom
+ * y NO abre: mismo trade-off del cierre diferido del modal, estándar Fotos de
+ * iOS); ampliado, el tap vuelve a 1× (también diferido por la misma ventana).
+ * El modal fullscreen y su comportamiento quedan byte-a-byte.
+ *
  * DECISIÓN de cierre por toque (§4.0 del instructivo — documentada):
  * el modal e14 cerraba con tap en cualquier lado; con doble-toque=2.5× ese
  * cierre directo mataría el zoom (el 1er toque cerraría). Regla adoptada:
@@ -77,24 +89,45 @@ import { EyeIcon } from "./icons";
 /** F-ZOOM — límites del zoom del visor (mismos que el lab). */
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 6;
+/** ZOOM-INLINE — techo del zoom en la TARJETA (1×–3×; el modal conserva 6×). */
+const ZOOM_MAX_CARD = 3;
 const ZOOM_DOUBLE_TAP = 2.5;
 /** Umbral de movimiento (px) para distinguir arrastre de toque (lab). */
 const TAP_SLOP = 8;
 /** Mantener pulsado el visor (ms) antes de mostrar el original (lab L120). */
 const COMPARE_HOLD_MS = 350;
-/** e14 — ventana del cierre diferido por tap (misma del doble toque). */
-const CLOSE_DEFER_MS = 320;
+/** Ventana ÚNICA del doble toque Y del tap diferido — UNA fuente de verdad
+ *  (ZOOM-INLINE §3.3) para zoomLastTap, el cierre del modal (§4.0) y la
+ *  apertura del card (tap simple a 1×). Antes: CLOSE_DEFER_MS + literal 320
+ *  en el doble toque. */
+const DOBLE_TOQUE_MS = 320;
 
 export interface ZoomableVisorProps {
   /** Foto visible (procesada o respaldo original — ReviewView L259). */
   src: string;
   alt: string;
-  /** Acta original — SOLO si difiere de src (F-COMPARE por pulsación). */
+  /** Acta original — SOLO si difiere de src (F-COMPARE por pulsación).
+   *  Se ignora en modo card (la comparación vive SOLO en fullscreen). */
   compareSrc?: string;
-  onClose: () => void;
+  /** ZOOM-INLINE — "modal" (default: fullscreen, cierre por toque §4.0) o
+   *  "card" (inline en la tarjeta de ReviewView, sin chrome). */
+  mode?: "modal" | "card";
+  /** SOLO card: abrir pantalla completa (tap simple a 1×, diferido
+   *  DOBLE_TOQUE_MS para no matar el doble toque). */
+  onOpenFullscreen?: () => void;
+  /** SOLO modal: cierre del fullscreen (tap-fuera/imagen/Esc en ReviewView). */
+  onClose?: () => void;
 }
 
-export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorProps) {
+export function ZoomableVisor({
+  src,
+  alt,
+  compareSrc,
+  mode = "modal",
+  onOpenFullscreen,
+  onClose,
+}: ZoomableVisorProps) {
+  const esCard = mode === "card";
   // ── F-ZOOM — zoom del visor (pinza · pan · doble toque · rueda) ────────
   const zoomStageRef = useRef<HTMLDivElement>(null);
   const zoomWrapRef = useRef<HTMLDivElement>(null);
@@ -120,13 +153,15 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
   const zoomDownAt = useRef<{ x: number; y: number; t: number } | null>(null);
   const zoomLastTap = useRef(0);
 
-  // ── e14 — cierre por toque (decisión §4.0, ver cabecera) ───────────────
-  /** Timer del cierre diferido (tap sobre la imagen a 1×). */
-  const closeTimerRef = useRef<number | null>(null);
-  const cancelDeferredClose = useCallback(() => {
-    if (closeTimerRef.current !== null) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
+  // ── e14 — «tap diferido» (mecanismo ÚNICO, ver cabecera) ───────────────
+  /** Timer del tap diferido: modal → cierre por tap a 1× sobre la imagen
+   *  (§4.0); card → tap a 1× abre fullscreen · tap ampliado vuelve a 1×
+   *  (ZOOM-INLINE §3.7). Un pointerdown nuevo SIEMPRE cancela lo pendiente. */
+  const deferredTapRef = useRef<number | null>(null);
+  const cancelDeferredTap = useCallback(() => {
+    if (deferredTapRef.current !== null) {
+      window.clearTimeout(deferredTapRef.current);
+      deferredTapRef.current = null;
     }
   }, []);
   /** Dónde nació el toque (pointerdown) — decide el cierre en pointerup. */
@@ -161,7 +196,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
     setComparing(false);
   }, []);
   useEffect(() => () => endCompare(), [endCompare]);
-  useEffect(() => () => cancelDeferredClose(), [cancelDeferredClose]);
+  useEffect(() => () => cancelDeferredTap(), [cancelDeferredTap]);
 
   /* ── F-ZOOM — gestos de ampliación del visor ──────────────────────────
    * Pinza (2 dedos) 1×–6× anclada al punto medio · pan con 1 dedo ampliado
@@ -204,11 +239,13 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
     setZoomPct(100);
   }, [zoomScale, zoomX, zoomY]);
 
-  // e14: el zoom se reinicia al ABRIR el visor (montaje) — como Fotos de
-  // iOS; en el lab era al cambiar de página (L746–748), aquí no hay páginas.
+  // e14: el zoom se reinicia al ABRIR el visor (montaje, modal — como Fotos
+  // de iOS) y al CAMBIAR de acta (ZOOM-INLINE §3.8: src cambia en la tarjeta
+  // — un solo efecto cubre ambos). En el lab era al cambiar de página
+  // (L746–748), aquí no hay páginas.
   useEffect(() => {
     resetZoom();
-  }, [resetZoom]);
+  }, [src, resetZoom]);
 
   // FIX v8 (8.1) — cinturón y tirantes: WebKit puede quedar con el gesto
   // (rubber-band residual / heurística de doble toque) y disparar
@@ -232,11 +269,13 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
   }, []);
 
   /** Escala a `next` manteniendo bajo el punto `px,py` (relativo al centro)
-   *  el mismo contenido que había (fórmula clásica de zoom anclado). */
+   *  el mismo contenido que había (fórmula clásica de zoom anclado).
+   *  ZOOM-INLINE §3.2: techo efectivo — 3× en la tarjeta (ZOOM_MAX_CARD), 6×
+   *  en el modal (ZOOM_MAX). */
   const zoomAtPoint = useCallback(
     (px: number, py: number, next: number) => {
       const s = zoomScale.get();
-      const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+      const clamped = Math.min(esCard ? ZOOM_MAX_CARD : ZOOM_MAX, Math.max(ZOOM_MIN, next));
       if (clamped === s) return;
       // Punto de contenido (coords a escala 1) bajo el ancla:
       const cx = (px - zoomX.get()) / s;
@@ -251,21 +290,26 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
         clampZoomPan();
       }
     },
-    [zoomScale, zoomX, zoomY, commitZoomScale, clampZoomPan]
+    [zoomScale, zoomX, zoomY, commitZoomScale, clampZoomPan, esCard]
   );
 
   const onStagePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       const el = zoomStageRef.current;
       if (!el) return;
-      // e14: un toque nuevo anula el cierre diferido pendiente (era tap
-      // suelto a 1× esperando la ventana del doble toque).
-      cancelDeferredClose();
+      // e14: un toque nuevo anula el tap diferido pendiente (modal: tap suelto
+      // a 1× esperando la ventana del doble toque; card: apertura/reset
+      // pendiente) — simétrico, mismo mecanismo.
+      cancelDeferredTap();
       // F-NAV (lección de la presentación): solo capturar cuando el down cae
       // en el propio stage — si cae en un hijo interactivo (botón/chip) su
       // click debe vivir. B1: el guard anterior (target === currentTarget)
       // NUNCA se cumplía → ni setPointerCapture ni compare funcionaban.
-      const onInteractive = !!(e.target as HTMLElement | null)?.closest?.("button");
+      // ZOOM-INLINE §3.6: en card NO hay hijos interactivos → captura SIEMPRE
+      // (onInteractive = false; el guard closest("button") es del modal).
+      const onInteractive = esCard
+        ? false
+        : !!(e.target as HTMLElement | null)?.closest?.("button");
       // e14: memo de dónde nació el toque — el pointerup decide el cierre.
       downOnBtnRef.current = onInteractive;
       downOnImgRef.current = !!(e.target as HTMLElement | null)?.closest?.("img");
@@ -305,8 +349,11 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
         // F-ZOOM: a escala 1× el "mantener pulsado" compara ORIGINAL vs
         // procesado (como Fotos de iOS); ampliado, el mismo dedo hace PAN.
         // B1: activar salvo que el toque sea sobre un botón. e14: además
-        // SOLO si hay original que mostrar (compareSrc).
+        // SOLO si hay original que mostrar (compareSrc). ZOOM-INLINE §3.5:
+        // en card la comparación NO corre (la tarjeta queda limpia — el
+        // «comparar original» es SOLO de fullscreen).
         if (
+          !esCard &&
           zoomScale.get() <= 1.01 &&
           (e.button === 0 || e.pointerType !== "mouse") &&
           !onInteractive &&
@@ -316,7 +363,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
         }
       }
     },
-    [zoomRelToCenter, endCompare, startCompareTimer, zoomScale, zoomX, zoomY, compareSrc, cancelDeferredClose]
+    [zoomRelToCenter, endCompare, startCompareTimer, zoomScale, zoomX, zoomY, compareSrc, cancelDeferredTap, esCard]
   );
 
   const onStagePointerMove = useCallback(
@@ -376,29 +423,43 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
           performance.now() - down.t < 280;
         if (cleanTap && !wasPinch) {
           const now = performance.now();
-          if (now - zoomLastTap.current < 320) {
+          if (now - zoomLastTap.current < DOBLE_TOQUE_MS) {
             // Doble toque: alterna 1× ↔ 2,5× centrado en el punto.
             zoomLastTap.current = 0;
-            // e14: era el 2º toque — el cierre diferido del 1º se cancela.
-            cancelDeferredClose();
+            // e14: era el 2º toque — el tap diferido del 1º se cancela
+            // (modal: el cierre; card: la apertura/reset).
+            cancelDeferredTap();
             const p = zoomRelToCenter(e.clientX, e.clientY);
             if (zoomScale.get() > 1.01) resetZoom();
             else zoomAtPoint(p.x, p.y, ZOOM_DOUBLE_TAP);
+          } else if (esCard) {
+            // ZOOM-INLINE §3.7 — semántica del TAP en la TARJETA (tap
+            // diferido, mismo patrón del cierre del modal): a 1× abre
+            // fullscreen tras DOBLE_TOQUE_MS (si llega el 2º toque, el doble
+            // toque lo cancela y hace zoom — NO abre); ampliado, vuelve a 1×
+            // tras la MISMA ventana (tampoco abre).
+            zoomLastTap.current = now;
+            cancelDeferredTap();
+            deferredTapRef.current = window.setTimeout(() => {
+              deferredTapRef.current = null;
+              if (zoomScale.get() > 1.01) resetZoom();
+              else onOpenFullscreen?.();
+            }, DOBLE_TOQUE_MS);
           } else {
             zoomLastTap.current = now;
             // e14 — DECISIÓN de cierre (§4.0, ver cabecera): tap limpio a
-            // 1×. Sobre la IMAGEN: cierre diferido 320 ms (protege el doble
-            // toque). Sobre el ÁREA NEGRA (tap-fuera): inmediato. Sobre un
-            // botón interno o ampliado (>1×): nunca cierra.
+            // 1×. Sobre la IMAGEN: cierre diferido DOBLE_TOQUE_MS (protege
+            // el doble toque). Sobre el ÁREA NEGRA (tap-fuera): inmediato.
+            // Sobre un botón interno o ampliado (>1×): nunca cierra.
             if (!downOnBtnRef.current && zoomScale.get() <= 1.01) {
               if (downOnImgRef.current) {
-                cancelDeferredClose();
-                closeTimerRef.current = window.setTimeout(() => {
-                  closeTimerRef.current = null;
-                  onClose();
-                }, CLOSE_DEFER_MS);
+                cancelDeferredTap();
+                deferredTapRef.current = window.setTimeout(() => {
+                  deferredTapRef.current = null;
+                  onClose?.();
+                }, DOBLE_TOQUE_MS);
               } else {
-                onClose();
+                onClose?.();
               }
             }
           }
@@ -422,7 +483,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
         zoomDownAt.current = a ? { x: a.x, y: a.y, t: performance.now() } : null;
       }
     },
-    [clampZoomPan, endCompare, zoomRelToCenter, zoomAtPoint, resetZoom, zoomScale, zoomX, zoomY, onClose, cancelDeferredClose]
+    [clampZoomPan, endCompare, zoomRelToCenter, zoomAtPoint, resetZoom, zoomScale, zoomX, zoomY, onClose, cancelDeferredTap, esCard, onOpenFullscreen]
   );
 
   /** Rueda del ratón (escritorio): zoom anclado al cursor. */
@@ -451,7 +512,15 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
   return (
     <div
       ref={zoomStageRef}
-      className="absolute inset-0 flex touch-none select-none items-center justify-center overflow-hidden px-3"
+      /* ZOOM-INLINE §3.4: stage condicional — modal: absolute inset-0 (fondo
+       * negro del dialog, px-3); card: relativo h/w completo con clip de
+       * esquinas (rounded-[14px]) — la imagen ampliada NO se sale de la
+       * tarjeta (el clip lo pone el stage). */
+      className={
+        esCard
+          ? "relative flex h-full w-full touch-none select-none items-center justify-center overflow-hidden rounded-[14px]"
+          : "absolute inset-0 flex touch-none select-none items-center justify-center overflow-hidden px-3"
+      }
       onPointerDown={onStagePointerDown}
       onPointerMove={onStagePointerMove}
       onPointerUp={onStagePointerUp}
@@ -465,7 +534,9 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
       onContextMenu={(e) => e.preventDefault()}
     >
       <motion.div
-        initial={{ opacity: 0 }}
+        /* ZOOM-INLINE §3.9: SIN animación de entrada en card — la foto debe
+         * aparecer al instante; el modal conserva su fade. */
+        initial={esCard ? false : { opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.3, ease: [0.65, 0, 0.35, 1] }}
         className="relative z-10 flex h-full w-full items-center justify-center overflow-hidden"
@@ -491,11 +562,19 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
             /* FIX v6 (6.3): el toque nace en el <img> — sin su touch-none,
              * Safari dispara pointercancel al iniciar el arrastre y el paneo
              * con zoom no responde al dedo. */
-            className="max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-2xl shadow-black"
+            /* ZOOM-INLINE §3.10: en card SIN rounded ni sombra — el clip y la
+             * estética los pone la tarjeta; el modal conserva los suyos. */
+            className={
+              esCard
+                ? "max-h-full max-w-full touch-none select-none object-contain"
+                : "max-h-full max-w-full touch-none select-none rounded-[6px] object-contain shadow-2xl shadow-black"
+            }
           />
-          {/* Comparación antes/después: el ORIGINAL mientras se mantiene pulsado */}
-          <AnimatePresence>
-            {comparing && compareSrc && (
+          {/* Comparación antes/después: el ORIGINAL mientras se mantiene pulsado.
+              ZOOM-INLINE §3.5: SOLO fullscreen — en card NO se monta. */}
+          {!esCard && (
+            <AnimatePresence>
+              {comparing && compareSrc && (
               <motion.div
                 key="review-compare"
                 initial={{ opacity: 0 }}
@@ -520,39 +599,45 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
                   ORIGINAL
                 </span>
               </motion.div>
-            )}
-          </AnimatePresence>
+              )}
+            </AnimatePresence>
+          )}
         </motion.div>
       </motion.div>
 
       {/* F-ZOOM — chip de zoom con % y botón de reinicio (patrón Fotos).
-          Re-vestido e14: #007aff → ok-tint, font-data. */}
-      <AnimatePresence>
-        {zoomed && (
-          <motion.div
-            key="zoom-chip"
-            initial={{ opacity: 0, y: 8, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.94 }}
-            transition={{ duration: 0.18 }}
-            className="absolute right-3 top-3 z-30"
-          >
-            <button
-              type="button"
-              aria-label="Restablecer el zoom"
-              onClick={resetZoom}
-              className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1.5 font-data text-[10px] font-bold uppercase tracking-[0.1em] tabular-nums text-ink backdrop-blur-md transition-transform active:scale-95"
+          Re-vestido e14: #007aff → ok-tint, font-data.
+          ZOOM-INLINE §3.5: SOLO fullscreen — en card NO se monta (sin chip %
+          ni RESTABLECER en la tarjeta). */}
+      {!esCard && (
+        <AnimatePresence>
+          {zoomed && (
+            <motion.div
+              key="zoom-chip"
+              initial={{ opacity: 0, y: 8, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.94 }}
+              transition={{ duration: 0.18 }}
+              className="absolute right-3 top-3 z-30"
             >
-              {zoomPct}%
-              <span className="text-ink-dim" aria-hidden="true">·</span>
-              <span className="text-ok-tint">RESTABLECER</span>
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              <button
+                type="button"
+                aria-label="Restablecer el zoom"
+                onClick={resetZoom}
+                className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1.5 font-data text-[10px] font-bold uppercase tracking-[0.1em] tabular-nums text-ink backdrop-blur-md transition-transform active:scale-95"
+              >
+                {zoomPct}%
+                <span className="text-ink-dim" aria-hidden="true">·</span>
+                <span className="text-ok-tint">RESTABLECER</span>
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
 
-      {/* Hint de zoom (una vez por montaje — 6 s, texto re-vestido e14) */}
-      {!zoomed && zoomHintVisible && (
+      {/* Hint de zoom (una vez por montaje — 6 s, texto re-vestido e14).
+          ZOOM-INLINE §3.5: SOLO fullscreen — en card NO se monta. */}
+      {!esCard && !zoomed && zoomHintVisible && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-6">
           <span className="rounded-full bg-black/45 px-3 py-1.5 font-data text-[9px] font-bold uppercase tracking-[0.16em] text-ink-dim backdrop-blur-md">
             {compareSrc

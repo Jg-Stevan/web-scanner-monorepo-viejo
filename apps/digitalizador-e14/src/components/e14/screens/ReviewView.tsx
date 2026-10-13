@@ -435,26 +435,46 @@ export function ReviewView() {
             pipeline agotó el timeout sin procesar) es la MISMA caja con texto
             centrado font-data. F5: la tarjeta es SOLO visual (flex-1) — sin
             toolbar dentro (barra fija abajo, D38).
-            SERIE 1 (REV. 2 §3): TARJETA ÚNICA E INVARIANTE — UN solo <button>
-            táctil (tap → pantalla completa) para los 5 estados.
+            SERIE 1 (REV. 2 §3): TARJETA ÚNICA E INVARIANTE — UN solo visor
+            táctil para los 5 estados.
+            ZOOM-INLINE v1 (§4): el botón de la tarjeta pasa a un DIV con rol
+            de botón — el GESTO de zoom vive DENTRO de la tarjeta (el visor
+            inline: pinza 1×–3× · pan con clamps · doble toque 2.5× · tap a 1×
+            abre fullscreen DIFERIDO 320 ms · tap ampliado vuelve a 1×) y un
+            botón ancestro invalidaría el guard closest del visor
+            y el HTML interactivo anidado. La apertura por teclado
+            (Enter/Space) queda aquí — INMEDIATA, sin los 320 ms (misma vía
+            que la toolbar «Pantalla completa»). El onClick del botón se
+            ELIMINÓ: la apertura por tap la maneja el visor (diferida).
             CYBER-NEÓN §6: el acta vive DENTRO de un CONTENEDOR OSCURO
             surface-card rounded-20px p-10px con brackets BARRA neón 3.5px
-            sobre las esquinas DEL CONTENEDOR; acta blanca rounded-14px
-            object-contain SERIE 1 (esquinas propias, separada 10px —
-            el acta COMPLETA, con letterboxing si es más alta). */}
-        <button
-          type="button"
+            sobre las esquinas DEL CONTENEDOR; el clip con esquinas lo pone
+            el stage del visor (acta blanca rounded-14px, letterboxing si es
+            más alta). */}
+        <div
+          role="button"
           aria-label="Ver acta a pantalla completa"
-          onClick={hayFoto ? () => setVisorAbierto(true) : undefined}
-          className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
+          tabIndex={hayFoto ? 0 : -1}
+          onKeyDown={
+            hayFoto
+              ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setVisorAbierto(true);
+                  }
+                }
+              : undefined
+          }
+          className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-ok-tint/60"
         >
           <BracketsNeon />
           <div className="w-full h-full relative flex items-center justify-center min-h-0">
-            {hayFoto ? (
-              <img
+            {fotoVisible ? (
+              <ZoomableVisor
+                mode="card"
                 src={fotoVisible}
                 alt={altFoto}
-                className="w-full h-full rounded-[14px] object-contain"
+                onOpenFullscreen={() => setVisorAbierto(true)}
               />
             ) : (
               <div className="flex items-center justify-center w-full h-full">
@@ -464,7 +484,7 @@ export function ReviewView() {
               </div>
             )}
           </div>
-        </button>
+        </div>
 
         {/* §D4 (SPEC-e14-score-ocr): nota tenue del respaldo — la tarjeta
             muestra la ORIGINAL porque la procesada salió vacía (o nunca
