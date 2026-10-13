@@ -102,3 +102,23 @@ export function readImageLongSide(key: string, dataUrl: string): number | null {
   }
   return value;
 }
+
+/** PERF/burst-budget — Lado largo (px) de un Blob PNG/JPEG sin decodificar:
+ *  lee solo el prefijo de bytes (PNG 24 B · JPEG hasta 192 KB de marcadores,
+ *  igual que arriba). Uso: saltar el `createImageBitmap` de 12 MP que
+ *  `clampBlobToSafeCap` ejecutaba SOLO para leer el tamaño cuando el blob
+ *  ya está dentro del tope (en gama baja ese decode son segundos enteros
+ *  dentro del tramo captura→guardada). Best-effort: formato/dato no
+ *  reconocido → null (el llamador cae al clamp íntegro, sensores gigantes
+ *  siguen protegidos). */
+export async function readBlobLongSide(blob: Blob): Promise<number | null> {
+  try {
+    const head = await blob.slice(0, 196_608).arrayBuffer();
+    const b = new Uint8Array(head);
+    const isPng = b.length > 4 && b[0] === 0x89 && b[1] === 0x50;
+    const side = isPng ? pngLongSide(b) : jpegLongSide(b);
+    return side !== null && side > 0 && side <= 100_000 ? side : null;
+  } catch {
+    return null;
+  }
+}

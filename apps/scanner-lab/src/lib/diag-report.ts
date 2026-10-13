@@ -15,6 +15,10 @@
 
 import { perfProbe, PERF_PROBE_T0, PERF_PROBE_T0_AT, type PerfProbeMark } from "./perf-probe";
 import {
+  getOrphanPhotoStats,
+  getVideoTrackSize,
+} from "./burst-budget";
+import {
   getDeviceSnapshot,
   runBenchmarks,
   getBenchCache,
@@ -27,7 +31,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "diag/test-estandar-qa @ 97dbe66";
+export const DIAG_BUILD = "perf/burst-budget @ c515e3b";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
@@ -59,10 +63,10 @@ export interface DiagTier {
 
 export interface DiagReport {
   format: "scannerlab-diag-report";
-  /** v1 → v2 (sub-marks) → v3 (test estándar QA): SOLO campos
-   *  adicionales — todo campo v1 conserva nombre y significado (informes
-   *  de los lotes 1-2 comparables 1:1). */
-  version: 3;
+  /** v1 → v2 (sub-marks) → v3 (test estándar QA) → v4 (burst-budget) →
+   *  v5 (burst v2-A13): SOLO campos adicionales — todo campo v1 conserva
+   *  nombre y significado (informes de los lotes 1-4 comparables 1:1). */
+  version: 5;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -92,6 +96,93 @@ export interface DiagReport {
       segments: {
         shotToProcessedMs: number | null;
         processedToWriteMs: number | null;
+      };
+      /** v4 (burst-budget) — adquisición bajo presupuesto: por qué terminó
+       *  cada captura (meta aditiva del mark capture_shot) + gap
+       *  capture_fired→shot, LA métrica del antes/después del fix (16.8 s
+       *  → ≤ ~2 s en gama baja).
+       *  v5 (burst v2-A13) — telemetría de la ventana: cuándo disparó el
+       *  muro de verdad (wallFireMs), salud del sampler §B, resolución del
+       *  track de video, congestión del hilo DENTRO de cada ventana y la
+       *  foto huérfana (llegó tarde pero ¿llegó?). Solo campos nuevos:
+       *  lotes 1-4 comparables 1:1. */
+      burst?: {
+        byReason: Record<string, number>;
+        acquisitionMs: number[];
+        acquisitionMsMedian: number | null;
+        /** v5 — ms desde capture_fired cuando el presupuesto produjo la
+         *  salida (waitedMs de recordBurst). ≈ timeBudgetMs = el muro cortó
+         *  cuando debía; 6-8× = los timers seguían deslizándose. */
+        wallFireMs: number[];
+        /** v5 — muestras de estabilidad tomadas por captura (§B). */
+        samples: number[];
+        /** v5 — coste de la última muestra de cada captura (ms; objetivo
+         *  < 10 ms — null cuando no se llegó a muestrear). */
+        lastSampleCostMs: Array<number | null>;
+        /** v5 — getSettings() del track de video al armar la cámara: la
+         *  resolución REAL de la fuente del rescate (lote 4: 960 px). */
+        videoTrack: { w: number; h: number } | null;
+        /** v5 — long tasks (> 50 ms) que arrancaron DENTRO de cada ventana
+         *  capture_fired → capture_shot: la congestión que desliza los
+         *  timers del muro (lote 4: el hilo saturado ×6-8). */
+        windowCongestion: Array<{ count: number; totalMs: number }>;
+        /** v5 — la foto huérfana tras el corte del presupuesto: ¿llegó el
+         *  blob del sensor? ¿a cuántos ms del disparo? (decide la Fase D). */
+        orphanPhoto: {
+          watched: number;
+          arrived: number;
+          pending: number;
+          rejected: number;
+          arrivalMs: number[];
+          bytes: number[];
+        };
+        /** v4.2 (v3 Fase D) — gracia de la foto huérfana: cuántas capturas
+         *  rescató la gracia a foto COMPLETA tras el corte, a cuántas cayó
+         *  a frames tras esperarla, y el agregado de qué se despachó en
+         *  TODAS las capturas presupuestadas (foto vs frames — el titular
+         *  de v3: páginas a ~4000 px vs 960 px). Derivado de byReason + el
+         *  campo aditivo `grace` del mark (ausente en lotes 1-5 → 0/null,
+         *  informes viejos comparables). */
+        grace: {
+          photoGrace: number;
+          framesFallback: number;
+          graceWaitedMsMedian: number | null;
+          dispatchSource: { photo: number; frames: number };
+        };
+        /** v4.3 (v4 §2.1) — tramo opaco por captura CON CORTE (recordBurst →
+         *  mark capture_shot): total + sub-marks del pipe de foto (sniff /
+         *  dataURL — solo camino photo) + jobs del editor al aterrizar.
+         *  Cuadre §2.4: acquisitionMs ≈ burstWaitedMs(neto de gracia) +
+         *  grace + pipeToMarkMs. Ausente en lotes sin cortes → arrays
+         *  vacíos (informes viejos comparables). */
+        pipe: {
+          toMarkMs: number[];
+          toMarkMsMedian: number | null;
+          sniffMs: number[];
+          dataUrlMs: number[];
+          bgJobsAtShot: number[];
+        };
+        /** v4.3 (v4 §2.2) — congestión del hilo partida por el CORTE (solo
+         *  capturas con corte; mismo observer de long tasks): espera
+         *  (capture_fired → corte: muro + gracia) vs pipe (corte →
+         *  capture_shot: el tramo opaco). Cuadre §2.4: espera + pipe ≈
+         *  windowCongestion de la MISMA captura. */
+        congestion: {
+          cutCaptures: number;
+          congestionWait: Array<{ count: number; totalMs: number }>;
+          congestionPipe: Array<{ count: number; totalMs: number }>;
+        };
+        /** v5 §3.4 — sonda aditiva de heap JS durante el tramo opaco (solo
+         *  capturas con corte; null si la plataforma no expone
+         *  performance.memory). Ausente en lotes sin cortes → array vacío. */
+        heapProbe: Array<{
+          intervalMs: number;
+          samples: number;
+          minMB: number;
+          maxMB: number;
+          sawtoothMB: number;
+          seriesMB: number[];
+        } | null>;
       };
     };
     editor: {
@@ -340,6 +431,202 @@ export async function buildDiagReport(): Promise<DiagReport> {
     if (write) processedToWriteMs.push(Math.max(0, write.ts - p.ts));
   }
 
+  // v4 (burst-budget) — adquisición por captura: razón de salida del
+  // presupuesto (meta aditiva del mark capture_shot) + gap
+  // capture_fired→shot apareado con el disparo previo. Solo si ALGUNA
+  // captura trajo meta burst (sesiones/ramas sin burst-budget → campo
+  // ausente, informes viejos idénticos).
+  // v5 (burst v2-A13) — telemetría de la ventana por captura: wallFireMs
+  // (cuándo produjo la salida el presupuesto), salud del sampler §B y
+  // congestión del hilo DENTRO de la ventana (long tasks con instante —
+  // el MISMO observer de session.longTasks, filtrado por ventana). + los
+  // globales de la sesión: videoTrack y la foto huérfana.
+  const burstByReason: Record<string, number> = {};
+  const burstAcquisitionMs: number[] = [];
+  const burstWallFireMs: number[] = [];
+  const burstSamples: number[] = [];
+  const burstSampleCostMs: Array<number | null> = [];
+  const burstWindowCongestion: Array<{ count: number; totalMs: number }> = [];
+  // v4.2 (v3 Fase D) — grace del mark capture_shot (campo aditivo opcional:
+  // ms que la gracia esperó a la huérfana; ausente = la gracia no corrió).
+  const burstGraceWaitedMs: number[] = [];
+  let burstGraceRan = 0;
+  // v4.3 (v4 §2.1/§2.2) — tramo opaco + congestión partida por el corte:
+  // SOLO capturas con corte traen pipeToMarkMs en el meta (ausente en
+  // rutas sin corte → arrays alineados únicamente con cortes).
+  const burstPipeToMarkMs: number[] = [];
+  const burstPipeSniffMs: number[] = [];
+  const burstPipeDataUrlMs: number[] = [];
+  const burstPipeBgJobs: number[] = [];
+  const burstCongestionWait: Array<{ count: number; totalMs: number }> = [];
+  const burstCongestionPipe: Array<{ count: number; totalMs: number }> = [];
+  const burstHeapProbe: Array<{
+    intervalMs: number;
+    samples: number;
+    minMB: number;
+    maxMB: number;
+    sawtoothMB: number;
+    seriesMB: number[];
+  } | null> = [];
+  const longTaskEntries = perfProbe.longTaskEntries;
+  for (const s of shotMarks) {
+    const fired = lastBefore(firedShots, s.ts);
+    if (fired) burstAcquisitionMs.push(Math.max(0, s.ts - fired.ts));
+    const reason = s.meta?.burstExitReason;
+    if (typeof reason === "string") {
+      burstByReason[reason] = (burstByReason[reason] ?? 0) + 1;
+    }
+    // v5 — solo para capturas con meta burst (los viejos no traen nada).
+    if (reason !== undefined) {
+      const waited = s.meta?.burstWaitedMs;
+      if (typeof waited === "number" && Number.isFinite(waited)) {
+        burstWallFireMs.push(waited);
+      }
+      const samples = s.meta?.burstSamples;
+      if (typeof samples === "number" && Number.isFinite(samples)) {
+        burstSamples.push(samples);
+      }
+      const cost = s.meta?.burstSampleCostMs;
+      burstSampleCostMs.push(typeof cost === "number" && Number.isFinite(cost) ? cost : null);
+      // v4.2 — la gracia corrió en ESTA captura (campo `grace` presente).
+      const grace = s.meta?.grace;
+      if (typeof grace === "number" && Number.isFinite(grace)) {
+        burstGraceRan += 1;
+        burstGraceWaitedMs.push(grace);
+      }
+      // v4.3 — tramo opaco: SOLO capturas con corte (campo pipeToMarkMs del
+      // meta, ausente en rutas sin corte — gate 3 de la spec v4).
+      const pipeToMark = s.meta?.pipeToMarkMs;
+      if (typeof pipeToMark === "number" && Number.isFinite(pipeToMark)) {
+        burstPipeToMarkMs.push(pipeToMark);
+        const sniff = s.meta?.pipeSniffMs;
+        if (typeof sniff === "number" && Number.isFinite(sniff)) {
+          burstPipeSniffMs.push(sniff);
+        }
+        const dataUrl = s.meta?.pipeDataUrlMs;
+        if (typeof dataUrl === "number" && Number.isFinite(dataUrl)) {
+          burstPipeDataUrlMs.push(dataUrl);
+        }
+        const jobs = s.meta?.bgJobsAtShot;
+        if (typeof jobs === "number" && Number.isFinite(jobs)) {
+          burstPipeBgJobs.push(jobs);
+        }
+        const hp = s.meta?.heapProbe;
+        if (
+          hp &&
+          typeof hp === "object" &&
+          typeof (hp as { samples?: unknown }).samples === "number" &&
+          typeof (hp as { minMB?: unknown }).minMB === "number" &&
+          typeof (hp as { maxMB?: unknown }).maxMB === "number" &&
+          typeof (hp as { sawtoothMB?: unknown }).sawtoothMB === "number" &&
+          Array.isArray((hp as { seriesMB?: unknown }).seriesMB)
+        ) {
+          burstHeapProbe.push(hp as {
+            intervalMs: number;
+            samples: number;
+            minMB: number;
+            maxMB: number;
+            sawtoothMB: number;
+            seriesMB: number[];
+          });
+        } else {
+          burstHeapProbe.push(null);
+        }
+        if (fired) {
+          // v4 §2.2 — instante del corte = mark − pipeToMarkMs (el tramo
+          // abrió en el recordBurst que siguió a la gracia). MISMO criterio
+          // de ventana que windowCongestion (arranque dentro), partido por
+          // el corte → espera + pipe cuadran con la ventana (§2.4).
+          const cutTs = Math.max(fired.ts, s.ts - pipeToMark);
+          let wCount = 0;
+          let wTotal = 0;
+          let pCount = 0;
+          let pTotal = 0;
+          for (const lt of longTaskEntries) {
+            if (lt.start >= fired.ts && lt.start <= s.ts) {
+              if (lt.start < cutTs) {
+                wCount += 1;
+                wTotal += lt.duration;
+              } else {
+                pCount += 1;
+                pTotal += lt.duration;
+              }
+            }
+          }
+          burstCongestionWait.push({ count: wCount, totalMs: wTotal });
+          burstCongestionPipe.push({ count: pCount, totalMs: pTotal });
+        }
+      }
+      if (fired) {
+        let count = 0;
+        let totalMs = 0;
+        for (const lt of longTaskEntries) {
+          if (lt.start >= fired.ts && lt.start <= s.ts) {
+            count += 1;
+            totalMs += lt.duration;
+          }
+        }
+        burstWindowCongestion.push({ count, totalMs });
+      }
+    }
+  }
+  // v4.2 (v3 Fase D) — bloque de la gracia. Derivación:
+  //  · photoGrace = capturas rescatadas por la gracia (reason photo_grace).
+  //  · framesFallback = la gracia corrió (campo `grace` presente) pero la
+  //    foto no llegó → dispatch de frames (la cuenta de graces corridos
+  //    menos los rescatados).
+  //  · dispatchSource = QUÉ se despachó en las capturas presupuestadas
+  //    (foto = photo + photo_grace; frames = stable/time_cap/frame_cap/
+  //    error — legacy queda fuera: presupuesto apagado, no es una decisión
+  //    de dispatch del presupuesto).
+  const burstPhotoGrace = burstByReason["photo_grace"] ?? 0;
+  const burst =
+    Object.keys(burstByReason).length > 0
+      ? {
+          byReason: burstByReason,
+          acquisitionMs: burstAcquisitionMs,
+          acquisitionMsMedian: median(burstAcquisitionMs),
+          wallFireMs: burstWallFireMs,
+          samples: burstSamples,
+          lastSampleCostMs: burstSampleCostMs,
+          videoTrack: getVideoTrackSize(),
+          windowCongestion: burstWindowCongestion,
+          orphanPhoto: getOrphanPhotoStats(),
+          grace: {
+            photoGrace: burstPhotoGrace,
+            framesFallback: Math.max(0, burstGraceRan - burstPhotoGrace),
+            graceWaitedMsMedian:
+              burstGraceWaitedMs.length > 0
+                ? median(burstGraceWaitedMs)
+                : null,
+            dispatchSource: {
+              photo: (burstByReason["photo"] ?? 0) + burstPhotoGrace,
+              frames:
+                (burstByReason["stable"] ?? 0) +
+                (burstByReason["time_cap"] ?? 0) +
+                (burstByReason["frame_cap"] ?? 0) +
+                (burstByReason["error"] ?? 0),
+            },
+          },
+          // v4.3 (v4) — tramo opaco (§2.1) + congestión partida (§2.2):
+          // bloques ADITIVOS; sin cortes en la sesión → arrays vacíos y
+          // cutCaptures 0 (informes pre-v4 comparables campo a campo).
+          pipe: {
+            toMarkMs: burstPipeToMarkMs,
+            toMarkMsMedian: median(burstPipeToMarkMs),
+            sniffMs: burstPipeSniffMs,
+            dataUrlMs: burstPipeDataUrlMs,
+            bgJobsAtShot: burstPipeBgJobs,
+          },
+          congestion: {
+            cutCaptures: burstPipeToMarkMs.length,
+            congestionWait: burstCongestionWait,
+            congestionPipe: burstCongestionPipe,
+          },
+          heapProbe: burstHeapProbe,
+        }
+      : undefined;
+
   const lastClose = marksOf("editor_close");
   const bootMark = marksOf("boot_ready")[0];
 
@@ -376,7 +663,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
 
   return {
     format: "scannerlab-diag-report",
-    version: 3,
+    version: 5,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -403,6 +690,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
           shotToProcessedMs: median(shotToProcessedMs),
           processedToWriteMs: median(processedToWriteMs),
         },
+        ...(burst ? { burst } : {}),
       },
       editor: {
         openMs: editorOpenMs,
@@ -473,7 +761,7 @@ export function buildDiagTxt(r: DiagReport): string {
   push("==============================================");
   push(`Generado : ${new Date(r.generatedAt).toLocaleString()}`);
   push(`Build    : ${r.app.build}`);
-  push("Formato  : diag-report v3");
+  push("Formato  : diag-report v5");
   if (r.qa) {
     push();
     push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
@@ -550,6 +838,130 @@ export function buildDiagTxt(r: DiagReport): string {
       : DASH;
   push(`Captura → guardada (ms)   : ${savedList} (mediana ${s.pages.medianMs ?? DASH})`);
   push(`  tramos: procesado ${fmtMs(s.pages.segments.shotToProcessedMs)} · escritura ${fmtMs(s.pages.segments.processedToWriteMs)} (medianas)`);
+  // v4 (burst-budget) — línea de captura con la adquisición presupuestada:
+  // conteo por razón de salida + gap disparo→foto (capture_fired→shot).
+  // v5 (burst v2-A13) — ventana de adquisición bajo el microscopio: muro
+  // (wallFireMs), sampler, track de video, congestión por ventana y la
+  // foto huérfana (el blob del sensor que llegó tarde).
+  if (s.pages.burst) {
+    const br = s.pages.burst.byReason;
+    const reasons = [
+      "photo",
+      "photo_grace",
+      "stable",
+      "time_cap",
+      "frame_cap",
+      "legacy",
+      "error",
+    ]
+      .filter((k) => (br[k] ?? 0) > 0)
+      .map((k) => `${k} ${br[k]}`)
+      .join(" · ");
+    push(
+      `  burst: ${reasons || DASH} — gap disparo→foto mediana ${fmtMs(s.pages.burst.acquisitionMsMedian)}`
+    );
+    const walls = s.pages.burst.wallFireMs;
+    if (walls.length > 0) {
+      const wallTxt = walls
+        .slice(0, 5)
+        .map((v) => `${(v / 1000).toFixed(1)} s`)
+        .join(" · ");
+      const sampTxt = s.pages.burst.samples
+        .slice(0, 5)
+        .map((n) => `${n}`)
+        .join("/");
+      const cost = s.pages.burst.lastSampleCostMs.filter(
+        (v): v is number => v !== null
+      );
+      const costTxt =
+        cost.length > 0
+          ? ` · coste última ${fmtMs(Math.max(...cost))}`
+          : "";
+      push(`  muro por captura: ${wallTxt}${sampTxt ? ` · sampler ${sampTxt} muestras${costTxt}` : ""}`);
+    }
+    const vt = s.pages.burst.videoTrack;
+    if (vt) {
+      const cong = s.pages.burst.windowCongestion;
+      const congTxt =
+        cong.length > 0
+          ? ` · congestión ${cong
+              .slice(0, 5)
+              .map((c) => `${c.count}t/${Math.round(c.totalMs)}ms`)
+              .join(" · ")}`
+          : "";
+      push(`  track video: ${vt.w}×${vt.h} px${congTxt}`);
+    }
+    const orph = s.pages.burst.orphanPhoto;
+    if (orph.watched > 0) {
+      const arrivals = orph.arrivalMs
+        .map((v, i) => `${(v / 1000).toFixed(1)} s${orph.bytes[i] ? ` (${fmtMB(orph.bytes[i]!)})` : ""}`)
+        .join(" · ");
+      push(
+        `  foto huérfana: ${orph.watched} observada${orph.watched === 1 ? "" : "s"} · ` +
+          `${orph.arrived} llegó${orph.arrived === 1 ? "" : "ron"}` +
+          (orph.arrived > 0 ? ` (+${arrivals})` : "") +
+          (orph.pending > 0 ? ` · ${orph.pending} pendiente${orph.pending === 1 ? "" : "s"}` : "") +
+          (orph.rejected > 0 ? ` · ${orph.rejected} rota${orph.rejected === 1 ? "" : "s"}` : "")
+      );
+    }
+    // v4.2 (v3 Fase D) — la gracia en el TXT: cuántas huérfanas rescató a
+    // foto completa y a cuántas cayó a frames tras esperarla. Solo si la
+    // gracia corrió en la sesión (lotes 1-5: línea ausente, TXT idéntico).
+    const gr = s.pages.burst.grace;
+    if (gr.photoGrace + gr.framesFallback > 0) {
+      push(
+        `  gracia foto: ${gr.photoGrace} rescatada${gr.photoGrace === 1 ? "" : "s"} a foto completa` +
+          ` · ${gr.framesFallback} a frames` +
+          ` · espera mediana ${fmtMs(gr.graceWaitedMsMedian)}`
+      );
+    }
+    // v4.3 (v4 §2.1/§2.2) — tramo opaco + congestión partida por el corte.
+    // SOLO si hubo cortes en la sesión (sin cortes: líneas ausentes, TXT
+    // idéntico a pre-v4 — gate 4). Cuadre §2.4 por captura: gap
+    // disparo→foto ≈ muro (neto de gracia) + gracia + tramo opaco.
+    const pip = s.pages.burst.pipe;
+    const cong = s.pages.burst.congestion;
+    if (cong.cutCaptures > 0) {
+      const toMarkTxt = pip.toMarkMs
+        .slice(0, 5)
+        .map((v) => `${(v / 1000).toFixed(1)} s`)
+        .join(" · ");
+      push(
+        `  tramo opaco: ${cong.cutCaptures} corte${cong.cutCaptures === 1 ? "" : "s"} · mediana ${fmtMs(pip.toMarkMsMedian)} (${toMarkTxt})`
+      );
+      const sub: string[] = [];
+      if (pip.sniffMs.length > 0) {
+        sub.push(
+          `sniff ${pip.sniffMs.slice(0, 5).map((v) => `${Math.round(v)} ms`).join(" · ")}`
+        );
+      }
+      if (pip.dataUrlMs.length > 0) {
+        sub.push(
+          `dataURL ${pip.dataUrlMs.slice(0, 5).map((v) => `${(v / 1000).toFixed(2)} s`).join(" · ")}`
+        );
+      }
+      if (pip.bgJobsAtShot.length > 0) {
+        sub.push(`bgJobs@shot ${pip.bgJobsAtShot.slice(0, 5).join(" · ")}`);
+      }
+      if (sub.length > 0) push(`  pipe foto: ${sub.join(" · ")}`);
+      const congTxt = cong.congestionWait
+        .slice(0, 5)
+        .map((c, i) => {
+          const p = cong.congestionPipe[i];
+          return `${c.count}t/${(c.totalMs / 1000).toFixed(1)}s→${p ? `${p.count}t/${(p.totalMs / 1000).toFixed(1)}s` : DASH}`;
+        })
+        .join(" · ");
+      push(`  congestión espera→pipe: ${congTxt || DASH}`);
+      const heapProbes = s.pages.burst.heapProbe ?? [];
+      for (const hp of heapProbes) {
+        if (hp) {
+          push(
+            `  sonda heap: ${hp.samples} muestras · ${hp.minMB}–${hp.maxMB} MB · sierra ${hp.sawtoothMB} MB`
+          );
+        }
+      }
+    }
+  }
   const renders2 = s.editor.firstRenders[1];
   push(
     `Editor: apertura/render   : ${s.editor.openMs !== null ? `${s.editor.openMs} ms` : DASH} / ${fmtMs(s.editor.firstRenderMs)}${renders2 !== null && renders2 !== undefined ? ` · 2ª: ${fmtMs(renders2)}` : ""}`
