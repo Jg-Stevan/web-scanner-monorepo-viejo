@@ -610,7 +610,7 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 
 ---
 
-## 0-vigesimo-primero. PERF — Burst v2-A13: telemetría v5 de la ventana + alivio de congestión fired→shot + muro 5 s (rama `perf/burst-budget`, PR #39 evoluciona en draft)
+## 0-vigesimo-segundo. PERF — Burst v2-A13: telemetría v5 de la ventana + alivio de congestión fired→shot + muro 5 s (rama `perf/burst-budget`, PR #39 evoluciona en draft)
 
 **Base:** INSTRUCCIONES-fix-burst-v2-a13.md. Evidencia del lote 4 (qa-standard-v1.1, build 89fb5dc): A56 ✓ y PC ✓, pero **A13 quedó con lo PEOR de ambos mundos** — `time_cap ×3` (el muro cortó… a los 11.9-17.2 s, no a los 2 s) y actas a **960 px** (la resolución del track del preview, ilegibles). Diagnóstico doble: (1) el hilo principal saturado durante la espera (fpsLate 5, 435 long tasks/57 s) desliza TODOS los timers ×6-8 — el `setInterval` del muro, el `setTimeout` de la carrera interna y la propia resolución de la promesa `takePhoto`; (2) cuando el muro corta, el rescate usa frames del preview (960 px) y elige el ganador por lapVar — en un preview con poca luz **el frame más ruidoso gana** (el ruido es alta frecuencia).
 
