@@ -12,10 +12,12 @@
  * Al activar una versión nueva, limpia TODAS las cachés antiguas y llama a
  * clients.claim() — la pestaña abierta salta a la nueva versión al navegar.
  */
-const VERSION = "escaner-v6";
+const VERSION = "escaner-v7";
 const CORE_CACHE = `${VERSION}-core`;
 const STATIC_CACHE = `${VERSION}-static`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
+const OCR_CACHE = `${VERSION}-ocr`;
+const OCR_CACHE_MAX = 20;
 // A6: tope de entradas del caché runtime — antes crecía sin límite (llegó a
 // cachear el ZIP de descarga y cualquier GET del mismo origen).
 const RUNTIME_CACHE_MAX = 80;
@@ -73,6 +75,36 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
+
+  // F2-C — precache offline del OCR (Tesseract / traineddata en jsdelivr)
+  if (
+    url.hostname === "cdn.jsdelivr.net" &&
+    (url.pathname.includes("tesseract.js") || url.pathname.includes("tesseract.js-data"))
+  ) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(OCR_CACHE);
+        const cached = await cache.match(req);
+        if (cached) return cached;
+        try {
+          const fresh = await fetch(req);
+          if (fresh && (fresh.ok || fresh.type === "opaque")) {
+            cache.put(req, fresh.clone()).catch(() => undefined);
+            cache.keys().then((keys) => {
+              if (keys.length > OCR_CACHE_MAX) {
+                cache.delete(keys[0]).catch(() => undefined);
+              }
+            }).catch(() => undefined);
+          }
+          return fresh;
+        } catch {
+          return cached || new Response("OCR offline no disponible", { status: 503 });
+        }
+      })()
+    );
+    return;
+  }
+
   if (url.origin !== self.location.origin) return; // CDN de OpenCV, etc.
 
   // 1) Navegación → NETWORK-FIRST (anti caché vieja).
