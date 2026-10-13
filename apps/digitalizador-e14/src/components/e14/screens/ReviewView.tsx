@@ -35,7 +35,9 @@
  * 42px surface-2 con punto 10px; chips cápsulas 34px centradas gap-2.5
  * (TRANSMISIÓN sólido neón texto NEGRO; MESA/PÁG navy texto blanco);
  * tarjeta = CONTENEDOR OSCURO surface-card 20px con brackets BARRAS neón
- * 3.5px glow y acta blanca rounded-14px object-cover; barra de envío =
+ * 3.5px glow y acta blanca rounded-14px object-contain (SERIE 1
+ *  e14-sync-visor §3: fit UNIVERSAL — el acta alta se ve COMPLETA con
+ *  letterboxing, como las as-is); barra de envío =
  * cápsula 46px green-bar con check círculo neón sólido + hora en recuadro
  * green-inset (SHA-256 FUERA de esta vista — cambio deliberado del dueño);
  * extrapolación §10: barra de rechazo crit (✕ círculo sólido) + banner
@@ -51,6 +53,7 @@ import { OCR_NO_TEXT } from "@jg-stevan/scanner-core/ocr";
 import { defaultQuad, FILTER_PRESETS } from "@jg-stevan/scanner-core/types";
 import type { PageFilter } from "@jg-stevan/scanner-core/types";
 import { QuadEditor } from "../QuadEditor";
+import { ZoomableVisor } from "../ZoomableVisor";
 import { PanelClasificacion } from "../PanelClasificacion";
 import { Chip, PrimaryBtn, ToolbarBtn } from "../primitives";
 import { CheckIcon, CopyIcon, CropIcon, FullscreenIcon, LoaderIcon, PlusIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, UserKeyIcon, WarnTriangleIcon, XIcon } from "../icons";
@@ -172,7 +175,8 @@ export function ReviewView() {
     return { words, chars: text.length };
   }, [acta?.ocrTexto]);
 
-  // L5: Esc cierra el visor (tap en cualquier lado también).
+  // L5: Esc cierra el visor (el cierre por toque lo resuelve el
+  // ZoomableVisor dentro del modal — ver §4 del sync-visor).
   useEffect(() => {
     if (!visorAbierto) return;
     const onKey = (e: KeyboardEvent) => {
@@ -260,15 +264,16 @@ export function ReviewView() {
     ? (acta.fotoOriginal ?? acta.fotoProcesada)
     : acta.fotoProcesada;
   const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
-  // §D8.4/AC4/AC14 (SPEC-e14-score-ocr Rev. 3): un acta AS-IS
-  // (fotoProcesada === fotoOriginal — simulación sin recorte) se muestra
-  // COMPLETA en la tarjeta: object-contain. La foto b/n del MEDIO es ALTA
-  // (980×2112, aspect ~0.46) y con object-cover la tarjeta solo enseña la
-  // banda central — el entorno alrededor del papel y su corte inferior
-  // (LA evidencia de que es as-is y por qué es medio) desaparecerían. Las
-  // capturas REALES (warp al aspecto del papel) conservan object-cover.
-  const fotoAsis =
-    acta.fotoProcesada != null && acta.fotoOriginal != null && acta.fotoProcesada === acta.fotoOriginal;
+  // §D8.4/AC4/AC14 (SPEC-e14-score-ocr Rev. 3) + SERIE 1 (sync-visor
+  // §3): el acta se muestra COMPLETA en la tarjeta SIEMPRE —
+  // object-contain UNIVERSAL. El fit contain lo estrenaron las fotos
+  // as-is de Rev. 3 y el mismo mecanismo aplica a TODO: el warp real
+  // produce un acta ALTA (aspecto de página ~0.46–0.7) y la tarjeta
+  // flex-1 tiene otro aspecto → object-cover escalaba a llenar y
+  // RECORTABA arriba/abajo (bug «la imagen se ve GRANDE y CORTADA»). Con
+  // contain aparece letterboxing vertical: la carta de papel blanca
+  // COMPLETA dentro del contenedor oscuro (MISMO look que las as-is).
+  // El ternario fotoAsis desaparece — su único uso era el fit.
   const hayFoto = Boolean(fotoVisible);
   const altFoto = mostrandoOriginal
     ? "Foto original del acta (la procesada salió vacía)"
@@ -439,7 +444,8 @@ export function ReviewView() {
             CYBER-NEÓN §6: el acta vive DENTRO de un CONTENEDOR OSCURO
             surface-card rounded-20px p-10px con brackets BARRA neón 3.5px
             sobre las esquinas DEL CONTENEDOR; acta blanca rounded-14px
-            object-cover (esquinas propias, separada 10px). */}
+            object-contain SERIE 1 (esquinas propias, separada 10px —
+            el acta COMPLETA, con letterboxing si es más alta). */}
         {status === "ENVIADA" ? (
           <button
             type="button"
@@ -453,7 +459,7 @@ export function ReviewView() {
                 <img
                   src={fotoVisible}
                   alt={altFoto}
-                  className={`w-full h-full rounded-[14px] ${fotoAsis ? "object-contain" : "object-cover"}`}
+                  className="w-full h-full rounded-[14px] object-contain"
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -472,7 +478,7 @@ export function ReviewView() {
                 <img
                   src={fotoVisible}
                   alt={altFoto}
-                  className={`w-full h-full rounded-[14px] ${fotoAsis ? "object-contain" : "object-cover"}`}
+                  className="w-full h-full rounded-[14px] object-contain"
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -862,23 +868,32 @@ export function ReviewView() {
         </>
       ) : null}
 
-      {/* L5 §7 — PANTALLA COMPLETA: visor modal de la foto (procesada o, si
-          salió vacía, ORIGINAL de respaldo — §D4 SPEC-e14-score-ocr;
-          object-contain, tap en cualquier lado o Esc cierra). */}
+      {/* L5 §7 — PANTALLA COMPLETA: visor modal con F-ZOOM (SERIE 1
+          e14-sync-visor §4 — COPIA del stage del lab): pinza 1×–6×
+          anclada · pan con clamps · doble toque 2,5× · rueda · F-COMPARE
+          manteniendo pulsado (si hay original) · chip % + RESTABLECER ·
+          hint 6 s. Se conservan el role=dialog, el fondo bg-black/90 y
+          Esc (efecto de arriba); el cierre por toque lo decide el
+          ZoomableVisor (tap-fuera inmediato · tap sobre la imagen a 1×
+          diferido 320 ms para no matar el doble toque — decisión
+          documentada en el PR). */}
       {visorAbierto && fotoVisible ? (
         <div
           role="dialog"
           aria-label="Foto del acta a pantalla completa"
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 animate-editor-enter"
-          onClick={() => setVisorAbierto(false)}
+          className="fixed inset-0 z-50 bg-black/90 animate-editor-enter"
         >
-          <img
+          <ZoomableVisor
             src={fotoVisible}
             alt={altFoto}
-            className="max-w-full max-h-full object-contain rounded-sm shadow-2xl shadow-black"
-            draggable={false}
+            compareSrc={
+              acta.fotoOriginal != null && acta.fotoOriginal !== fotoVisible
+                ? acta.fotoOriginal
+                : undefined
+            }
+            onClose={() => setVisorAbierto(false)}
           />
-          <span className="absolute top-3 inset-x-0 text-center font-data text-[9px] tracking-[0.2em] text-ink-dim uppercase">
+          <span className="pointer-events-none absolute top-3 inset-x-0 text-center font-data text-[9px] tracking-[0.2em] text-ink-dim uppercase">
             Toca o ESC para cerrar
           </span>
         </div>
