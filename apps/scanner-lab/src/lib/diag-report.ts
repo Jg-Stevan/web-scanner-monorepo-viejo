@@ -31,7 +31,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/post-capture-f2 @ 879ff20 f2-lote1";
+export const DIAG_BUILD = "perf/lote2-preview @ 2f879dc lote2";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
