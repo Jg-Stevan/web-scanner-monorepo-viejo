@@ -260,6 +260,15 @@ export function ReviewView() {
     ? (acta.fotoOriginal ?? acta.fotoProcesada)
     : acta.fotoProcesada;
   const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
+  // §D8.4/AC4/AC14 (SPEC-e14-score-ocr Rev. 3): un acta AS-IS
+  // (fotoProcesada === fotoOriginal — simulación sin recorte) se muestra
+  // COMPLETA en la tarjeta: object-contain. La foto b/n del MEDIO es ALTA
+  // (980×2112, aspect ~0.46) y con object-cover la tarjeta solo enseña la
+  // banda central — el entorno alrededor del papel y su corte inferior
+  // (LA evidencia de que es as-is y por qué es medio) desaparecerían. Las
+  // capturas REALES (warp al aspecto del papel) conservan object-cover.
+  const fotoAsis =
+    acta.fotoProcesada != null && acta.fotoOriginal != null && acta.fotoProcesada === acta.fotoOriginal;
   const hayFoto = Boolean(fotoVisible);
   const altFoto = mostrandoOriginal
     ? "Foto original del acta (la procesada salió vacía)"
@@ -444,7 +453,7 @@ export function ReviewView() {
                 <img
                   src={fotoVisible}
                   alt={altFoto}
-                  className="w-full h-full object-cover rounded-[14px]"
+                  className={`w-full h-full rounded-[14px] ${fotoAsis ? "object-contain" : "object-cover"}`}
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -463,7 +472,7 @@ export function ReviewView() {
                 <img
                   src={fotoVisible}
                   alt={altFoto}
-                  className="w-full h-full object-cover rounded-[14px]"
+                  className={`w-full h-full rounded-[14px] ${fotoAsis ? "object-contain" : "object-cover"}`}
                 />
               ) : (
                 <div className="flex items-center justify-center w-full h-full">
@@ -978,10 +987,17 @@ export function ReviewCtas() {
         <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
     ) : (
-      <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
-        <RefreshIcon className="w-4 h-4" />
-        <span>REPETIR FOTO</span>
-      </PrimaryBtn>
+      // §D10 (SPEC-e14-score-ocr Rev. 4): retorno suelto ENVUELTO en flex
+      // w-full — flex-1 del PrimaryBtn estira el botón al ancho COMPLETO del
+      // slot de CTAs (mismos márgenes px-4 del BottomNav) con el label
+      // centrado. Sin el wrapper quedaba a ancho de contenido, alineado a la
+      // izquierda (defecto original). Pares grid-cols-2 y ÓPTIMA INTACTOS.
+      <div className="flex w-full">
+        <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
+          <RefreshIcon className="w-4 h-4" />
+          <span>REPETIR FOTO</span>
+        </PrimaryBtn>
+      </div>
     );
   }
 
@@ -1005,13 +1021,16 @@ export function ReviewCtas() {
         <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
     ) : (
-      <PrimaryBtn
-        variant="crit"
-        onClick={repetirFoto}
-        icon={<RefreshIcon className="w-3.5 h-3.5" />}
-      >
-        <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
-      </PrimaryBtn>
+      // §D10 (Rev. 4): envuelto → ancho completo, label centrado.
+      <div className="flex w-full">
+        <PrimaryBtn
+          variant="crit"
+          onClick={repetirFoto}
+          icon={<RefreshIcon className="w-3.5 h-3.5" />}
+        >
+          <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
+        </PrimaryBtn>
+      </div>
     );
   }
 
@@ -1020,20 +1039,26 @@ export function ReviewCtas() {
     // «repetir-primero» (intento < max): REPETIR CAPTURA; contingencia
     // (intento ≥ max): VOLVER AL ESCÁNER (hoy exacto).
     if (acta.intento < acta.maxIntentos) {
+      // §D10 (Rev. 4): envuelto → ancho completo, label centrado.
       return (
-        <PrimaryBtn
-          variant="outline"
-          onClick={repetirFoto}
-          icon={<RefreshIcon className="w-3.5 h-3.5" />}
-        >
-          <span>REPETIR CAPTURA (FOTO MÁS NÍTIDA)</span>
-        </PrimaryBtn>
+        <div className="flex w-full">
+          <PrimaryBtn
+            variant="outline"
+            onClick={repetirFoto}
+            icon={<RefreshIcon className="w-3.5 h-3.5" />}
+          >
+            <span>REPETIR CAPTURA (FOTO MÁS NÍTIDA)</span>
+          </PrimaryBtn>
+        </div>
       );
     }
+    // §D10 (Rev. 4): mismo slot, mismo defecto → mismo wrapper (coherencia).
     return (
-      <PrimaryBtn variant="outline" onClick={() => navegar("escanear")}>
-        <span>VOLVER AL ESCÁNER</span>
-      </PrimaryBtn>
+      <div className="flex w-full">
+        <PrimaryBtn variant="outline" onClick={() => navegar("escanear")}>
+          <span>VOLVER AL ESCÁNER</span>
+        </PrimaryBtn>
+      </div>
     );
   }
 

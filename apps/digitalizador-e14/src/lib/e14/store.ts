@@ -29,8 +29,10 @@ export type Vista = "escanear" | "analizando" | "revision" | "actas" | "resumen"
 export type BandaSim = "optima" | "medio" | "baja";
 
 /** §D3: score INYECTADO por banda (el del bracket del chip). El desenlace
- *  real lo decide el gate (§D4): 8.2 + AUTO → piso identificada 10.0 ÓPTIMA
- *  enviada · 7.0 sin AUTO → EN_REVISION_HUMANA repetir-primero · 4.3 →
+ *  real lo decide el gate (§D4). §D8.5 (SPEC-e14-score-ocr Rev. 3): la b/n
+ *  del dueño as-is = medio 7.0 · la borrosa original as-is = bajo 4.3 ·
+ *  8.2 + AUTO → piso 10.0 (ÓPTIMA enviada) · 7.0 con AUTO → ADVERTENCIA
+ *  (el chip manda — el piso solo re-aplica con score ≥ 8) · 4.3 →
  *  RECHAZADA. Los mismos números viven pintados en NIVELES_CALIDAD. */
 export const SCORE_SIMULADO: Record<BandaSim, number> = {
   optima: 8.2,

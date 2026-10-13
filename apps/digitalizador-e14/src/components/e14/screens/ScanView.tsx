@@ -104,10 +104,13 @@ import {
  *  dispara un análisis determinista con la foto de ejemplo del dueño y el
  *  score inyectado de su banda (la completa = óptima · la cortada =
  *  intermedio · la borrosa = bajo); el desenlace real lo decide el gate
- *  (ÓPTIMA → 10.0 enviada · MEDIO → EN_REVISION_HUMANA · BAJA → RECHAZADA).
- *  Estética neón INTACTA (mismas clases del mock aprobado) — solo se añade
- *  cursor/feedback de toque, área táctil ≥44px invisible y disabled durante
- *  el análisis (AC7/AC8). Los scores de bracket son los que INYECTA el chip. */
+ *  (ÓPTIMA → 10.0 enviada · MEDIO → ADVERTENCIA revisión (7.0) · BAJA →
+ *  RECHAZADA). Estética neón INTACTA (mismas clases del mock aprobado) —
+ *  solo se añade cursor/feedback de toque, área táctil ≥44px invisible y
+ *  disabled durante el análisis (AC7/AC8). Los scores de bracket son los
+ *  que INYECTA el chip. §D6.3 (SPEC-e14-score-ocr Rev. 3): el piso
+ *  re-aplica solo con score ≥ 8 — la foto b/n del MEDIO clasifica AUTO
+ *  real y queda en 7.0 ADVERTENCIA (la banda medio vive). */
 const NIVELES_CALIDAD: {
   id: BandaSim;
   label: string;
@@ -1934,15 +1937,35 @@ export function ScanView() {
         ))}
       </div>
 
-      {/* §6 Fila de disparo — en CÁMARA conserva los CONTROLES FUNCIONALES
-          existentes re-vestidos ([FLASH(linterna real) | obturador | AUTO
-          (armado)]); en SIMULACIÓN/ARCHIVO es 1:1 al mock: [Importar |
-          obturador | Flash decorativo]. MISMA lógica de disparo por
-          plataforma (~L1211+), intocada. */}
+      {/* §6 Fila de disparo — Rev. 4 (D9 SPEC-e14-score-ocr): fila UNIFICADA
+          [Importar | obturador | Flash] en TODOS los modos; el botón «Auto»
+          de la fila se ELIMINÓ (el armado de auto-captura vive SOLO en el HUD
+          ámbar superior §B + alternarAutoHUD — pill IA·AUTO/MANUAL intacta).
+          La diferencia entre modos vive SOLO en el COMPORTAMIENTO del Flash
+          (linterna real en CÁMARA vs aviso honesto en sim). MISMA lógica de
+          disparo por plataforma (~L1211+), intocada. */}
       {modoCamara ? (
         <div className="flex items-center justify-center gap-[52px] pb-4 shrink-0">
+          {/* Importar (izquierda, D9 Rev. 4) — réplica EXACTA del botón de la
+              rama SIM/ARCHIVO: MISMO inputRef/label/aria — abre el file picker
+              y una foto elegida corre el análisis normal (pipeline ARCHIVO
+              completo; la vía CAMARA+archivo ya existía, pipeline L309-310). */}
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            aria-label="Importar imagen"
+            className="flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 text-white"
+          >
+            <FolderImportIcon className="w-[26px] h-[26px]" />
+            <span className="text-[10px] font-bold text-[#C7CEDA]">Importar</span>
+          </button>
+
+          {obturador}
+
           {/* FLASH — F-FLASH v3: SIEMPRE activo con cámara (la verdad se
-              descubre al pulsar); sin stream → hint. Icono rayo del mock. */}
+              descubre al pulsar); sin stream → hint. Icono rayo del mock.
+              D9 Rev. 4: reubicado a la DERECHA del obturador (donde estaba
+              Auto) — MISMA función/linterna real, solo posición. */}
           <button
             type="button"
             aria-pressed={torchOn}
@@ -1963,27 +1986,6 @@ export function ScanView() {
               className={`text-[10px] font-bold ${torchOn ? "text-amber-hud" : "text-[#C7CEDA]"}`}
             >
               Flash
-            </span>
-          </button>
-
-          {obturador}
-
-          {/* AUTO (D22/D24: default OFF — el gate fino vive en el core). */}
-          <button
-            type="button"
-            aria-pressed={autoArmado}
-            aria-label={`Auto-captura: ${autoArmado ? "armada" : "desactivada"}`}
-            title="Auto-captura (dispara sola con el acta quieta y nítida)"
-            onClick={() => setAutoArmado((v) => !v)}
-            className={`flex flex-col items-center gap-1.5 px-2 py-1 rounded-[10px] transition active:scale-95 ${
-              autoArmado ? "text-ok-tint" : "text-white"
-            }`}
-          >
-            <ScanFrameIcon className="w-[24px] h-[24px]" />
-            <span
-              className={`text-[10px] font-bold ${autoArmado ? "text-ok-tint" : "text-[#C7CEDA]"}`}
-            >
-              Auto
             </span>
           </button>
         </div>
