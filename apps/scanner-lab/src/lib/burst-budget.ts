@@ -20,6 +20,15 @@
  *        ilegibles): con el hilo aliviado (Fase B), la foto nativa tiene
  *        hasta 5 s para llegar FULL-RES. iPhone (~0.22 s), A56 (~0.9 s) y
  *        PC (~0.25 s) NUNCA lo tocan → coste 0 en dispositivos sanos.
+ *   §D — v3 «FASE D: gracia de la foto huérfana» (photoGraceMs): cuando el
+ *        presupuesto corta con la foto del sensor EN VUELO, esperar una
+ *        GRACIA corta a su promesa ANTES de despachar frames del preview.
+ *        Evidencia del experimento de palanca (A13, 6/6 capturas, muros 5 s
+ *        y 6.5 s): la foto ya está lista cuando el muro corta — su promesa
+ *        resuelve ~18-42 ms después de que el bucle libere el hilo. Si
+ *        llega dentro de la gracia → foto COMPLETA (~4000 px); si no →
+ *        caída al camino actual de frames. `photoGraceMs: 0` = método
+ *        A/B de retroceso (comportamiento exacto de antes de la Fase D).
  *   §B — Salida por estabilidad: miniatura de 64×64 del preview (señal
  *        BARATA, prohibido comparar a 4032 px); `stabilityFrames` deltas
  *        consecutivos por debajo del umbral → `stable`.
@@ -29,7 +38,7 @@
  * Config de diagnóstico (patrón `__diagTools` / `__tierTools`):
  *
  *   window.__burstTools = {
- *     set({ enabled, timeBudgetMs, stabilityFrames, stabilityThreshold }),
+ *     set({ enabled, timeBudgetMs, photoGraceMs, stabilityFrames, stabilityThreshold }),
  *     get(),   // config vigente
  *     reset(), // vuelve a defaults
  *   }
@@ -42,9 +51,12 @@
 
 /** Por qué terminó la adquisición. Los 5 valores de la spec + `photo`
  * (extensión aditiva: la foto del sensor llegó DENTRO del presupuesto y fue
- * despachada — sin este valor no se distinguiría el camino normal del error). */
+ * despachada — sin este valor no se distinguiría el camino normal del error)
+ * + `photo_grace` (v3 Fase D: el presupuesto cortó, la gracia esperó a la
+ * foto huérfana y esta LLEGÓ → foto completa despachada tras el corte). */
 export type BurstExitReason =
   | "photo" // la foto full-sensor llegó dentro del presupuesto (camino normal)
+  | "photo_grace" // §D v3 Fase D: la huérfana llegó DENTRO de la gracia tras el corte
   | "stable" // §B: N deltas consecutivos de preview < umbral → no esperar más
   | "time_cap" // §A: muro de tiempo agotado → dispatch con lo recogido
   | "frame_cap" // §C: dispatch de frames al techo de 3 candidatos (sin foto)
@@ -56,6 +68,12 @@ export interface BurstBudgetConfig {
   enabled: boolean;
   /** §A — muro global de la adquisición, en ms desde capture_fired. */
   timeBudgetMs: number;
+  /** §D v3 Fase D — gracia de la foto huérfana: ms que, tras el corte del
+   *  presupuesto, se espera a la promesa de takePhoto en vuelo ANTES de
+   *  despachar frames del preview. 0 = sin gracia (comportamiento exacto
+   *  de antes de la Fase D — palanca A/B de retroceso). En dispositivos
+   *  sanos la foto gana antes del muro y la gracia JAMÁS corre. */
+  photoGraceMs: number;
   /** §B — deltas consecutivos bajo umbral necesarios para salir por estable. */
   stabilityFrames: number;
   /** §B — umbral del delta (luma medio absoluto por píxel, 0-255). */
@@ -73,6 +91,14 @@ const DEFAULTS: BurstBudgetConfig = {
    *  acta a 4000 px, frente a 17 s a 960 px. Dispositivos sanos (foto en
    *  0.22–1 s) jamás lo tocan. */
   timeBudgetMs: 5000,
+  /** v3 Fase D — 2000. Experimento de palanca del dueño (A13, build
+   *  73d7be2, muros 5 s y 6.5 s): la foto huérfana llega +18-42 ms
+   *  después del corte en 6/6 capturas — la gracia que la rescata cuesta
+   *  decenas de ms, NO segundos; 2000 es el techo para un takePhoto
+   *  VERDADERAMENTE colgado (muro + 2 s, UNA vez por captura, con
+   *  telemetría visible). Subir el muro NO puede ganar la foto (corte y
+   *  foto se mueven juntos); la gracia sí — gratis en dispositivos sanos. */
+  photoGraceMs: 2000,
   stabilityFrames: 2,
   stabilityThreshold: 2.5,
 };
@@ -105,6 +131,14 @@ export interface BurstStats {
   samples: number;
   /** Coste de la ÚLTIMA muestra (ms) — objetivo < 10 ms en clase A13. */
   lastSampleCostMs: number | null;
+  /** v3 Fase D (v4.2) — ms que la gracia esperó a la foto huérfana tras
+   *  el corte (null: la gracia no corrió — sin foto en vuelo o
+   *  photoGraceMs: 0). */
+  graceWaitedMs: number | null;
+  /** v3 Fase D (v4.2) — qué se despachó al final del corte: foto completa
+   *  ("photo") o frames del preview ("frames"). Null en las rutas que no
+   *  pasaron por un corte presupuestado (foto normal, legacy, demo). */
+  dispatchSource: "photo" | "frames" | null;
 }
 
 let lastStats: BurstStats | null = null;
@@ -115,7 +149,14 @@ export function recordBurst(
   exitReason: BurstExitReason,
   frames: number,
   waitedMs: number,
-  extra?: { photoBytes?: number; samples?: number; lastSampleCostMs?: number | null }
+  extra?: {
+    photoBytes?: number;
+    samples?: number;
+    lastSampleCostMs?: number | null;
+    /** v3 Fase D (v4.2) — campos aditivos; ausentes → null. */
+    graceWaitedMs?: number | null;
+    dispatchSource?: "photo" | "frames" | null;
+  }
 ): BurstStats {
   lastStats = {
     at: Date.now(),
@@ -125,6 +166,8 @@ export function recordBurst(
     photoBytes: extra?.photoBytes ?? null,
     samples: extra?.samples ?? 0,
     lastSampleCostMs: extra?.lastSampleCostMs ?? null,
+    graceWaitedMs: extra?.graceWaitedMs ?? null,
+    dispatchSource: extra?.dispatchSource ?? null,
   };
   if (typeof window !== "undefined") {
     (window as unknown as Record<string, unknown>).__lastBurst = { ...lastStats };
@@ -419,6 +462,11 @@ if (typeof window !== "undefined") {
       if (typeof p.enabled === "boolean") next.enabled = p.enabled;
       if (typeof p.timeBudgetMs === "number" && Number.isFinite(p.timeBudgetMs)) {
         next.timeBudgetMs = Math.max(0, Math.min(60_000, p.timeBudgetMs));
+      }
+      // v3 Fase D — gracia de la foto huérfana (mismo estilo que timeBudgetMs;
+      // 0 = sin gracia, palanca A/B de retroceso byte-a-byte).
+      if (typeof p.photoGraceMs === "number" && Number.isFinite(p.photoGraceMs)) {
+        next.photoGraceMs = Math.max(0, Math.min(5000, p.photoGraceMs));
       }
       if (
         typeof p.stabilityFrames === "number" &&

@@ -964,6 +964,13 @@ export default function CameraView() {
                 burstWaitedMs: burstMeta.waitedMs,
                 burstSamples: burstMeta.samples,
                 burstSampleCostMs: burstMeta.lastSampleCostMs,
+                // v3 Fase D (v4.2) — campo ADITIVO OPCIONAL: ms que la gracia
+                // esperó a la foto huérfana tras el corte. Ausente cuando la
+                // gracia no corrió → meta idéntico al de antes (marks
+                // v1/v1.1 intactos, nada renombrado ni eliminado).
+                ...(burstMeta.graceWaitedMs !== null
+                  ? { grace: burstMeta.graceWaitedMs }
+                  : {}),
               }
         );
         pendingBurstRef.current = null;
@@ -1587,21 +1594,108 @@ export default function CameraView() {
       lastSampleCostMs: burstSampleCost,
     };
 
-    if (bail !== null) {
-      // §A/§B — el presupuesto cortó la espera: dispatch con lo recogido.
-      // El ganador ZSL de la ventana 80–450 ms (el ring siguió alimentándose
-      // durante la espera) compite con snapA (frame del instante del
-      // disparo) y un frame fresco; el ring se drena (disciplina RAM).
-      // v2-A13 Fase A — el corte dejó una FOTO HUÉRFANA en vuelo: el
-      // observador registra (sin tocar nada) si llega, cuándo y cuántos
-      // bytes — el dato que decide la Fase D.
+    /** v3 Fase D §2.4 — camino UNIFICADO `blob → página` para la foto de
+     *  gracia: la MISMA secuencia que recorre una foto ganada por carrera
+     *  (capa 2 de takePhotoBlob → FileReader → handleCaptureDataUrl), cero
+     *  lógica paralela. La huérfana es el blob CRUDO del sensor (nunca pasó
+     *  por el clamp) → MISMO tratamiento: sniff de cabecera (~192 KB, salta
+     *  el decode de 12 MP si ya está dentro del tope) + clamp al tope
+     *  seguro del profiler + conversión SIN deadline (el muro ya cortó; el
+     *  usuario espera ESTA foto). Devuelve true si el mark capture_shot se
+     *  emitió (handleCaptureDataUrl consumió la meta colgada por el
+     *  llamador ANTES de llamar aquí — orden obligatorio). */
+    const dispatchPhotoBlob = async (blob: Blob): Promise<boolean> => {
+      try {
+        const capPx =
+          sensorProfileRef.current?.safeCapPx ?? getSensorSafeCap();
+        const sniffed = await readBlobLongSide(blob);
+        const clamped =
+          sniffed !== null && sniffed <= capPx
+            ? blob
+            : await clampBlobToSafeCap(blob, capPx);
+        const url = await blobToDataUrl(clamped);
+        if (!url) return false;
+        await handleCaptureDataUrl(url);
+        return true;
+      } catch {
+        return false; // FileReader del camino de foto falló (rarísimo)
+      }
+    };
+
+    /** v3 Fase D §2.2-2.3 — CORTE DEL PRESUPUESTO CON GRACIA DE LA FOTO
+     *  HUÉRFANA. Unifica las DOS zonas de corte (bail ≠ null y el muro sobre
+     *  la carrera interna del takePhoto — antes duplicadas). ANTES de armar
+     *  candidatos: si hay foto en vuelo y photoGraceMs > 0, correr la
+     *  gracia — el hilo YA está libre (el bucle del presupuesto hizo
+     *  clearInterval) y la promesa encolada resuelve en decenas de ms
+     *  (evidencia 6/6 del experimento de palanca: huérfana − corte
+     *  = +18-42 ms, sin importar la duración del muro). Si llega → foto
+     *  COMPLETA por el camino de siempre; si no → el dispatch de frames
+     *  EXACTO de antes (con la huérfana OBSERVADA por la Fase A). */
+    const dispatchAfterCut = async (reason: BurstExitReason): Promise<void> => {
+      // §2.1 — lectura de la gracia EN el corte (la palanca __burstTools
+      // aplica aquí, no en capture_fired).
+      const graceMs = getBurstConfig().photoGraceMs;
+      let gracePhoto: Blob | null = null;
+      let graceWaitedMs: number | null = null;
+      if (rawPhotoPromise && graceMs > 0) {
+        const t0 = performance.now();
+        // Reloj monotónico + setTimeout (fiable AQUÍ: el hilo quedó libre al
+        // cortar el bucle). PROHIBIDO rAF. Rechazo/mono vacío → null YA,
+        // sin esperar la gracia completa (el race lo hace).
+        const winner = await Promise.race([
+          rawPhotoPromise.then(
+            (b) => (b && b.size > 0 ? { blob: b } : null),
+            () => null
+          ),
+          new Promise<null>((r) => window.setTimeout(() => r(null), graceMs)),
+        ]).catch(() => null);
+        graceWaitedMs = Math.round(performance.now() - t0);
+        gracePhoto = winner?.blob ?? null;
+      }
+      if (gracePhoto) {
+        // §2.5 — el sensor ENTREGÓ (tarde, pero entregó): NO es takePhoto
+        // roto → desactivar la lista negra que pudo marcar el timeout de
+        // la carrera interna (cierra el Hallazgo A de la auditoría).
+        // PROHIBIDO blacklistear por wallCapped: corte ≠ sensor roto.
+        takePhotoBrokenRef.current = false;
+        pendingBurstRef.current = recordBurst(
+          "photo_grace",
+          0,
+          performance.now() - burstT0,
+          {
+            ...burstExtra,
+            photoBytes: gracePhoto.size,
+            graceWaitedMs,
+            dispatchSource: "photo",
+          }
+        );
+        if (await dispatchPhotoBlob(gracePhoto)) return;
+        // Conversión del camino de foto falló (rarísimo): la meta se
+        // SOBREESCRIBE abajo con la razón verdadera y cae a frames.
+      }
+      // Fallback: exactamente el código de antes de la Fase D (frames del
+      // preview) — el ring se drena, la huérfana queda OBSERVADA (Fase A).
       watchOrphanPhoto(rawPhotoPromise, burstT0);
       const cands = [takeZslFallback(), snapA, snapshotVideo()];
       const n = cands.filter((f): f is BurstFrame => f !== null).length;
-      pendingBurstRef.current = recordBurst(bail, n, performance.now() - burstT0, burstExtra);
+      pendingBurstRef.current = recordBurst(
+        reason,
+        n,
+        performance.now() - burstT0,
+        { ...burstExtra, graceWaitedMs, dispatchSource: "frames" }
+      );
       if (!(await dispatchBestFrame(cands))) {
         pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
       }
+    };
+
+    if (bail !== null) {
+      // §A/§B — el presupuesto cortó la espera. v3 Fase D: ANTES de armar
+      // candidatos, la gracia de la foto huérfana (si la foto del sensor
+      // está en vuelo, resuelve en decenas de ms con el hilo ya libre —
+      // se despacha la foto COMPLETA en vez de frames de 960 px).
+      await dispatchAfterCut(bail);
       return;
     }
 
@@ -1615,14 +1709,10 @@ export default function CameraView() {
       // muro, el resultado es SIEMPRE time_cap.
       if (burstDeadline !== undefined && shot?.timedOut === true && shot.wallCapped === true) {
         // v2-A13 Fase A — muro sobre la carrera interna: misma foto huérfana
-        // en vuelo, mismo observador (SOLO mira).
-        watchOrphanPhoto(rawPhotoPromise, burstT0);
-        const cands = [takeZslFallback(), snapA, snapshotVideo()];
-        const n = cands.filter((f): f is BurstFrame => f !== null).length;
-        pendingBurstRef.current = recordBurst("time_cap", n, performance.now() - burstT0, burstExtra);
-        if (!(await dispatchBestFrame(cands))) {
-          pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
-        }
+        // en vuelo. v3 Fase D — MISMO helper de gracia que la zona bail ≠
+        // null (unifica ambas zonas de corte: gracia → foto completa o el
+        // dispatch de frames de siempre).
+        await dispatchAfterCut("time_cap");
         return;
       }
       // FIX v4 4.3 — chequeo post-timeout: un takePhoto colgado puede dejar

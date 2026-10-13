@@ -136,6 +136,19 @@ export interface DiagReport {
           arrivalMs: number[];
           bytes: number[];
         };
+        /** v4.2 (v3 Fase D) — gracia de la foto huérfana: cuántas capturas
+         *  rescató la gracia a foto COMPLETA tras el corte, a cuántas cayó
+         *  a frames tras esperarla, y el agregado de qué se despachó en
+         *  TODAS las capturas presupuestadas (foto vs frames — el titular
+         *  de v3: páginas a ~4000 px vs 960 px). Derivado de byReason + el
+         *  campo aditivo `grace` del mark (ausente en lotes 1-5 → 0/null,
+         *  informes viejos comparables). */
+        grace: {
+          photoGrace: number;
+          framesFallback: number;
+          graceWaitedMsMedian: number | null;
+          dispatchSource: { photo: number; frames: number };
+        };
       };
     };
     editor: {
@@ -400,6 +413,10 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const burstSamples: number[] = [];
   const burstSampleCostMs: Array<number | null> = [];
   const burstWindowCongestion: Array<{ count: number; totalMs: number }> = [];
+  // v4.2 (v3 Fase D) — grace del mark capture_shot (campo aditivo opcional:
+  // ms que la gracia esperó a la huérfana; ausente = la gracia no corrió).
+  const burstGraceWaitedMs: number[] = [];
+  let burstGraceRan = 0;
   const longTaskEntries = perfProbe.longTaskEntries;
   for (const s of shotMarks) {
     const fired = lastBefore(firedShots, s.ts);
@@ -420,6 +437,12 @@ export async function buildDiagReport(): Promise<DiagReport> {
       }
       const cost = s.meta?.burstSampleCostMs;
       burstSampleCostMs.push(typeof cost === "number" && Number.isFinite(cost) ? cost : null);
+      // v4.2 — la gracia corrió en ESTA captura (campo `grace` presente).
+      const grace = s.meta?.grace;
+      if (typeof grace === "number" && Number.isFinite(grace)) {
+        burstGraceRan += 1;
+        burstGraceWaitedMs.push(grace);
+      }
       if (fired) {
         let count = 0;
         let totalMs = 0;
@@ -433,6 +456,16 @@ export async function buildDiagReport(): Promise<DiagReport> {
       }
     }
   }
+  // v4.2 (v3 Fase D) — bloque de la gracia. Derivación:
+  //  · photoGrace = capturas rescatadas por la gracia (reason photo_grace).
+  //  · framesFallback = la gracia corrió (campo `grace` presente) pero la
+  //    foto no llegó → dispatch de frames (la cuenta de graces corridos
+  //    menos los rescatados).
+  //  · dispatchSource = QUÉ se despachó en las capturas presupuestadas
+  //    (foto = photo + photo_grace; frames = stable/time_cap/frame_cap/
+  //    error — legacy queda fuera: presupuesto apagado, no es una decisión
+  //    de dispatch del presupuesto).
+  const burstPhotoGrace = burstByReason["photo_grace"] ?? 0;
   const burst =
     Object.keys(burstByReason).length > 0
       ? {
@@ -445,6 +478,22 @@ export async function buildDiagReport(): Promise<DiagReport> {
           videoTrack: getVideoTrackSize(),
           windowCongestion: burstWindowCongestion,
           orphanPhoto: getOrphanPhotoStats(),
+          grace: {
+            photoGrace: burstPhotoGrace,
+            framesFallback: Math.max(0, burstGraceRan - burstPhotoGrace),
+            graceWaitedMsMedian:
+              burstGraceWaitedMs.length > 0
+                ? median(burstGraceWaitedMs)
+                : null,
+            dispatchSource: {
+              photo: (burstByReason["photo"] ?? 0) + burstPhotoGrace,
+              frames:
+                (burstByReason["stable"] ?? 0) +
+                (burstByReason["time_cap"] ?? 0) +
+                (burstByReason["frame_cap"] ?? 0) +
+                (burstByReason["error"] ?? 0),
+            },
+          },
         }
       : undefined;
 
@@ -666,7 +715,15 @@ export function buildDiagTxt(r: DiagReport): string {
   // foto huérfana (el blob del sensor que llegó tarde).
   if (s.pages.burst) {
     const br = s.pages.burst.byReason;
-    const reasons = ["photo", "stable", "time_cap", "frame_cap", "legacy", "error"]
+    const reasons = [
+      "photo",
+      "photo_grace",
+      "stable",
+      "time_cap",
+      "frame_cap",
+      "legacy",
+      "error",
+    ]
       .filter((k) => (br[k] ?? 0) > 0)
       .map((k) => `${k} ${br[k]}`)
       .join(" · ");
@@ -715,6 +772,17 @@ export function buildDiagTxt(r: DiagReport): string {
           (orph.arrived > 0 ? ` (+${arrivals})` : "") +
           (orph.pending > 0 ? ` · ${orph.pending} pendiente${orph.pending === 1 ? "" : "s"}` : "") +
           (orph.rejected > 0 ? ` · ${orph.rejected} rota${orph.rejected === 1 ? "" : "s"}` : "")
+      );
+    }
+    // v4.2 (v3 Fase D) — la gracia en el TXT: cuántas huérfanas rescató a
+    // foto completa y a cuántas cayó a frames tras esperarla. Solo si la
+    // gracia corrió en la sesión (lotes 1-5: línea ausente, TXT idéntico).
+    const gr = s.pages.burst.grace;
+    if (gr.photoGrace + gr.framesFallback > 0) {
+      push(
+        `  gracia foto: ${gr.photoGrace} rescatada${gr.photoGrace === 1 ? "" : "s"} a foto completa` +
+          ` · ${gr.framesFallback} a frames` +
+          ` · espera mediana ${fmtMs(gr.graceWaitedMsMedian)}`
       );
     }
   }
