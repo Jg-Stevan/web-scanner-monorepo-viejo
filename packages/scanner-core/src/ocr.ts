@@ -106,25 +106,60 @@ async function downscaleForOcr(dataUrl: string): Promise<string> {
   }
 }
 
-/** OCR local con Tesseract (spa+eng). Descarga ~3 MB la PRIMERA vez. */
+let ocrWorkerPromise: Promise<TesseractWorker> | null = null;
+let ocrProgressHandler: ((p: number) => void) | null = null;
+
+/** Singleton del worker Tesseract persistente (spa+eng). */
+function getOcrWorker(): Promise<TesseractWorker> {
+  if (ocrWorkerPromise) return ocrWorkerPromise;
+  ocrWorkerPromise = (async () => {
+    const Tesseract = await loadTesseract();
+    return await Tesseract.createWorker("spa+eng", 1, {
+      logger: (m) => {
+        if (ocrProgressHandler && m?.status === "recognizing text" && typeof m.progress === "number") {
+          ocrProgressHandler(m.progress);
+        }
+      },
+    });
+  })().catch((err) => {
+    ocrWorkerPromise = null;
+    throw err;
+  });
+  return ocrWorkerPromise;
+}
+
+/** F2-B — warm-up del worker OCR antes del primer uso si hay red. */
+export async function warmUpOcr(): Promise<void> {
+  try {
+    await getOcrWorker();
+  } catch {
+    /* warm-up best-effort: nunca rompe la app */
+  }
+}
+
+/** OCR local con Tesseract (spa+eng). Reutiliza el worker singleton sin terminate(). */
 async function runOcrLocal(
   image: string,
   onProgress?: (p: number) => void
 ): Promise<string> {
-  const Tesseract = await loadTesseract();
   const input = await downscaleForOcr(image);
-  const worker = await Tesseract.createWorker("spa+eng", 1, {
-    logger: (m) => {
-      if (onProgress && m?.status === "recognizing text" && typeof m.progress === "number") {
-        onProgress(m.progress);
-      }
-    },
-  });
+  ocrProgressHandler = onProgress ?? null;
   try {
+    const worker = await getOcrWorker();
     const { data } = await worker.recognize(input);
     return (data?.text ?? "").trim();
+  } catch {
+    // Robustez: si recognize lanza (worker muerto), resetear singleton y reintentar UNA vez con worker fresco.
+    if (ocrWorkerPromise) {
+      const deadPromise = ocrWorkerPromise;
+      ocrWorkerPromise = null;
+      void deadPromise.then((w) => w.terminate()).catch(() => {});
+    }
+    const freshWorker = await getOcrWorker();
+    const { data } = await freshWorker.recognize(input);
+    return (data?.text ?? "").trim();
   } finally {
-    void worker.terminate();
+    ocrProgressHandler = null;
   }
 }
 
