@@ -15,6 +15,10 @@
 
 import { perfProbe, PERF_PROBE_T0, PERF_PROBE_T0_AT, type PerfProbeMark } from "./perf-probe";
 import {
+  getOrphanPhotoStats,
+  getVideoTrackSize,
+} from "./burst-budget";
+import {
   getDeviceSnapshot,
   runBenchmarks,
   getBenchCache,
@@ -59,10 +63,10 @@ export interface DiagTier {
 
 export interface DiagReport {
   format: "scannerlab-diag-report";
-  /** v1 → v2 (sub-marks) → v3 (test estándar QA) → v4 (burst-budget):
-   *  SOLO campos adicionales — todo campo v1 conserva nombre y significado
-   *  (informes de los lotes 1-3 comparables 1:1). */
-  version: 4;
+  /** v1 → v2 (sub-marks) → v3 (test estándar QA) → v4 (burst-budget) →
+   *  v5 (burst v2-A13): SOLO campos adicionales — todo campo v1 conserva
+   *  nombre y significado (informes de los lotes 1-4 comparables 1:1). */
+  version: 5;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -96,11 +100,42 @@ export interface DiagReport {
       /** v4 (burst-budget) — adquisición bajo presupuesto: por qué terminó
        *  cada captura (meta aditiva del mark capture_shot) + gap
        *  capture_fired→shot, LA métrica del antes/después del fix (16.8 s
-       *  → ≤ ~2 s en gama baja). */
+       *  → ≤ ~2 s en gama baja).
+       *  v5 (burst v2-A13) — telemetría de la ventana: cuándo disparó el
+       *  muro de verdad (wallFireMs), salud del sampler §B, resolución del
+       *  track de video, congestión del hilo DENTRO de cada ventana y la
+       *  foto huérfana (llegó tarde pero ¿llegó?). Solo campos nuevos:
+       *  lotes 1-4 comparables 1:1. */
       burst?: {
         byReason: Record<string, number>;
         acquisitionMs: number[];
         acquisitionMsMedian: number | null;
+        /** v5 — ms desde capture_fired cuando el presupuesto produjo la
+         *  salida (waitedMs de recordBurst). ≈ timeBudgetMs = el muro cortó
+         *  cuando debía; 6-8× = los timers seguían deslizándose. */
+        wallFireMs: number[];
+        /** v5 — muestras de estabilidad tomadas por captura (§B). */
+        samples: number[];
+        /** v5 — coste de la última muestra de cada captura (ms; objetivo
+         *  < 10 ms — null cuando no se llegó a muestrear). */
+        lastSampleCostMs: Array<number | null>;
+        /** v5 — getSettings() del track de video al armar la cámara: la
+         *  resolución REAL de la fuente del rescate (lote 4: 960 px). */
+        videoTrack: { w: number; h: number } | null;
+        /** v5 — long tasks (> 50 ms) que arrancaron DENTRO de cada ventana
+         *  capture_fired → capture_shot: la congestión que desliza los
+         *  timers del muro (lote 4: el hilo saturado ×6-8). */
+        windowCongestion: Array<{ count: number; totalMs: number }>;
+        /** v5 — la foto huérfana tras el corte del presupuesto: ¿llegó el
+         *  blob del sensor? ¿a cuántos ms del disparo? (decide la Fase D). */
+        orphanPhoto: {
+          watched: number;
+          arrived: number;
+          pending: number;
+          rejected: number;
+          arrivalMs: number[];
+          bytes: number[];
+        };
       };
     };
     editor: {
@@ -354,14 +389,48 @@ export async function buildDiagReport(): Promise<DiagReport> {
   // capture_fired→shot apareado con el disparo previo. Solo si ALGUNA
   // captura trajo meta burst (sesiones/ramas sin burst-budget → campo
   // ausente, informes viejos idénticos).
+  // v5 (burst v2-A13) — telemetría de la ventana por captura: wallFireMs
+  // (cuándo produjo la salida el presupuesto), salud del sampler §B y
+  // congestión del hilo DENTRO de la ventana (long tasks con instante —
+  // el MISMO observer de session.longTasks, filtrado por ventana). + los
+  // globales de la sesión: videoTrack y la foto huérfana.
   const burstByReason: Record<string, number> = {};
   const burstAcquisitionMs: number[] = [];
+  const burstWallFireMs: number[] = [];
+  const burstSamples: number[] = [];
+  const burstSampleCostMs: Array<number | null> = [];
+  const burstWindowCongestion: Array<{ count: number; totalMs: number }> = [];
+  const longTaskEntries = perfProbe.longTaskEntries;
   for (const s of shotMarks) {
     const fired = lastBefore(firedShots, s.ts);
     if (fired) burstAcquisitionMs.push(Math.max(0, s.ts - fired.ts));
     const reason = s.meta?.burstExitReason;
     if (typeof reason === "string") {
       burstByReason[reason] = (burstByReason[reason] ?? 0) + 1;
+    }
+    // v5 — solo para capturas con meta burst (los viejos no traen nada).
+    if (reason !== undefined) {
+      const waited = s.meta?.burstWaitedMs;
+      if (typeof waited === "number" && Number.isFinite(waited)) {
+        burstWallFireMs.push(waited);
+      }
+      const samples = s.meta?.burstSamples;
+      if (typeof samples === "number" && Number.isFinite(samples)) {
+        burstSamples.push(samples);
+      }
+      const cost = s.meta?.burstSampleCostMs;
+      burstSampleCostMs.push(typeof cost === "number" && Number.isFinite(cost) ? cost : null);
+      if (fired) {
+        let count = 0;
+        let totalMs = 0;
+        for (const lt of longTaskEntries) {
+          if (lt.start >= fired.ts && lt.start <= s.ts) {
+            count += 1;
+            totalMs += lt.duration;
+          }
+        }
+        burstWindowCongestion.push({ count, totalMs });
+      }
     }
   }
   const burst =
@@ -370,6 +439,12 @@ export async function buildDiagReport(): Promise<DiagReport> {
           byReason: burstByReason,
           acquisitionMs: burstAcquisitionMs,
           acquisitionMsMedian: median(burstAcquisitionMs),
+          wallFireMs: burstWallFireMs,
+          samples: burstSamples,
+          lastSampleCostMs: burstSampleCostMs,
+          videoTrack: getVideoTrackSize(),
+          windowCongestion: burstWindowCongestion,
+          orphanPhoto: getOrphanPhotoStats(),
         }
       : undefined;
 
@@ -409,7 +484,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
 
   return {
     format: "scannerlab-diag-report",
-    version: 4,
+    version: 5,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -507,7 +582,7 @@ export function buildDiagTxt(r: DiagReport): string {
   push("==============================================");
   push(`Generado : ${new Date(r.generatedAt).toLocaleString()}`);
   push(`Build    : ${r.app.build}`);
-  push("Formato  : diag-report v4");
+  push("Formato  : diag-report v5");
   if (r.qa) {
     push();
     push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
@@ -586,6 +661,9 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`  tramos: procesado ${fmtMs(s.pages.segments.shotToProcessedMs)} · escritura ${fmtMs(s.pages.segments.processedToWriteMs)} (medianas)`);
   // v4 (burst-budget) — línea de captura con la adquisición presupuestada:
   // conteo por razón de salida + gap disparo→foto (capture_fired→shot).
+  // v5 (burst v2-A13) — ventana de adquisición bajo el microscopio: muro
+  // (wallFireMs), sampler, track de video, congestión por ventana y la
+  // foto huérfana (el blob del sensor que llegó tarde).
   if (s.pages.burst) {
     const br = s.pages.burst.byReason;
     const reasons = ["photo", "stable", "time_cap", "frame_cap", "legacy", "error"]
@@ -595,6 +673,50 @@ export function buildDiagTxt(r: DiagReport): string {
     push(
       `  burst: ${reasons || DASH} — gap disparo→foto mediana ${fmtMs(s.pages.burst.acquisitionMsMedian)}`
     );
+    const walls = s.pages.burst.wallFireMs;
+    if (walls.length > 0) {
+      const wallTxt = walls
+        .slice(0, 5)
+        .map((v) => `${(v / 1000).toFixed(1)} s`)
+        .join(" · ");
+      const sampTxt = s.pages.burst.samples
+        .slice(0, 5)
+        .map((n) => `${n}`)
+        .join("/");
+      const cost = s.pages.burst.lastSampleCostMs.filter(
+        (v): v is number => v !== null
+      );
+      const costTxt =
+        cost.length > 0
+          ? ` · coste última ${fmtMs(Math.max(...cost))}`
+          : "";
+      push(`  muro por captura: ${wallTxt}${sampTxt ? ` · sampler ${sampTxt} muestras${costTxt}` : ""}`);
+    }
+    const vt = s.pages.burst.videoTrack;
+    if (vt) {
+      const cong = s.pages.burst.windowCongestion;
+      const congTxt =
+        cong.length > 0
+          ? ` · congestión ${cong
+              .slice(0, 5)
+              .map((c) => `${c.count}t/${Math.round(c.totalMs)}ms`)
+              .join(" · ")}`
+          : "";
+      push(`  track video: ${vt.w}×${vt.h} px${congTxt}`);
+    }
+    const orph = s.pages.burst.orphanPhoto;
+    if (orph.watched > 0) {
+      const arrivals = orph.arrivalMs
+        .map((v, i) => `${(v / 1000).toFixed(1)} s${orph.bytes[i] ? ` (${fmtMB(orph.bytes[i]!)})` : ""}`)
+        .join(" · ");
+      push(
+        `  foto huérfana: ${orph.watched} observada${orph.watched === 1 ? "" : "s"} · ` +
+          `${orph.arrived} llegó${orph.arrived === 1 ? "" : "ron"}` +
+          (orph.arrived > 0 ? ` (+${arrivals})` : "") +
+          (orph.pending > 0 ? ` · ${orph.pending} pendiente${orph.pending === 1 ? "" : "s"}` : "") +
+          (orph.rejected > 0 ? ` · ${orph.rejected} rota${orph.rejected === 1 ? "" : "s"}` : "")
+      );
+    }
   }
   const renders2 = s.editor.firstRenders[1];
   push(

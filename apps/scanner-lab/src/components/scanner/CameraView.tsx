@@ -72,9 +72,13 @@ import { dataUrlBytes } from "@jg-stevan/scanner-core/format";
 import { perfProbe } from "@/lib/perf-probe";
 import {
   getBurstConfig,
+  isAcquisitionActive,
   makeThumbSampler,
   recordBurst,
+  recordVideoTrackSize,
+  setAcquisitionActive,
   waitForPhotoBudget,
+  watchOrphanPhoto,
   type BurstExitReason,
   type BurstStats,
 } from "@/lib/burst-budget";
@@ -559,6 +563,23 @@ function releaseFrame(f: BurstFrame | null): void {
   }
 }
 
+/** v2-A13 Fase A — videoTrack del informe burst: `track.getSettings()` del
+ *  stream al armar la cámara (una vez por stream — real, sintético o
+ *  re-adopción). Lote 4: el rescate de A13 guardó actas a 960 px porque el
+ *  track del preview ES 960 px; este campo hace visible la fuente. */
+function noteStreamTrackSize(stream: MediaStream): void {
+  try {
+    const track = stream.getVideoTracks()[0];
+    const st =
+      track && typeof track.getSettings === "function" ? track.getSettings() : null;
+    if (st && typeof st.width === "number" && typeof st.height === "number") {
+      recordVideoTrackSize(st.width, st.height);
+    }
+  } catch {
+    /* telemetría: nunca rompe */
+  }
+}
+
 declare global {
   interface Window {
     /** QA: telemetría del frame loop desde la consola. */
@@ -929,6 +950,9 @@ export default function CameraView() {
         // ESTA captura (burstExitReason/burstFrames). Ausente en los caminos
         // sin burst (demo, galería, cámara nativa iOS) — marks v1/v1.1
         // intactos, solo campos nuevos.
+        // v2-A13 Fase A — telemetría v4.1: cuándo produjo la salida el
+        // presupuesto (burstWaitedMs = wallFireMs del informe) + salud del
+        // sampler §B (muestras y coste de la última).
         const burstMeta = pendingBurstRef.current;
         perfProbe.mark(
           "capture_shot",
@@ -937,9 +961,15 @@ export default function CameraView() {
             : {
                 burstExitReason: burstMeta.exitReason,
                 burstFrames: burstMeta.frames,
+                burstWaitedMs: burstMeta.waitedMs,
+                burstSamples: burstMeta.samples,
+                burstSampleCostMs: burstMeta.lastSampleCostMs,
               }
         );
         pendingBurstRef.current = null;
+        // v2-A13 Fase B — la ventana fired→shot CIERRA aquí (definición
+        // exacta de la zona sancionada; idempotente con el finally del flujo).
+        setAcquisitionActive(false);
         // Decode ÚNICO de la captura (antes: downscale + detect + quality
         // decodificaban la misma foto de 12 MP tres veces). El elemento se
         // reutiliza en las etapas; solo se re-decodifica si hubo que
@@ -1106,7 +1136,12 @@ export default function CameraView() {
    *  la salud del stream tras un timeout — fix 4.3). */
   const takePhotoBlob = useCallback(
     async (
-      deadlineAt?: number
+      deadlineAt?: number,
+      /** v2-A13 Fase A — recibe la promesa CRUDA de `takePhoto` (la que la
+       *  carrera interna puede perder contra el muro): el llamador la cuelga
+       * del observador de foto huérfana cuando el presupuesto corta. SOLO
+       * observación — no altera la carrera. */
+      onRawPhoto?: (photo: Promise<Blob>) => void
     ): Promise<{ blob: Blob | null; timedOut: boolean; wallCapped?: boolean }> => {
     // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
     // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
@@ -1139,8 +1174,19 @@ export default function CameraView() {
           }
         }
         try {
+          // v2-A13 Fase A — la promesa cruda del sensor queda EXPUESTA al
+          // llamador ANTES de la carrera: si el muro la corta, el observador
+          // de la foto huérfana sigue su vuelo (¿llega? ¿cuándo? ¿bytes?).
+          const photoPromise = capture.takePhoto(ps) as Promise<Blob>;
+          if (onRawPhoto) {
+            try {
+              onRawPhoto(photoPromise);
+            } catch {
+              /* observación: nunca rompe la captura */
+            }
+          }
           const blob = await Promise.race([
-            capture.takePhoto(ps),
+            photoPromise,
             new Promise<never>((_, reject) =>
               window.setTimeout(
                 () => reject(new Error(`takePhoto timeout ${Math.round(raceMs)}ms`)),
@@ -1271,7 +1317,14 @@ export default function CameraView() {
    *  de 80–450 ms. Se invoca desde onFrame del loop (ya throttleado por el
    *  control de cadencia adaptativo de frame-loop.ts — no reintroduce el
    *  stuttering de gama baja). Reutiliza UN scratch canvas: coste por feed
-   *  ≈ 1 drawImage + 1 copia + 1 medición a 400 px. */
+   *  ≈ 1 drawImage + 1 copia + 1 medición a 400 px.
+   *  v2-A13 Fase B (§4.1) — ring post-fired BARATO: tras capture_fired la
+   *  carrera de lapVar por frame SOLO consume hilo (el ganador anti
+   *  tap-shock se decide con frames PRE-tap — ESA lógica no se toca; y en
+   *  un preview oscuro el frame más RUIDOSO es el que gana, lote 4).
+   *  Durante la ventana fired→shot el ring SIGUE recolectando frames pero
+   *  SIN análisis (lapVar 0); el rescate se apoya en snapA/snapshotVideo,
+   *  que SÍ se miden (los candidatos del dispatch). */
   const feedRingFromVideo = useCallback((): void => {
     const now = performance.now();
     if (now - lastRingFeedAt.current < 200) return;
@@ -1294,7 +1347,7 @@ export default function CameraView() {
     const ctx = scratch.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, dw, dh);
-    const m = measurePixels(scratch, dw, dh);
+    const m = isAcquisitionActive() ? null : measurePixels(scratch, dw, dh);
     pushRingFrame(scratch, m?.lapVar ?? 0);
   }, [pushRingFrame]);
 
@@ -1342,6 +1395,11 @@ export default function CameraView() {
     // DIAG (spec diag §6) — instrumentación de la sonda local (sin tocar
     // lógica): el disparo salió (manual o auto).
     perfProbe.mark("capture_fired");
+    // v2-A13 Fase B — la ventana fired→shot ABRE aquí: mientras el hilo
+    // pelea por la foto, los consumidores baratos se congelan (ring sin
+    // lapVar post-fired, overlay QA sin re-renders). Zona sancionada §4:
+    // NADA pre-fired se toca.
+    setAcquisitionActive(true);
     // FIX v5 (5.4): la captura despierta el análisis (salir del modo espera
     // si estaba dormido — el disparo es interacción explícita).
     exitStandby();
@@ -1489,6 +1547,10 @@ export default function CameraView() {
     let bail: "time_cap" | "stable" | null = null;
     let burstSamples = 0;
     let burstSampleCost: number | null = null;
+    // v2-A13 Fase A — promesa CRUDA del takePhoto en vuelo (el último
+    // intento): si el presupuesto corta, el observador de la foto huérfana
+    // sigue su rastro SIN tocar la captura (cero escrituras al store).
+    let rawPhotoPromise: Promise<Blob> | null = null;
     if (burstDeadline !== undefined) {
       if (performance.now() >= burstDeadline) {
         // El torch/flash (applyConstraints no abortable) consumió el muro
@@ -1500,7 +1562,9 @@ export default function CameraView() {
         const w = await waitForPhotoBudget(
           () =>
             canPhoto
-              ? takePhotoBlob(burstDeadline)
+              ? takePhotoBlob(burstDeadline, (p) => {
+                  rawPhotoPromise = p;
+                })
               : Promise.resolve({ blob: null, timedOut: false }),
           { deadlineAt: burstDeadline, sampler }
         );
@@ -1528,6 +1592,10 @@ export default function CameraView() {
       // El ganador ZSL de la ventana 80–450 ms (el ring siguió alimentándose
       // durante la espera) compite con snapA (frame del instante del
       // disparo) y un frame fresco; el ring se drena (disciplina RAM).
+      // v2-A13 Fase A — el corte dejó una FOTO HUÉRFANA en vuelo: el
+      // observador registra (sin tocar nada) si llega, cuándo y cuántos
+      // bytes — el dato que decide la Fase D.
+      watchOrphanPhoto(rawPhotoPromise, burstT0);
       const cands = [takeZslFallback(), snapA, snapshotVideo()];
       const n = cands.filter((f): f is BurstFrame => f !== null).length;
       pendingBurstRef.current = recordBurst(bail, n, performance.now() - burstT0, burstExtra);
@@ -1546,6 +1614,9 @@ export default function CameraView() {
       // tarde). Determinista: gane la carrera interna o el interval del
       // muro, el resultado es SIEMPRE time_cap.
       if (burstDeadline !== undefined && shot?.timedOut === true && shot.wallCapped === true) {
+        // v2-A13 Fase A — muro sobre la carrera interna: misma foto huérfana
+        // en vuelo, mismo observador (SOLO mira).
+        watchOrphanPhoto(rawPhotoPromise, burstT0);
         const cands = [takeZslFallback(), snapA, snapshotVideo()];
         const n = cands.filter((f): f is BurstFrame => f !== null).length;
         pendingBurstRef.current = recordBurst("time_cap", n, performance.now() - burstT0, burstExtra);
@@ -1663,6 +1734,11 @@ export default function CameraView() {
       // disparo (foto/frames ya en memoria). El torch MANUAL del usuario
       // no se apaga nunca aquí (flashAppliedByUs solo es true si partía
       // de OFF y el modo lo pidió).
+      // v2-A13 Fase B — cierre de seguridad de la ventana fired→shot para
+      // los caminos que NUNCA llegan a capture_shot (dispatch fallido,
+      // stream muerto, torch que comió el muro): el ring y el overlay QA
+      // no pueden quedar congelados para siempre (idempotente).
+      setAcquisitionActive(false);
       if (flashAppliedByUs) void setTorchState(false);
     }
   }, [snapshotVideo, takePhotoBlob, canvasToDataUrl, blobToDataUrl, handleCaptureDataUrl, status, isStreamDead, recoverStream, setTorchState, exitStandby]);
@@ -1820,6 +1896,8 @@ export default function CameraView() {
       streamRef.current = stream;
       setStatus("live");
       setCamNotice(null); // B2: si había aviso de permiso, ya no aplica
+      // v2-A13 Fase A — videoTrack del informe burst (una vez por stream).
+      noteStreamTrackSize(stream);
       // B3: si el track muere (permiso revocado a mitad de sesión, otra app
       // roba la cámara, desconexión de webcam) → re-arranca el flujo completo
       // (sondas incluidas) en vez de dejar el preview negro/congelado.
@@ -2102,6 +2180,9 @@ export default function CameraView() {
       syntheticRef.current = cam;
       streamRef.current = stream;
       setStatus("synthetic");
+      // v2-A13 Fase A — videoTrack del informe burst (streams sintéticos
+      // incluidos: hace verificable E2E el campo del informe).
+      noteStreamTrackSize(stream);
     }
 
     return () => {
@@ -2255,6 +2336,8 @@ export default function CameraView() {
       streamRef.current = stream;
       setCamNotice(null);
       setStatus("live");
+      // v2-A13 Fase A — videoTrack del informe burst (re-adopción en caliente).
+      noteStreamTrackSize(stream);
       canTakePhotoRef.current = CAN_TAKEPHOTO; // FIX v6 (6.1): solo Android
       takePhotoBrokenRef.current = false; // FIX v4 4.1: stream nuevo, takePhoto rehabilitado
       profileActiveSensor(stream); // F-SENSOR-PROFILER: tope 4032/3200 px

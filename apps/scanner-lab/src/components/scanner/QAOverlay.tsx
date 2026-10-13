@@ -22,6 +22,10 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, CircleDashed, Loader2, Share2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  isAcquisitionActive,
+  subscribeAcquisition,
+} from "@/lib/burst-budget";
+import {
   QA_STEPS,
   qaStandardTest,
   useQaTestStore,
@@ -50,13 +54,27 @@ export default function QAOverlay() {
   const runId = useQaTestStore((s) => s.runId);
 
   // Reloj del tiempo acumulado (solo mientras corre — re-render por segundo).
+  // v2-A13 Fase B (§4.2) — CONGELADO durante la adquisición (fired→shot):
+  // en gama baja cada re-render compite por el hilo que pelea por la foto y
+  // desliza los timers del muro (lote 4). El checklist no cambia a mitad de
+  // la adquisición: se actualiza al inicio y al fin del paso — el reloj se
+  // refresca YA cuando la ventana se cierra (capture_shot).
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
     if (!running || startedAt === null) return;
-    const update = () => setElapsedMs(performance.now() - startedAt);
+    const update = () => {
+      if (isAcquisitionActive()) return; // ventana abierta: cero re-renders
+      setElapsedMs(performance.now() - startedAt);
+    };
     update();
     const t = window.setInterval(update, 1000);
-    return () => window.clearInterval(t);
+    const unsubAcquisition = subscribeAcquisition(() => {
+      if (!isAcquisitionActive()) update(); // fin de la adquisición → refresca
+    });
+    return () => {
+      window.clearInterval(t);
+      unsubAcquisition();
+    };
   }, [running, startedAt]);
 
   // «Listo» oculta la tarjeta PERO el estado del guión (log) persiste: el

@@ -59,11 +59,23 @@ export interface PerfLongTasks {
   supported: boolean;
 }
 
+/** v2-A13 (burst Fase A) — UNA entrada de long task con su instante:
+ *  permite filtrar congestión DENTRO de ventanas (p. ej. capture_fired →
+ *  capture_shot) sin duplicar el observer. `start`/`duration` en el MISMO
+ *  reloj (performance.now) que los marks. */
+export interface PerfLongTaskEntry {
+  start: number;
+  duration: number;
+}
+
 export interface PerfProbeApi {
   marks: PerfProbeMark[];
   mark(ev: string, meta?: Record<string, number | string | boolean | null>): void;
   memory(): PerfMemorySnapshot;
   longTasks: PerfLongTasks;
+  /** v2-A13 (burst Fase A) — últimas long tasks con instante (ring acotado):
+ *  el MISMO observer que alimenta longTasks, sin duplicar. */
+  longTaskEntries: PerfLongTaskEntry[];
   fpsSample(ms?: number): Promise<PerfFpsSample | null>;
   report(): Record<string, unknown> | null;
 }
@@ -80,13 +92,18 @@ export const PERF_PROBE_T0_AT =
 /** Tope del ring de marcas (descarta la más vieja — memoria acotada). */
 const MAX_MARKS = 600;
 
+/** Tope del ring de long tasks con instante (v2-A13 — memoria acotada). */
+const MAX_LONG_TASK_ENTRIES = 600;
+
 function makeProbe(): PerfProbeApi {
   const marks: PerfProbeMark[] = [];
   const longTasks: PerfLongTasks = { count: 0, totalMs: 0, supported: false };
+  const longTaskEntries: PerfLongTaskEntry[] = [];
 
   const probe: PerfProbeApi = {
     marks,
     longTasks,
+    longTaskEntries,
     mark(ev, meta) {
       try {
         if (typeof ev !== "string" || ev.length === 0) return;
@@ -207,6 +224,7 @@ const noopProbe: PerfProbeApi = {
   mark: () => undefined,
   memory: () => ({ heapMB: null, limitMB: null, ts: 0 }),
   longTasks: { count: 0, totalMs: 0, supported: false },
+  longTaskEntries: [],
   fpsSample: async () => null,
   report: () => null,
 };
@@ -244,6 +262,18 @@ if (typeof window !== "undefined") {
             for (const entry of list.getEntries()) {
               perfProbe.longTasks.count += 1;
               perfProbe.longTasks.totalMs += entry.duration;
+              // v2-A13 (burst Fase A) — la MISMA entrada, con instante, para
+              // poder filtrar congestión por ventana (fired→shot) después.
+              perfProbe.longTaskEntries.push({
+                start: Math.round(entry.startTime),
+                duration: Math.round(entry.duration),
+              });
+              if (perfProbe.longTaskEntries.length > MAX_LONG_TASK_ENTRIES) {
+                perfProbe.longTaskEntries.splice(
+                  0,
+                  perfProbe.longTaskEntries.length - MAX_LONG_TASK_ENTRIES
+                );
+              }
             }
           });
           obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);

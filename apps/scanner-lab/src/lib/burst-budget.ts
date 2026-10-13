@@ -11,10 +11,15 @@
  * un bucle por nº de frames: cada espera tiene su PROPIO tope y ninguna
  * cuenta el total. Este módulo impone el muro global que la cadena no tenía.
  *
- *   §A — Muro de tiempo: BURST_TIME_BUDGET_MS = 2000 desde capture_fired
+ *   §A — Muro de tiempo: BURST_TIME_BUDGET_MS = 5000 desde capture_fired
  *        (reloj monotónico performance.now(); NUNCA rAF — a trompicones en
  *        gama baja con ahorro de batería). Límite DURO: al llegar, la
- *        adquisición termina con lo recogido (`time_cap`).
+ *        adquisición termina con lo recogido (`time_cap`). v2-A13 Fase C:
+ *        2000 → 5000 — el muro de 2 s del lote 4 cortó la carrera del
+ *        takePhoto en A13 y el rescate guardó actas a 960 px (preview-res,
+ *        ilegibles): con el hilo aliviado (Fase B), la foto nativa tiene
+ *        hasta 5 s para llegar FULL-RES. iPhone (~0.22 s), A56 (~0.9 s) y
+ *        PC (~0.25 s) NUNCA lo tocan → coste 0 en dispositivos sanos.
  *   §B — Salida por estabilidad: miniatura de 64×64 del preview (señal
  *        BARATA, prohibido comparar a 4032 px); `stabilityFrames` deltas
  *        consecutivos por debajo del umbral → `stable`.
@@ -59,7 +64,15 @@ export interface BurstBudgetConfig {
 
 const DEFAULTS: BurstBudgetConfig = {
   enabled: true,
-  timeBudgetMs: 2000,
+  /** v2-A13 Fase C — 5000 (antes 2000). Dato del lote 4 (build 89fb5dc,
+   *  qa-standard-v1.1, A13): con el muro a 2 s el corte llegó tarde
+   *  (adquisition 11.9–17.2 s por timers deslizándose en un hilo
+   *  saturado) y el rescate guardó actas a 960 px — el track del preview.
+   *  Con Fase B aliviando el hilo, 5 s dan a la foto full-res del sensor
+   *  (4000 px) una ventana honesta; worst case ~5-6 s por captura con
+   *  acta a 4000 px, frente a 17 s a 960 px. Dispositivos sanos (foto en
+   *  0.22–1 s) jamás lo tocan. */
+  timeBudgetMs: 5000,
   stabilityFrames: 2,
   stabilityThreshold: 2.5,
 };
@@ -121,6 +134,151 @@ export function recordBurst(
 
 export function getLastBurst(): BurstStats | null {
   return lastStats;
+}
+
+/* ── v2-A13 Fase A — telemetría de la ventana de adquisición (v4.1) ─────── */
+
+/** Tamaño del track de VIDEO (preview) según `track.getSettings()` al armar
+ *  la cámara. Lote 4: el rescate de A13 guardó actas a 960 px porque el
+ *  track del preview ES 960 px — este campo hace visible la resolución de
+ *  la fuente del rescate SIN mirar el resultado. Se registra UNA vez por
+ *  stream (armado de cámara). */
+let videoTrackSize: { w: number; h: number } | null = null;
+
+export function recordVideoTrackSize(w: number, h: number): void {
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+  videoTrackSize = { w: Math.round(w), h: Math.round(h) };
+}
+
+export function getVideoTrackSize(): { w: number; h: number } | null {
+  return videoTrackSize ? { ...videoTrackSize } : null;
+}
+
+/** Observador de la FOTO HUÉRFANA (spec v2-A13 §3.2) — SOLO OBSERVA: cuando
+ * el presupuesto corta (`time_cap`/`stable`/muro sobre la carrera), la
+ * promesa CRUDA de `takePhoto` sigue en vuelo (ImageCapture no expone
+ * cancelación). Este observador le cuelga un `.then()` que registra si el
+ * blob llega, CUÁNDO (ms desde capture_fired) y cuántos bytes. Cero cambios
+ * de comportamiento, cero escrituras al store: responde LA pregunta del
+ * lote 4 — ¿la foto nativa tarda 4 s (la congestión la retrasa) o
+ * realmente necesita 10-16 s? (alimenta la decisión de la Fase D). */
+interface OrphanRecord {
+  /** ms desde capture_fired cuando la promesa se instaló (solo llegadas). */
+  arrivalMs: number | null;
+  bytes: number | null;
+  outcome: "pending" | "arrived" | "rejected";
+  /** performance.now() del capture_fired de ESTA captura. */
+  firedAt: number;
+}
+
+const orphanRecords: OrphanRecord[] = []; // ring: últimas 12
+const ORPHAN_RING_CAP = 12;
+
+export function watchOrphanPhoto(
+  photo: Promise<Blob> | null | undefined,
+  firedAtMs: number
+): void {
+  if (!photo) return; // no había foto en vuelo (torch comió el muro, iOS…)
+  const rec: OrphanRecord = {
+    arrivalMs: null,
+    bytes: null,
+    outcome: "pending",
+    firedAt: firedAtMs,
+  };
+  orphanRecords.push(rec);
+  if (orphanRecords.length > ORPHAN_RING_CAP) {
+    orphanRecords.splice(0, orphanRecords.length - ORPHAN_RING_CAP);
+  }
+  const settle = (outcome: "arrived" | "rejected", blob?: Blob | null) => {
+    rec.arrivalMs = Math.max(0, Math.round(performance.now() - rec.firedAt));
+    rec.outcome = outcome;
+    rec.bytes = outcome === "arrived" && blob ? blob.size : null;
+  };
+  try {
+    void photo.then(
+      (blob) => settle(blob && blob.size > 0 ? "arrived" : "rejected", blob),
+      () => settle("rejected")
+    );
+  } catch {
+    /* la observación NUNCA rompe la captura */
+  }
+}
+
+export interface OrphanPhotoStats {
+  /** Fotos huérfanas observadas (el presupuesto cortó con takePhoto en vuelo). */
+  watched: number;
+  /** Blobs que llegaron tras el corte. */
+  arrived: number;
+  /** Aún sin resolver al momento de leer (p. ej. al generar el informe). */
+  pending: number;
+  /** La promesa rechazó (foto rota, no lenta). */
+  rejected: number;
+  /** ms desde capture_fired de cada llegada (solo las que llegaron). */
+  arrivalMs: number[];
+  /** Bytes de cada llegada. */
+  bytes: number[];
+}
+
+export function getOrphanPhotoStats(): OrphanPhotoStats {
+  const stats: OrphanPhotoStats = {
+    watched: orphanRecords.length,
+    arrived: 0,
+    pending: 0,
+    rejected: 0,
+    arrivalMs: [],
+    bytes: [],
+  };
+  for (const r of orphanRecords) {
+    if (r.outcome === "arrived") {
+      stats.arrived += 1;
+      stats.arrivalMs.push(r.arrivalMs ?? 0);
+      stats.bytes.push(r.bytes ?? 0);
+    } else if (r.outcome === "pending") {
+      stats.pending += 1;
+    } else {
+      stats.rejected += 1;
+    }
+  }
+  return stats;
+}
+
+/* ── v2-A13 Fase B — ventana de adquisición (fired→shot) ─────────────────── */
+
+/** Zona sancionada de la spec v2-A13 §4: entre `capture_fired` y
+ *  `capture_shot` el hilo principal pelea por la foto y CADA trabajo
+ *  lateral desliza los timers del muro (lote 4: el hilo saturado ×6-8
+ *  hizo que el muro de 2 s cortara a los 16 s). Esta señal abre/cierra la
+ *  ventana para que los consumidores baratos se congelen:
+ *  · el ring ZSL deja de medir lapVar post-fired (esa carrera solo
+ *    importa PRE-tap — §4.1),
+ *  · el reloj del overlay QA deja de re-renderizar (§4.2).
+ *  Los PRE-fired (estabilidad del shutter, cooldown, photoSettings) y el
+ *  sampler §B NO se tocan. Observable mínimo (useSyncExternalStore):
+ *  cero re-renders mientras la ventana está abierta. */
+let acquisitionActive = false;
+const acquisitionListeners = new Set<() => void>();
+
+export function isAcquisitionActive(): boolean {
+  return acquisitionActive;
+}
+
+export function setAcquisitionActive(active: boolean): void {
+  if (acquisitionActive === active) return;
+  acquisitionActive = active;
+  for (const listener of [...acquisitionListeners]) {
+    try {
+      listener();
+    } catch {
+      /* la señal NUNCA rompe la app */
+    }
+  }
+}
+
+export function subscribeAcquisition(listener: () => void): () => void {
+  acquisitionListeners.add(listener);
+  return () => {
+    acquisitionListeners.delete(listener);
+  };
 }
 
 /* ── §B — sampler de estabilidad (señal BARATA) ─────────────────────────── */
@@ -283,6 +441,18 @@ if (typeof window !== "undefined") {
     reset(): BurstBudgetConfig {
       config = { ...DEFAULTS };
       return { ...config };
+    },
+    // v2-A13 Fase A — inspectores de la telemetría nueva (QA/E2E):
+    videoTrack(): { w: number; h: number } | null {
+      return getVideoTrackSize();
+    },
+    orphans(): OrphanPhotoStats {
+      return getOrphanPhotoStats();
+    },
+    // v2-A13 Fase B — ¿estamos dentro de la ventana fired→shot? (verificación
+    // del congelamiento del overlay QA y del ring post-fired barato).
+    acquiring(): boolean {
+      return isAcquisitionActive();
     },
   };
 }
