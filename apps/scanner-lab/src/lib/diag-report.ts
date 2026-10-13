@@ -31,7 +31,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/burst-budget @ c348dcd";
+export const DIAG_BUILD = "perf/burst-budget @ e4ab06f";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
