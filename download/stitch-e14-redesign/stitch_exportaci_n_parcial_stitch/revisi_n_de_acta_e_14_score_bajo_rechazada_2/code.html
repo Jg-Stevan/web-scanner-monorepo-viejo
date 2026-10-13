@@ -1,0 +1,309 @@
+<!DOCTYPE html><html class="h-full bg-black" lang="es" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport">
+<title>Verificación de Acta E-14 - Transmisión Oficial</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Google Fonts: Inter & JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect">
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&amp;family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;700;800&amp;display=swap" rel="stylesheet">
+<!-- Tailwind Configuration -->
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              black: '#070A0D',
+              surface: '#0F151B',
+              surfaceLight: '#18222C',
+              border: '#23303D',
+              green: '#00E676',
+              greenGlow: 'rgba(0, 230, 118, 0.25)',
+              greenDark: '#08331E',
+              amber: '#FFB300'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+            handwriting: ['Caveat', 'cursive']
+          }
+        }
+      }
+    }
+  </script>
+<!-- BEGIN: Custom Styles -->
+<style data-purpose="custom-styling">
+    /* High contrast tactical UI & scan frame borders */
+    .barcode-lines {
+      background-image: repeating-linear-gradient(
+        to right,
+        #111 0px, #111 2px,
+        transparent 2px, transparent 3px,
+        #111 3px, #111 7px,
+        transparent 7px, transparent 9px,
+        #111 9px, #111 10px,
+        transparent 10px, transparent 13px,
+        #111 13px, #111 17px,
+        transparent 17px, transparent 18px,
+        #111 18px, #111 22px
+      );
+    }
+    
+    /* Touch smooth ripple feedback */
+    .tap-action:active {
+      transform: scale(0.97);
+      transition: transform 0.08s ease-in-out;
+    }
+
+    /* Scanner corner markers */
+    .scanner-corner-tl {
+      position: absolute; top: -2px; left: -2px; width: 18px; height: 18px;
+      border-top: 3.5px solid #00E676; border-left: 3.5px solid #00E676;
+    }
+    .scanner-corner-tr {
+      position: absolute; top: -2px; right: -2px; width: 18px; height: 18px;
+      border-top: 3.5px solid #00E676; border-right: 3.5px solid #00E676;
+    }
+    .scanner-corner-bl {
+      position: absolute; bottom: -2px; left: -2px; width: 18px; height: 18px;
+      border-bottom: 3.5px solid #00E676; border-left: 3.5px solid #00E676;
+    }
+    .scanner-corner-br {
+      position: absolute; bottom: -2px; right: -2px; width: 18px; height: 18px;
+      border-bottom: 3.5px solid #00E676; border-right: 3.5px solid #00E676;
+    }
+
+    /* Custom hidden scrollbars for horizontal meta chips */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+<!-- END: Custom Styles -->
+</head>
+<body class="bg-black text-gray-100 font-sans antialiased selection:bg-brand-green selection:text-black flex justify-center items-center min-h-screen">
+<!-- Mobile Viewport Container (iOS / Mobile Frame max 440px wide) -->
+<main class="w-full max-w-md bg-brand-black min-h-screen sm:min-h-[920px] sm:h-[920px] sm:border sm:border-brand-border sm:rounded-[42px] overflow-hidden flex flex-col relative shadow-2xl pb-safe">
+<!-- BEGIN: TopBar -->
+<header class="pt-4 px-4 pb-2.5 bg-brand-black/95 backdrop-blur border-b border-brand-border/60 sticky top-0 z-30"><div class="flex items-center justify-between gap-2">
+<!-- Back Navigation Button -->
+<button aria-label="Volver" class="w-10 h-10 rounded-full flex items-center justify-center text-brand-green hover:bg-brand-surfaceLight tap-action transition-colors" type="button">
+<svg class="w-6 h-6 stroke-current" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" viewBox="0 0 24 24">
+<path d="M19 12H5M12 19l-7-7 7-7"></path>
+</svg>
+</button>
+<!-- Title and Subtitle -->
+<div class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-brand-surface border border-red-500/40 text-xs shadow-sm"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span></span><span class="font-mono font-bold text-red-500">4.2/10</span><span class="text-white font-semibold uppercase tracking-wider text-[11px]">RECHAZADA</span></div>
+<!-- Cloud Sync Online Pill Indicator -->
+<div class="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-500 text-xs"><svg class="w-4 h-4 fill-current animate-pulse" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM10 13.6l-2.6-2.6L6 12.4l4 4 8-8-1.4-1.4-6.6 6.6z"></path></svg><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span></div>
+</div></header>
+<!-- END: TopBar -->
+<!-- Scrollable Main Content -->
+<div class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+<!-- BEGIN: TransmissionAndPagingBadges -->
+<div class="flex items-center justify-between px-3 py-2 rounded-xl bg-brand-surfaceLight border border-brand-border text-xs font-mono shadow-sm">
+<div class="flex items-center gap-2 truncate">
+<span class="w-2 h-2 rounded-full shrink-0 bg-red-500"></span>
+<span class="text-[11px] font-bold tracking-wider text-white uppercase truncate">No identificado</span>
+</div>
+</div><div class="grid grid-cols-3 gap-2 w-full select-none">
+<button class="py-2 px-1 rounded-xl font-mono font-extrabold text-xs tracking-wider flex items-center justify-center uppercase shadow-sm tap-action text-white bg-red-600" type="button">
+    ---</button>
+<button class="py-2 px-1 rounded-xl bg-brand-surfaceLight border border-brand-border text-white font-mono font-bold text-xs tracking-wider flex items-center justify-center uppercase tap-action" type="button">mesa ---</button>
+<button class="py-2 px-1 rounded-xl bg-brand-surfaceLight border border-brand-border text-white font-mono font-bold text-xs tracking-wider flex items-center justify-center uppercase tap-action" type="button">
+    PÁG - DE -</button>
+</div>
+<!-- Transmission Confirmation Alert Banner -->
+<!-- END: TransmissionAndPagingBadges -->
+<!-- BEGIN: DocumentScannedViewer -->
+<section class="relative bg-brand-surface rounded-2xl p-2.5 border border-brand-border shadow-xl" data-purpose="document-viewer"><!-- Floating Error Pill Badge -->
+
+<!-- Framing Corner Reticles (AR Scanner UI - Red Alert) -->
+<div class="scanner-corner-tl"></div>
+<div class="scanner-corner-tr"></div>
+<div class="scanner-corner-bl"></div>
+<div class="scanner-corner-br"></div>
+<!-- High-Fidelity Rendered E-14 Form Sheet with Rejected/Error Markers -->
+<article class="bg-white text-gray-900 rounded-lg p-3 sm:p-4 shadow-md font-sans border border-gray-300 relative select-none mt-2">
+<!-- Form Header & Logo Info -->
+<div class="flex justify-between items-start border-b border-black pb-2">
+<div>
+<h2 class="text-xs font-black tracking-tight text-gray-900 uppercase">Registraduría Nacional</h2>
+<p class="text-[8px] font-bold text-gray-600 tracking-wider">DEL ESTADO CIVIL · COLOMBIA</p>
+</div>
+<div class="flex items-center gap-1.5">
+<div class="bg-red-50 border border-red-400/80 px-2 py-0.5 rounded text-[8px] font-mono font-bold text-red-600 uppercase tracking-tight flex flex-col items-center leading-none">
+<span class="">CÓDIGO NO</span>
+<span class="">DETECTADO</span>
+</div>
+<div class="bg-gray-100 border border-gray-400 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider leading-none">
+<span class="block">ACTA E-</span>
+<span class="block">14</span>
+</div>
+</div>
+</div>
+<!-- Barcode & Alphanumeric Code with Warning -->
+<div class="my-2.5 text-center">
+<div class="barcode-lines h-12 w-full mx-auto max-w-[290px] border-x border-gray-400 opacity-75"></div>
+<div class="flex justify-between items-center px-1 mt-1 font-mono text-[9px] font-bold text-gray-700">
+<span class="flex items-center gap-1 text-red-600 bg-red-50 px-1 py-0.5 rounded border border-red-200">
+<span class="text-[8px]">⚠️</span>
+        *E14-SEN-2026-001*
+      </span>
+<span class="">PÁG 01 DE 02</span>
+</div>
+</div>
+<!-- Metadata Box inside Form -->
+<div class="grid grid-cols-2 gap-1 py-1 px-2 bg-gray-100 rounded border border-gray-300 font-mono text-[9px] text-gray-800">
+<div class=""><span class="text-gray-500 font-normal">DEP:</span> CONSULADOS</div>
+<div class=""><span class="text-gray-500 font-normal">MUN:</span> ROMA</div>
+<div class=""><span class="text-gray-500 font-normal">ZONA:</span> 10</div>
+<div class=""><span class="text-gray-500 font-normal">PUESTO:</span> 02</div>
+</div>
+<!-- Electoral Category Title -->
+<div class="mt-4 mb-2 text-center">
+<span class="text-[10px] font-extrabold uppercase tracking-widest text-gray-900 bg-gray-100 px-2.5 py-0.5 rounded border border-gray-300">
+      Senado de la República
+    </span>
+</div>
+<!-- Scanned OCR Votes Grid -->
+<div class="grid grid-cols-4 gap-1.5 my-3">
+<div class="border border-gray-300 bg-white p-1 rounded text-center relative shadow-sm">
+<span class="block text-[8px] text-gray-500 font-mono">101 : 25</span>
+</div>
+<div class="border border-gray-300 bg-white p-1 rounded text-center relative shadow-sm">
+<span class="block text-[8px] text-gray-500 font-mono">102 : 42</span>
+</div>
+<div class="border border-gray-300 bg-white p-1 rounded text-center relative shadow-sm">
+<span class="block text-[8px] text-gray-500 font-mono">103 : 18</span>
+</div>
+<div class="border border-gray-300 bg-white p-1 rounded text-center relative shadow-sm">
+<span class="block text-[8px] text-gray-500 font-mono">104 : 30</span>
+</div>
+</div>
+<!-- Total Count Row -->
+<div class="flex justify-between items-center px-2 py-1 bg-gray-50 border border-gray-200 rounded font-mono text-[9px] mb-3">
+<span class="font-bold text-gray-700 uppercase">Total Sufragios E-11:</span>
+<span class="font-black text-gray-900 text-xs">115 VOTOS</span>
+</div>
+<!-- Signatures Section with Juror 2 Missing / Rejected -->
+<div class="pt-2 border-t-2 border-dashed border-gray-300">
+<div class="flex justify-between items-end gap-1">
+<!-- Juror 1 (Valid) -->
+<div class="flex-1 text-center border-b border-gray-800 pb-0.5">
+<p class="font-handwriting text-sm text-blue-900 leading-none h-4">C. Gomez</p>
+<div class="flex items-center justify-center gap-0.5 mt-0.5">
+<span class="text-[7px] uppercase font-bold text-gray-600">JURADO 1</span>
+</div>
+</div>
+<!-- Juror 2 (REJECTED / NO DETECTADO) -->
+<div class="flex-1 text-center bg-red-50 border-2 border-dashed border-red-500 rounded p-1 pb-0.5">
+<div class="h-4 flex items-center justify-center">
+<span class="text-[8px] font-mono font-bold text-red-600 uppercase tracking-tight">NO DETECTADO</span>
+</div>
+<div class="flex items-center justify-center gap-0.5 mt-0.5">
+<span class="text-[7px] uppercase font-bold text-red-600">JURADO 2</span>
+</div>
+</div>
+<!-- Juror 3 (Valid) -->
+<div class="flex-1 text-center border-b border-gray-800 pb-0.5">
+<p class="font-handwriting text-sm text-blue-900 leading-none h-4">M. Torres</p>
+<div class="flex items-center justify-center gap-0.5 mt-0.5">
+<span class="text-[7px] uppercase font-bold text-gray-600">JURADO 3</span>
+</div>
+</div>
+</div>
+</div>
+</article></section>
+<!-- END: DocumentScannedViewer -->
+<!-- BEGIN: ActionButtonsGroup -->
+<div class="grid grid-cols-3 gap-2 w-full select-none">
+<button class="py-2 px-2 rounded-xl bg-brand-surface border border-brand-border text-gray-300 font-sans font-medium text-xs flex items-center justify-center gap-1.5 tap-action hover:bg-brand-surfaceLight transition-colors bg-red-600" type="button">
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24">
+<path d="M6 2v14a2 2 0 002 2h14"></path>
+<path d="M18 22V8a2 2 0 00-2-2H2"></path>
+</svg>
+<span class="">Recortar</span>
+</button>
+<button class="py-2 px-2 rounded-xl bg-brand-surface border border-brand-border text-gray-300 font-sans font-medium text-xs flex items-center justify-center gap-1.5 tap-action hover:bg-brand-surfaceLight transition-colors" type="button">
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24">
+<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.03 8.03 0 01-15.357-2m15.357 2H15"></path>
+</svg>
+<span class="">Rotar 90°</span>
+</button>
+<button class="py-2 px-2 rounded-xl bg-brand-surface border border-brand-border text-gray-300 font-sans font-medium text-xs flex items-center justify-center gap-1.5 tap-action hover:bg-brand-surfaceLight transition-colors leading-tight text-center" type="button">
+<svg class="w-3.5 h-3.5 stroke-current shrink-0" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24">
+<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+</svg>
+<span class="text-[11px]">Pantalla completa</span>
+</button>
+</div><div class="flex gap-2.5 pt-1 pb-1 w-full"><button class="flex-1 bg-[#E52222] hover:bg-red-600 text-white font-black text-xs py-3.5 px-3 rounded-2xl shadow-[0_4px_20px_rgba(229,34,34,0.4)] flex items-center justify-center gap-2 tap-action transition-all uppercase tracking-wider leading-tight text-center" id="btn-repeat-scan" type="button"><div class="w-5 h-5 rounded-md bg-blue-600/80 border border-blue-400 flex items-center justify-center shrink-0"><svg class="w-3 h-3 text-white animate-spin" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.03 8.03 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"></path></svg></div><span class="">REPETIR</span></button><button class="flex-1 bg-brand-surface hover:bg-brand-surfaceLight border border-brand-border text-gray-200 font-bold text-xs py-3.5 px-3 rounded-2xl flex items-center justify-center gap-2 tap-action transition-all uppercase tracking-wider leading-tight text-center" id="btn-human-review" type="button"><svg class="w-4 h-4 text-gray-400 shrink-0 stroke-current" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg><span class="">REVISIÓN HUMANA</span></button></div>
+<!-- END: ActionButtonsGroup -->
+</div>
+<!-- BEGIN: BottomNavigationBar -->
+<nav class="bg-brand-surface border-t border-brand-border/80 px-4 py-2 sticky bottom-0 z-30 flex justify-around items-center">
+<!-- Nav Item: Escanear (Active) -->
+<button class="flex flex-col items-center gap-1 group py-1 px-3" type="button">
+<div class="w-10 h-8 rounded-full bg-brand-green/20 border border-brand-green flex items-center justify-center text-brand-green shadow-[0_0_10px_rgba(0,230,118,0.2)]">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+<path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+<span class="text-[10px] font-bold text-brand-green tracking-wider uppercase">Escanear</span>
+</button>
+<!-- Nav Item: Actas -->
+<button class="flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 group py-1 px-3" type="button">
+<div class="w-8 h-8 flex items-center justify-center">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+<span class="text-[10px] font-medium tracking-wider uppercase">Actas (1)</span>
+</button>
+<!-- Nav Item: Resumen -->
+<button class="flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 group py-1 px-3" type="button">
+<div class="w-8 h-8 flex items-center justify-center">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+<path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+<span class="text-[10px] font-medium tracking-wider uppercase">Resumen</span>
+</button>
+</nav>
+<!-- END: BottomNavigationBar -->
+<!-- iOS Indicator Bar Safe Area -->
+<div class="h-1 w-28 bg-gray-700/60 rounded-full mx-auto my-1.5 shrink-0"></div>
+</main>
+<!-- BEGIN: Interactive Feedback Script -->
+<script data-purpose="haptic-and-interactions">
+    document.addEventListener('DOMContentLoaded', () => {
+      const scanBtn = document.getElementById('btn-next-scan');
+      if (scanBtn) {
+        scanBtn.addEventListener('click', () => {
+          // Provide simple vibration tactile feedback on supporting mobile browsers
+          if (navigator.vibrate) {
+            navigator.vibrate(50);
+          }
+          scanBtn.classList.add('opacity-80');
+          setTimeout(() => scanBtn.classList.remove('opacity-80'), 150);
+        });
+      }
+    });
+  </script>
+<!-- END: Interactive Feedback Script -->
+
+
+
+
+
+
+
+
+</body></html>

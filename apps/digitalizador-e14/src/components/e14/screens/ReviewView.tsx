@@ -2,50 +2,22 @@
 
 /**
  * REVISIÓN (§7.4–§7.5) — documento + banner por estado + CTAs.
- * Estados: ENVIADA · ADVERTENCIA · RECHAZADA (ILEGIBLE rica / GENERICO pill)
- * · EN_REVISION_HUMANA.
- * SPEC-rediseno-revision-automatizada (D1–D6 + §7): ADVERTENCIA remodelada
- * al mock — TarjetaRica ELIMINADA (info redistribuida: TopBar D1 + breadcrumb
- * + chips D3 + banner D4), toolbar UNIFICADA de 3 en TODOS los estados de
- * corrección (D5 Rev. 2: ADVERTENCIA/RECHAZADA/EN_REVISION_HUMANA — Filtros
- * y Texto sobreviven SOLO en OPTIMA-rescate) y CTAs en PILA «CONFIRMAR Y
- * ENVIAR DE TODOS MODOS» + «REPETIR CAPTURA» (D6). El flujo
- * AUTOMATIZA los rechazos: repetir primero, contingencia SOLO al agotar los
- * 4 intentos (§7 — banner partido por intento, botón manual fuera).
- * UX-REAL F1/F3 (SPEC-ux-real-bn-editor, D35–D37): el visor es ÚNICO y es la
- * FOTO REAL del core (el papel sintético/ActaDocument se retiró — petición
- * del dueño: «no la quiero volver a ver»). VER FOTO dejó de existir: la foto
- * procesada es el contenido por defecto de la tarjeta. L5 (§7 ReviewView):
- * RECORTAR abre el QuadEditor (§7.5) · ROTAR 90° gira la foto (horneada para
- * el PDF) · PANTALLA COMPLETA abre el visor modal. F5: barra de controles
- * FIJA en la parte inferior del editor (fuera de la tarjeta — D38).
- * F-OCR (SPEC-e14-texto-ocr-editor §F1-§F3, D39): 5º botón TEXTO (abre el
- * sheet «Texto reconocido» — el OCR corre dentro, igual que el lab) con
- * contadores, copiar al portapapeles y re-reconocer (B1-B6 del lab).
- * CHROME-3-ESTADOS (SPEC-e14-rediseno-chrome-3-estados Rev. 3, D1-D7):
- * banner de ubicación D2 (reemplaza la línea de ubicación anterior), chips ÚNICOS
- * data-driven ARRIBA de la tarjeta en todos los estados (D3 — el «---» es
- * el fallback sin clasificación), brackets de color en TODAS las tarjetas
- * incluida ENVIADA (D4), «Recortar» rojo sólido en RECHAZADA (D5), CTAs
- * al mock + botón «REVISIÓN HUMANA» con candado intento >= 3 (D6/D6-bis)
- * y tarjeta ILEGIBLE/pill GENERICO fuera (D7).
- * CYBER-NEÓN (SPEC-e14-cyber-neon Rev. 1, §4-§8): supersede visual del
- * chrome — fidelidad 1:1 al mock del dueño (mandato: «imagina que no
- * tenemos nada de diseño… prohibido no quedar igual»). Banner = cápsula
- * 42px surface-2 con punto 10px; chips cápsulas 34px centradas gap-2.5
- * (TRANSMISIÓN sólido neón texto NEGRO; MESA/PÁG navy texto blanco);
- * tarjeta = CONTENEDOR OSCURO surface-card 20px con brackets BARRAS neón
- * 3.5px glow y acta blanca rounded-14px object-contain (SERIE 1
- *  e14-sync-visor §3: fit UNIVERSAL — el acta alta se ve COMPLETA con
- *  letterboxing, como las as-is); barra de envío =
- * cápsula 46px green-bar con check círculo neón sólido + hora en recuadro
- * green-inset (SHA-256 FUERA de esta vista — cambio deliberado del dueño);
- * extrapolación §10: barra de rechazo crit (✕ círculo sólido) + banner
- * ADVERTENCIA re-vestido como cáscara ámbar; CTA ENVIADA = pill 52px
- * neon-strong 2 líneas con «+» en círculo negro. LA LÓGICA SIGUE INTACTA
- * (Rev. 5): datos data-driven, gate, escalación, candado RH, grid-cols-2.
- * §11 DEV-6: espaciador condicional en EN_RH para que el banner flotante
- * no tape los chips.
+ * STITCH REDESIGN (SPEC-e14-redesign-stitch Rev. 1 §3.2, mocks 2-6): UN
+ * mismo esqueleto con 6 vestidos — TopBar (en page.tsx: retro + píldora de
+ * estado + nube) + banner de ubicación (mono, dot del estado; ruta con `>`
+ * en óptima/enviada) + chips grid-cols-3 (activo sólido del color del
+ * estado) + tarjeta bg-brand-surface rounded-2xl con ESQUINAS AR del color
+ * del estado y PÍLDORA FLOTANTE con el motivo real + LA FOTO REAL del acta
+ * (rounded-lg border-gray-300 — NUNCA el formulario dibujado del mock,
+ * §3.5/AC7) + fila de acciones neutra grid-cols-3 + CTAs por estado (mock
+ * 2-6: rojo sólido con badge azul giratorio · ámbar outline · par con
+ * REVISIÓN HUMANA surface · verde SEGUIR ESCANEANDO) + bloque
+ * «✓ ENVIADO AUTOMÁTICAMENTE» + nav (shell BottomNav).
+ * LA LÓGICA SIGUE INTACTA (Rev. 5 del score-ocr + todas las specs
+ * previas): datos data-driven, gate, escalación, candado RH, parciales,
+ * fallback de foto D4, visor F-ZOOM (SERIE 1), sheets Filtros/Texto.
+ * D2 (redesign-stitch §4): SIN notificaciones — el feedback vive en la UI
+ * persistente (píldoras, banner, píldora flotante, feedback en botón).
  */
 import { useEffect, useMemo, useState } from "react";
 import { useE14Store } from "@/lib/e14/store";
@@ -56,7 +28,18 @@ import { QuadEditor } from "../QuadEditor";
 import { ZoomableVisor } from "../ZoomableVisor";
 import { PanelClasificacion } from "../PanelClasificacion";
 import { Chip, PrimaryBtn, ToolbarBtn } from "../primitives";
-import { CheckIcon, CopyIcon, CropIcon, FullscreenIcon, LoaderIcon, PlusIcon, RefreshIcon, RotateIcon, ScanTextIcon, SlidersIcon, UserKeyIcon, WarnTriangleIcon, XIcon } from "../icons";
+import {
+  CopyIcon,
+  LoaderIcon,
+  ScanTextIcon,
+  SlidersIcon,
+  WarnTriangleIcon,
+  StitchCropIcon,
+  StitchRotateIcon,
+  StitchFullscreenIcon,
+  StitchEyeIcon,
+  StitchSpinIcon,
+} from "../icons";
 
 // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L89-L93
 // (CSS_FILTERS — aproximación CSS de cada filtro para las previews en vivo:
@@ -68,12 +51,10 @@ const CSS_FILTERS: Record<PageFilter, string> = {
 };
 
 // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L237-271
-// (OcrHighlightedText — F-FIND: texto OCR con las coincidencias de la
-// búsqueda resaltadas, marca amarilla #ffd60a estilo iOS, case-insensitive.
+// (OcrHighlightedText — F-FIND: texto OCR con las coincidencias resaltadas.
 // Sin consulta activa se renderiza el texto plano). Copia COMPLETA aunque e14
-// hoy siempre pasa query={null} (degrada a texto plano) — queda lista para
-// F-FIND futuro. El <mark> amarillo se conserva literal (no hay token
-// equivalente en e14 — re-vestido no aplica).
+// hoy siempre pasa query={null}. El <mark> amarillo se conserva literal (es
+// del lab, no del tema anterior de e14).
 function OcrHighlightedText({
   text,
   query,
@@ -110,41 +91,6 @@ function OcrHighlightedText({
   );
 }
 
-/** Pill simple flotante (ENVIADA / GENERICO / ÓPTIMA rescatada). */
-function Pill({ tone, children }: { tone: "ok" | "crit"; children: React.ReactNode }) {
-  return (
-    <div
-      className={`pointer-events-auto flex items-center gap-2 backdrop-blur-xl px-3.5 py-1.5 rounded-full shadow-lg shadow-black/80 ${
-        tone === "ok"
-          ? "bg-ok-ink/95 border border-ok-tint/40 ring-1 ring-ok-tint/25"
-          : "bg-crit-ink/95 border border-crit/40 ring-1 ring-crit/25"
-      }`}
-    >
-      {children}
-    </div>
-  );
-}
-
-/** §6.2 (cyber-neón): brackets = BARRAS bg neón 3.5px × ~34px sobre las
- *  esquinas del CONTENEDOR oscuro (posición Rev. 4 conservada — el fix
- *  border-r del corner inferior-derecho queda subsumido: ahora son 8
- *  barras simétricas absolutas), rounded-[2px] y glow-md (drop-shadow del
- *  grupo — cada barra brilla). Reemplaza los corners border de la Rev. 4. */
-function BracketsNeon() {
-  return (
-    <div className="absolute inset-0 pointer-events-none z-10 glow-md" aria-hidden>
-      <div className="absolute top-0 left-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute top-0 left-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute top-0 right-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute top-0 right-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute bottom-0 left-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute bottom-0 left-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute bottom-0 right-0 h-[3.5px] w-[34px] bg-ok-tint rounded-[2px]" />
-      <div className="absolute bottom-0 right-0 w-[3.5px] h-[34px] bg-ok-tint rounded-[2px]" />
-    </div>
-  );
-}
-
 export function ReviewView() {
   const acta = useE14Store((s) => s.actaActual);
   const paginaObjetivo = useE14Store((s) => s.paginaObjetivo);
@@ -154,18 +100,18 @@ export function ReviewView() {
   const rotarFoto = useE14Store((s) => s.rotarFoto);
   const cambiarFiltro = useE14Store((s) => s.cambiarFiltro);
   const reconocerTextoActa = useE14Store((s) => s.reconocerTextoActa);
-  const notificar = useE14Store((s) => s.notificar);
   // L5 §7.5: editor de recorte y visor a pantalla completa (estado local —
   // el acta solo cambia por store.aplicarRecorte al APLICAR).
   const [editando, setEditando] = useState(false);
   const [visorAbierto, setVisorAbierto] = useState(false);
   // F2 (§F2.2): sheet de filtros (copia del lab EditorView L2253-2309).
   const [filtrosAbierto, setFiltrosAbierto] = useState(false);
-  // F-OCR (§F3.3, D39): sheet «Texto reconocido» (copia del lab EditorView
-  // L2311-2416) + estado "corriendo" LOCAL (igual que el lab: ocrRunning es
-  // del componente, L347 — el store no re-entra mientras esto esté true).
+  // F-OCR (§F3.3, D39): sheet «Texto reconocido» + estado "corriendo" LOCAL.
   const [textoAbierto, setTextoAbierto] = useState(false);
   const [ocrEjecutando, setOcrEjecutando] = useState(false);
+  // D2 (redesign-stitch §4.3): feedback de COPIAR en el propio botón
+  // (1.5 s «COPIADO ✓» / «NO SE PUDO COPIAR») — sin toast flotante.
+  const [copiado, setCopiado] = useState<"ok" | "err" | null>(null);
   // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L1563-1578
   // (ocrStats — contadores del sheet de texto). ADAPTACIÓN: sin `matches`
   // (F-FIND excluido — e14 no tiene biblioteca buscable, §1 del spec).
@@ -189,8 +135,7 @@ export function ReviewView() {
   if (!acta) return null;
 
   // Fase B (§6 — coherencia de display): clasificación AUTO resuelta → la
-  // REVISIÓN muestra la ubicación REAL (tipo/mesa/página del acta), no la del
-  // seed demo. Sin clasificación (flujo seed/C4) queda como estaba.
+  // REVISIÓN muestra la ubicación REAL (tipo/mesa/página del acta).
   const clasifAuto = acta.clasificacion?.nivel === "AUTO" ? acta.clasificacion : null;
   const tipo = clasifAuto?.tipo
     ? (clasifAuto.tipo === "TRANSMISION" ? "TRANSMISIÓN" : "DELEGADOS")
@@ -198,110 +143,125 @@ export function ReviewView() {
   const paginaIdx = clasifAuto ? (clasifAuto.pagina?.index ?? 1) : acta.pagina.index;
   const paginaTotal = clasifAuto ? (clasifAuto.pagina?.total ?? 2) : acta.pagina.total;
   const status = acta.status;
-  // D2/D3 Rev. 2 (SPEC-rediseno-chrome-3-estados): «---» = fallback SOLO
-  // cuando el sistema NO logra identificar (veto del dueño: «solo si el
-  // sistema no puede llegar identificar… mejor prevenir») — con
-  // clasificación resuelta (AUTO/SUGERIDA) los datos son REALES en
-  // cualquier estado. UN solo predicado compartido por banner (D2) + chips (D3).
-  // AC4 (resolución M17-4, defecto 2 del QA): nivel MANUAL = nada resuelto
-  // por el clasificador → cuenta como NO identificada (banner CLASIFICACIÓN
-  // PENDIENTE + chips fallback); RECHAZADA lleva clasificacion:null (ídem).
+  // D2/D3 Rev. 2: «---» = fallback SOLO cuando el sistema NO logra
+  // identificar. UN solo predicado compartido por banner + chips.
   const hayClasificacion =
     acta.clasificacion != null && acta.clasificacion.nivel !== "MANUAL";
-  // D3 Rev. 5 (decisión 4): PÁG data-driven — la paginación se conoce siempre
-  // que el pipeline adjuntó clasificación (AUTO/SUGERIDA/MANUAL, p. ej. el
-  // EN_RH de sin-anclas); «PÁG - DE -» SOLO si la página no se pudo
-  // identificar (RECHAZADA con clasificacion null — «muy pocas veces»).
   const paginaIdentificada = acta.clasificacion != null;
-  // D3: tono del chip 1 por estado — identidad visual del mock, dato aparte.
+  // §D4 (SPEC-e14-score-ocr): el visor NUNCA queda vacío — sin
+  // fotoProcesada (detección con excepción/timeout) o procesada SIN tinta
+  // (warp degenerado) se muestra la ORIGINAL con nota tenue.
+  const fotoSinTinta = !acta.fotoProcesada || acta.procesadaVacia === true;
+  const fotoVisible = fotoSinTinta
+    ? (acta.fotoOriginal ?? acta.fotoProcesada)
+    : acta.fotoProcesada;
+  const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
+  const hayFoto = Boolean(fotoVisible);
+  const altFoto = mostrandoOriginal
+    ? "Foto original del acta (la procesada salió vacía)"
+    : "Foto real del acta procesada por el core";
+  // D35: SIMULACIÓN produce fotos reales (pipeline real) — el gate es la foto.
+  const esReal = Boolean(fotoVisible);
+  // F-OCR (§F1.2, D39): TEXTO activo cuando ya hay texto válido.
+  const hayTexto = Boolean(acta.ocrTexto) && acta.ocrTexto !== OCR_NO_TEXT;
+
+  // ── Banner de ubicación (mock §3.2.2): dot del color del estado + texto
+  // uppercase real; en ÓPTIMA/ENVIADA con clasificación resuelta pinta la
+  // RUTA con «>» (mock 6: ITALIA > ZONA 10 > PUESTO 02 > MESA 001 > …).
+  const dotUbicacion = hayClasificacion
+    ? "bg-brand-green"
+    : status === "EN_REVISION_HUMANA"
+      ? "bg-amber-400"
+      : "bg-red-500";
+  const textoBanner = (() => {
+    if (
+      (status === "ENVIADA" || status === "OPTIMA") &&
+      clasifAuto?.puesto &&
+      clasifAuto.mesa !== null &&
+      clasifAuto.tipo
+    ) {
+      const partes = [
+        clasifAuto.departamento?.nombre,
+        clasifAuto.municipio?.nombre,
+        clasifAuto.puesto.nombre,
+        `MESA ${String(clasifAuto.mesa).padStart(3, "0")}`,
+        clasifAuto.tipo === "TRANSMISION" ? "TRANSMISIÓN" : "DELEGADOS",
+      ].filter(Boolean);
+      if (partes.length >= 3) return partes.join(" > ");
+    }
+    if (hayClasificacion) return acta.titulo;
+    return status === "EN_REVISION_HUMANA"
+      ? "CLASIFICACIÓN PENDIENTE"
+      : "NO IDENTIFICADO";
+  })();
+
+  // ── Chips (mock §3.2.3): chip 1 = TONO del estado (sólido), chips 2-3
+  // neutros. Mismas fuentes de datos de siempre (parciales incluidas).
   const toneEstado =
     status === "RECHAZADA"
       ? "crit"
       : status === "ADVERTENCIA" || status === "EN_REVISION_HUMANA"
         ? "warn"
         : "ok";
-  // D2: banner de ubicación (datos REALES — tabla D2): identificado → dot
-  // verde + título real; sin clasificación → dot rojo + NO IDENTIFICADO;
-  // EN_RH sin clasificación conserva «CLASIFICACIÓN PENDIENTE» (dot ámbar).
-  const dotUbicacion = hayClasificacion
-    ? "bg-ok-tint"
-    : status === "EN_REVISION_HUMANA"
-      ? "bg-warn"
-      : "bg-crit";
-  // CYBER-NEÓN §4/§10: el TEXTO de la cápsula es SIEMPRE ink (blanco, bold
-  // tracking 0.12em — el punto y el borde/glow llevan el tono); el borde
-  // por TONO DE ESTADO (ok → white/5 neutro del mock; crit/ámbar → anillo
-  // del tono con glow). El título real siempre (regla D2 Rev. 4 vigente).
-  const bordeUbicacion =
-    status === "RECHAZADA"
-      ? "border-crit/35 glow-sm-crit"
-      : status === "ADVERTENCIA" || status === "EN_REVISION_HUMANA"
-        ? "border-warn/35 glow-sm-warn"
-        : "border-white/5";
-  const texto = hayClasificacion
-    ? acta.titulo
-    : status === "EN_REVISION_HUMANA"
-      ? "CLASIFICACIÓN PENDIENTE"
-      : "NO IDENTIFICADO";
-  // §D2 (SPEC-e14-score-ocr): lectura PARCIAL de MESA (cruda, sin validación
-  // divipol — display-only) — diligencia el chip cuando la canónica NO
-  // resolvió (nivel ≠ AUTO; con AUTO el chip ya muestra la mesa VALIDADA
-  // real). NOTA clasificador: una MESA leída implica nivel ≥ SUGERIDA
-  // (algoResuelto §3.4) → la parcial vive en el bloque SUGERIDA/MANUAL, no
-  // solo en el «---» — el resto de chips conserva su fallback (mínimo del
-  // spec: el número se lee, con marca tenue «· PARCIAL»).
+  // §D2 (SPEC-e14-score-ocr): lectura PARCIAL de MESA (display-only).
   const mesaParcial =
     !clasifAuto && acta.clasificacion?.parciales?.mesa != null
       ? acta.clasificacion.parciales.mesa
       : null;
-  // §D4 (SPEC-e14-score-ocr): el visor NUNCA queda vacío — sin
-  // fotoProcesada (detección con excepción/timeout) o procesada SIN tinta
-  // (warp degenerado sobre superficie lisa → blanco puro) se muestra la
-  // ORIGINAL con nota tenue. Con tinta (aunque poca, p. ej. la borrosa
-  // B/N) se muestra la procesada como hoy — sin regresión.
-  const fotoSinTinta = !acta.fotoProcesada || acta.procesadaVacia === true;
-  const fotoVisible = fotoSinTinta
-    ? (acta.fotoOriginal ?? acta.fotoProcesada)
-    : acta.fotoProcesada;
-  const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
-  // §D8.4/AC4/AC14 (SPEC-e14-score-ocr Rev. 3) + SERIE 1 (sync-visor
-  // §3): el acta se muestra COMPLETA en la tarjeta SIEMPRE —
-  // object-contain UNIVERSAL. El fit contain lo estrenaron las fotos
-  // as-is de Rev. 3 y el mismo mecanismo aplica a TODO: el warp real
-  // produce un acta ALTA (aspecto de página ~0.46–0.7) y la tarjeta
-  // flex-1 tiene otro aspecto → object-cover escalaba a llenar y
-  // RECORTABA arriba/abajo (bug «la imagen se ve GRANDE y CORTADA»). Con
-  // contain aparece letterboxing vertical: la carta de papel blanca
-  // COMPLETA dentro del contenedor oscuro (MISMO look que las as-is).
-  // El ternario fotoAsis desaparece — su único uso era el fit.
-  const hayFoto = Boolean(fotoVisible);
-  const altFoto = mostrandoOriginal
-    ? "Foto original del acta (la procesada salió vacía)"
-    : "Foto real del acta procesada por el core";
-  // D35: SIMULACIÓN produce fotos reales (pipeline real) — el gate es la foto, no la fuente.
-  // §D4: cualquier foto (procesada u original de respaldo) = acta real.
-  const esReal = Boolean(fotoVisible);
-  // F-OCR (§F1.2, D39): TEXTO activo cuando ya hay texto válido (el pipeline
-  // corre el OCR SIEMPRE — §1 del spec; OCR_NO_TEXT distingue el vacío que
-  // pudo dejar el pipeline: ocr.ts L12 del core, PROHIBIDO re-declararlo).
-  const hayTexto = Boolean(acta.ocrTexto) && acta.ocrTexto !== OCR_NO_TEXT;
+
+  // ── Esquinas AR (mock §3.3): verdes (óptima/enviada) · rojas (rechazada)
+  // · ámbar (advertencia/EN_RH) — mismo predicado del tono de estado.
+  const cornerColor =
+    status === "RECHAZADA"
+      ? "#E52222"
+      : status === "ADVERTENCIA" || status === "EN_REVISION_HUMANA"
+        ? "#F59E0B"
+        : undefined; // verde (default del CSS del ZIP)
+
+  // ── PÍLDORA FLOTANTE de la tarjeta (mock §3.2.4/§3.3): el MOTIVO REAL
+  // (rechazo D1/PR #33 · parcial de Rev. 2 · razón de advertencia). En
+  // ÓPTIMA/ENVIADA no hay píldora (tarjeta limpia, mock 6).
+  const pillFlotante = (() => {
+    if (status === "RECHAZADA") {
+      if (acta.rechazo?.tipo === "INCOMPLETA")
+        return { texto: `ACTA INCOMPLETA${acta.rechazo.detalle ? ` · ${acta.rechazo.detalle}` : ""}`, tono: "crit" as const };
+      if (acta.rechazo?.tipo === "BAJO")
+        return { texto: `SCORE BAJO${acta.rechazo.detalle ? ` · ${acta.rechazo.detalle}` : ""}`, tono: "crit" as const };
+      return { texto: "ACTA RECHAZADA", tono: "crit" as const };
+    }
+    if (status === "ADVERTENCIA") {
+      if (mesaParcial != null) return { texto: "LECTURA PARCIAL", tono: "warn" as const };
+      const m = acta.metricas;
+      if (m) {
+        const razon =
+          m.sharpness <= m.contrast && m.sharpness <= m.brightness
+            ? "LEVE DESFOQUE"
+            : m.contrast <= m.brightness
+              ? "CONTRASTE"
+              : "LUMINOSIDAD";
+        return { texto: razon, tono: "warn" as const };
+      }
+      return null;
+    }
+    return null;
+  })();
 
   // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L1446-1455
-  // (copyOcrText). Re-vestido: toasts e14 con títulos en mayúsculas
-  // (descripciones verbatim del lab).
+  // (copyOcrText). D2 redesign-stitch §4.3: feedback en el PROPIO botón.
   const copiarTexto = async () => {
     const text = acta.ocrTexto ?? "";
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      notificar("ok", "TEXTO COPIADO", "Texto copiado al portapapeles");
+      setCopiado("ok");
     } catch {
-      notificar("crit", "NO SE PUDO COPIAR", "No se pudo copiar el texto");
+      setCopiado("err");
     }
+    window.setTimeout(() => setCopiado(null), 1500);
   };
 
-  // F-OCR (§F2, D39): el estado "corriendo" es LOCAL (ocrRunning del lab
-  // L347) — envuelve el store action y lo apaga SIEMPRE (finally).
+  // F-OCR (§F2, D39): el estado "corriendo" es LOCAL — envuelve el store
+  // action y lo apaga SIEMPRE (finally).
   const ejecutarOcr = async () => {
     setOcrEjecutando(true);
     try {
@@ -312,104 +272,31 @@ export function ReviewView() {
   };
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      {/* D2 (SPEC-rediseno-chrome-3-estados): banner de ubicación del mock.
-          Identificado → dot verde + título real (trunca). Sin clasificación
-          → dot rojo + NO IDENTIFICADO. EN_RH sin clasificación conserva
-          «CLASIFICACIÓN PENDIENTE» (dot ámbar) — estado no cubierto por los
-          mocks. ELIMINADA la línea de ubicación anterior (higiene: 0 refs). Es
-          el <h1> visible de la pantalla cuando hay acta. */}
-      <div className="shrink-0 px-4 pt-1">
-        <h1
-          className={`w-full max-w-md mx-auto shrink-0 h-[42px] px-4 rounded-full bg-surface-2 border flex items-center gap-2.5 min-w-0 ${bordeUbicacion}`}
-        >
-          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotUbicacion}`} aria-hidden />
-          <span className="font-data text-[12px] font-bold tracking-[0.12em] uppercase text-ink truncate min-w-0">
-            {texto}
-          </span>
-        </h1>
-      </div>
-
-      {/* Visor del documento — F5 (D38): la tarjeta es SOLO visual (sin
-          toolbar dentro); mide lo que mida el documento. La barra de
-          controles vive FUERA, anclada abajo con alto CONSTANTE. */}
-      <main className="flex-1 relative overflow-hidden flex flex-col items-center px-4 py-2 max-w-md mx-auto w-full min-h-0">
-        {/* Banner flotante superpuesto (no desplaza el visor) */}
-        <div className="absolute top-2 inset-x-0 z-30 flex justify-center pointer-events-none">
-          {/* D2 (SPEC-rediseno-enviada §2): la Pill flotante de ENVIADA se
-              ELIMINÓ — esa información vive ahora en la TopBar (D1: score +
-              palabra por estado) y en la fila de estado (D5: ✓ ENVIADO +
-              hora). D7 Rev. 3 (chrome-3-estados): la pill GENERICO y la
-              tarjeta ILEGIBLE TAMBIÉN salen; la pill de OPTIMA y el banner
-              EN_REVISION_HUMANA NO se tocan. */}
-
-          {status === "OPTIMA" && (
-            <Pill tone="ok">
-              <span className="w-2 h-2 rounded-full bg-ok-tint animate-pulse-sync" />
-              <span className="text-[10px] font-bold text-ok-tint font-mono tracking-wide">
-                ✓ {acta.score.toFixed(1)}/10 ÓPTIMA
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="max-w-md mx-auto w-full px-4 py-3 space-y-3">
+        {/* Banner de ubicación (mock §3.2.2 — mono, dot del estado). */}
+        {status === "ENVIADA" || status === "OPTIMA" ? (
+          <div className="flex items-center px-3 py-1.5 rounded-xl bg-brand-surfacelight border border-brand-border text-[10px] font-mono shadow-sm overflow-x-auto no-scrollbar">
+            <span className="text-brand-green font-bold tracking-wider whitespace-nowrap uppercase truncate">
+              {textoBanner}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-brand-surfacelight border border-brand-border text-xs font-mono shadow-sm">
+            <div className="flex items-center gap-2 truncate">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${dotUbicacion}`} />
+              <span className="text-[11px] font-bold tracking-wider text-white uppercase truncate">
+                {textoBanner}
               </span>
-              <span className="text-ink-faint text-[10px]">•</span>
-              <span className="text-[10px] font-semibold text-white tracking-wide uppercase">
-                Recuperada — envío manual
-              </span>
-            </Pill>
-          )}
-
-          {status === "EN_REVISION_HUMANA" &&
-            (acta.intento < acta.maxIntentos ? (
-              // §7.3 (SPEC-rediseno-revision) PEDIR REPETIR — SUGERIDA/MANUAL
-              // con calidad OK ANTES de agotar intentos: banner warn «repetir-
-              // primero», SIN panel (mismo estilo del bloque de contingencia).
-              <div className="pointer-events-auto rounded-xl bg-warn-ink/95 backdrop-blur-xl border border-warn/40 ring-1 ring-warn/25 px-3.5 py-2.5 shadow-2xl shadow-black/80 max-w-md w-full mx-4 flex items-center gap-2.5">
-                <WarnTriangleIcon className="w-4 h-4 text-warn shrink-0" />
-                <div className="flex flex-col min-w-0">
-                  <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
-                    CLASIFICACIÓN PENDIENTE
-                  </span>
-                  <span className="text-[10px] text-ink-dim font-mono">
-                    Repita la foto para clasificarla automáticamente · INTENTO {acta.intento} DE {acta.maxIntentos}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              // §7.3 CONTINGENCIA (intento ≥ max): hoy exacto.
-              <div className="pointer-events-auto rounded-xl bg-warn-ink/95 backdrop-blur-xl border border-warn/40 ring-1 ring-warn/25 px-3.5 py-2.5 shadow-2xl shadow-black/80 max-w-md w-full mx-4 flex items-center gap-2.5">
-                <WarnTriangleIcon className="w-4 h-4 text-warn shrink-0" />
-                <div className="flex flex-col min-w-0">
-                  <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
-                    ENVIADA A REVISIÓN HUMANA
-                  </span>
-                  <span className="text-[10px] text-ink-dim font-mono">
-                    Un auditor validará esta acta
-                  </span>
-                </div>
-              </div>
-            ))}
-        </div>
-
-        {/* §11 DEV-6 (cyber-neón): el banner flotante EN_RH (absolute top-2)
-            tapa la fila de chips — espaciador condicional para que queden
-            visibles debajo del banner. QA M19-1: el banner «repetir-primero»
-            (subtítulo de 2 líneas) mide ~69px y el de contingencia ~54px
-            → espaciadores 76/64px respectivamente (mismo predicado que
-            elige el banner). */}
-        {status === "EN_REVISION_HUMANA" && (
-          <div
-            className={`${acta.intento < acta.maxIntentos ? "h-[76px]" : "h-16"} shrink-0`}
-            aria-hidden
-          />
+            </div>
+          </div>
         )}
 
-        {/* D3 Rev. 5 (dueño: «son diseños, la lógica sigue igual, los datos sí
-            se pueden cambiar»): VALORES data-driven — el fallback «---» aparece
-            SOLO cuando el sistema NO identificó (veto Rev. 2, decisión 3), en
-            CUALQUIER estado. TONO del chip 1 por estado (visual del export
-            Stitch). El banner (D2) NO cambia: título data-driven.
-            CYBER-NEÓN §5: fila centrada (justify-center, gap-2.5); chip 1
-            SÓLIDO con texto negro + glow; chips 2-3 navy texto blanco. */}
-        <div className="w-full max-w-sm flex items-center justify-center gap-2.5 pb-2 flex-wrap">
-          <Chip tone={toneEstado} solid>{hayClasificacion ? tipo : "---"}</Chip>
+        {/* Chips de estado (mock §3.2.3 — grid-cols-3, activo sólido). */}
+        <div className="grid grid-cols-3 gap-2 w-full select-none">
+          <Chip tone={toneEstado} solid>
+            {hayClasificacion ? tipo : "---"}
+          </Chip>
           <Chip tone="neutral">
             {clasifAuto ? (
               `MESA ${acta.ubicacion.mesa}`
@@ -417,7 +304,7 @@ export function ReviewView() {
               <>
                 {`MESA ${String(mesaParcial).padStart(3, "0")}`}
                 <span
-                  className="ml-1 text-[9px] font-bold tracking-[0.1em] text-ink-faint"
+                  className="ml-1 text-[9px] font-bold tracking-[0.1em] text-gray-400"
                   title="Lectura parcial del OCR — sin validar contra DIVIPOL"
                 >
                   · PARCIAL
@@ -429,214 +316,143 @@ export function ReviewView() {
               "MESA ---"
             )}
           </Chip>
-          <Chip tone="neutral">{paginaIdentificada ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}</Chip>
+          <Chip tone="neutral">
+            {paginaIdentificada ? `PÁG ${paginaIdx} DE ${paginaTotal}` : "PÁG - DE -"}
+          </Chip>
         </div>
 
-        {/* Visor — F3: la FOTO REAL es el visor ÚNICO (el papel sintético se
-            retiró — petición del dueño). El placeholder (solo posible si el
-            pipeline agotó el timeout sin procesar) es la MISMA caja con texto
-            centrado font-data. F5: la tarjeta es SOLO visual (flex-1) — sin
-            toolbar dentro (barra fija abajo, D38).
-            D3 (SPEC-rediseno-enviada §3): ENVIADA estrena la tarjeta héroe del
-            mock — TOCABLE (tap → pantalla completa; el overlay ya existe y
-            funciona para cualquier estado). El resto de estados conserva la
-            tarjeta con brackets (editables), idéntica a la de siempre.
-            CYBER-NEÓN §6: el acta vive DENTRO de un CONTENEDOR OSCURO
-            surface-card rounded-20px p-10px con brackets BARRA neón 3.5px
-            sobre las esquinas DEL CONTENEDOR; acta blanca rounded-14px
-            object-contain SERIE 1 (esquinas propias, separada 10px —
-            el acta COMPLETA, con letterboxing si es más alta). */}
+        {/* OPTIMA-rescate (L5 D20): la ÓPTIMA de aquí SOLO llega tras un
+            rescate por recorte — pill informativa in-flow re-vestida
+            (reemplaza la pill flotante del skin anterior). */}
+        {status === "OPTIMA" && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-brand-surfacelight border border-brand-green/30 text-xs font-mono">
+            <span className="w-2 h-2 rounded-full bg-brand-green animate-pulse-sync" aria-hidden />
+            <span className="text-[11px] font-bold tracking-wider text-brand-green uppercase truncate">
+              ✓ {acta.score.toFixed(1)}/10 ÓPTIMA · RECUPERADA — ENVÍO MANUAL
+            </span>
+          </div>
+        )}
+
+        {/* EN_RH (no cubierto por mocks — §2): banners informativos
+            «repetir-primero» / contingencia, re-vestidos con tokens ámbar. */}
+        {status === "EN_REVISION_HUMANA" && (
+          <div className="rounded-xl bg-amber-950/60 border border-amber-500 px-3.5 py-2.5 flex items-center gap-2.5">
+            <WarnTriangleIcon className="w-4 h-4 text-amber-400 shrink-0" />
+            <div className="flex flex-col min-w-0">
+              <span className="font-mono text-[11px] font-bold tracking-wide uppercase text-white">
+                {acta.intento < acta.maxIntentos
+                  ? "CLASIFICACIÓN PENDIENTE"
+                  : "ENVIADA A REVISIÓN HUMANA"}
+              </span>
+              <span className="text-[10px] text-gray-400 font-mono">
+                {acta.intento < acta.maxIntentos
+                  ? `Repita la foto para clasificarla automáticamente · INTENTO ${acta.intento} DE ${acta.maxIntentos}`
+                  : "Un auditor validará esta acta"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Tarjeta del acta (mock §3.2.4): contenedor surface + esquinas AR
+            del color del estado + PÍLDORA FLOTANTE con el motivo real +
+            LA FOTO REAL (rounded-lg border-gray-300, §3.5/AC7 — el
+            formulario dibujado del mock NO se porta). La tarjeta de
+            ENVIADA es táctil (abre el visor fullscreen — ZoomableVisor). */}
         {status === "ENVIADA" ? (
           <button
             type="button"
             aria-label="Ver acta a pantalla completa"
             onClick={() => (fotoVisible ? setVisorAbierto(true) : undefined)}
-            className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
+            className="relative bg-brand-surface rounded-2xl p-2.5 border border-brand-border shadow-xl w-full text-left"
           >
-            <BracketsNeon />
-            <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {hayFoto ? (
-                <img
-                  src={fotoVisible}
-                  alt={altFoto}
-                  className="w-full h-full rounded-[14px] object-contain"
-                />
-              ) : (
-                <div className="flex items-center justify-center w-full h-full">
-                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
-                    FOTO NO DISPONIBLE
-                  </span>
-                </div>
-              )}
-            </div>
+            {pillFlotante && (
+              <span
+                data-testid="barra-rechazo"
+                className={`absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 font-mono font-extrabold text-[9px] px-2.5 py-1 rounded uppercase tracking-wider whitespace-nowrap max-w-[92%] truncate shadow ${
+                  pillFlotante.tono === "crit"
+                    ? "bg-[#E52222] text-white"
+                    : "bg-[#F59E0B] text-black"
+                }`}
+              >
+                {pillFlotante.texto}
+              </span>
+            )}
+            <div className="scanner-corner-tl" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-tr" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-bl" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-br" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            {hayFoto ? (
+              <img
+                src={fotoVisible}
+                alt={altFoto}
+                className="w-full max-h-[58vh] object-contain rounded-lg border border-gray-300 bg-white mt-2"
+              />
+            ) : (
+              <div className="mt-2 rounded-lg border border-gray-300 bg-brand-black h-48 flex items-center justify-center">
+                <span className="font-mono text-[10px] tracking-widest text-gray-500 uppercase">
+                  FOTO NO DISPONIBLE
+                </span>
+              </div>
+            )}
           </button>
         ) : (
-          <section className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0">
-            <BracketsNeon />
-            <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {hayFoto ? (
-                <img
-                  src={fotoVisible}
-                  alt={altFoto}
-                  className="w-full h-full rounded-[14px] object-contain"
-                />
-              ) : (
-                <div className="flex items-center justify-center w-full h-full">
-                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
-                    FOTO NO DISPONIBLE
-                  </span>
-                </div>
-              )}
-            </div>
+          <section className="relative bg-brand-surface rounded-2xl p-2.5 border border-brand-border shadow-xl">
+            {pillFlotante && (
+              <span
+                data-testid={status === "RECHAZADA" ? "barra-rechazo" : "banner-revision"}
+                className={`absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 font-mono font-extrabold text-[9px] px-2.5 py-1 rounded uppercase tracking-wider whitespace-nowrap max-w-[92%] truncate shadow ${
+                  pillFlotante.tono === "crit"
+                    ? "bg-[#E52222] text-white"
+                    : "bg-[#F59E0B] text-black"
+                }`}
+              >
+                {pillFlotante.texto}
+              </span>
+            )}
+            <div className="scanner-corner-tl" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-tr" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-bl" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            <div className="scanner-corner-br" style={cornerColor ? { borderColor: cornerColor } : undefined} />
+            {hayFoto ? (
+              <img
+                src={fotoVisible}
+                alt={altFoto}
+                className="w-full max-h-[58vh] object-contain rounded-lg border border-gray-300 bg-white mt-2"
+              />
+            ) : (
+              <div className="mt-2 rounded-lg border border-gray-300 bg-brand-black h-48 flex items-center justify-center">
+                <span className="font-mono text-[10px] tracking-widest text-gray-500 uppercase">
+                  FOTO NO DISPONIBLE
+                </span>
+              </div>
+            )}
           </section>
         )}
 
-        {/* §D4 (SPEC-e14-score-ocr): nota tenue del respaldo — la tarjeta
-            muestra la ORIGINAL porque la procesada salió vacía (o nunca
-            existió: timeout/excepción de detección). El operador SIEMPRE ve
-            lo que capturó. */}
+        {/* §D4: nota tenue del respaldo — la tarjeta muestra la ORIGINAL
+            porque la procesada salió vacía. */}
         {mostrandoOriginal && (
-          <p className="w-full max-w-sm pt-1.5 shrink-0 text-center font-data text-[9px] font-bold tracking-[0.18em] text-ink-faint uppercase">
+          <p className="text-center font-mono text-[9px] font-bold tracking-[0.18em] text-gray-400 uppercase">
             SE MUESTRA LA FOTO ORIGINAL
           </p>
         )}
 
-        {/* §7 (cyber-neón): barra de envío = cápsula 46px verde-traslúcida
-            (green-bar + borde green-bar-border) con check en círculo neón
-            sólido 28px (glow-md, palomita negra strokeWidth 3), texto neón
-            11.5px y hora en recuadro PROPIO green-inset 9px a la derecha.
-            EL SHA-256 DESAPARECE de esta vista (cambio deliberado del dueño
-            frente a lo actual: el hash se sigue calculando para
-            RESUMEN/registro — solo sale del chrome de esta pantalla). */}
-        {status === "ENVIADA" && (
-          <div className="w-full max-w-sm pt-2 shrink-0">
-            <div
-              className="h-[46px] rounded-full bg-green-bar border border-green-bar-border px-3.5 flex items-center gap-3"
-              data-testid="fila-estado"
-            >
-              <span className="w-7 h-7 rounded-full bg-ok-tint glow-md flex items-center justify-center shrink-0">
-                <CheckIcon className="w-4 h-4 text-neon-ink" strokeWidth={3} />
-              </span>
-              <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-ok-tint flex-1 min-w-0 truncate">
-                ENVIADO {acta.enviadoAutomaticamente ? "AUTOMÁTICAMENTE" : "CORRECTAMENTE"}
-              </span>
-              <span className="bg-green-inset rounded-[9px] px-2.5 py-1 font-data text-[12px] font-bold text-white shrink-0">
-                {acta.enviadoAutomaticamente ?? "--:--:--"}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* §10 (cyber-neón): barra de rechazo — MISMA geometría que la de
-            envío en tono crit (bg crit/12 + borde crit/30) con ✕ en círculo
-            crit sólido (glow-md-crit). Extrapolación del mock al estado
-            RECHAZADA; la razón del rechazo sigue en pill TopBar + CTA. */}
-        {status === "RECHAZADA" && (
-          <div className="w-full max-w-sm pt-2 shrink-0" data-testid="barra-rechazo">
-            <div className="h-[46px] rounded-full bg-crit/12 border border-crit/30 px-3.5 flex items-center gap-3">
-              <span className="w-7 h-7 rounded-full bg-crit glow-md-crit flex items-center justify-center shrink-0">
-                <XIcon className="w-4 h-4 text-neon-ink" />
-              </span>
-              <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-crit flex-1 min-w-0 truncate">
-                {/* §D3 (SPEC-e14-score-ocr): el chip de estado del rechazo
-                    BAJO lleva el copy del dueño (score bajo visible); el resto
-                    conserva «ACTA RECHAZADA» (la razón vive en el toast). */}
-                {acta.rechazo?.tipo === "BAJO"
-                  ? `SCORE BAJO — ${acta.rechazo.detalle}`
-                  : "ACTA RECHAZADA"}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* §10 (cyber-neón): banner de ADVERTENCIA re-estilizado como cápsula
-            ámbar (bg warn/12 + borde warn/30) con ▲ en círculo ámbar sólido —
-            misma geometría de la barra de envío, bajo la tarjeta; la razón
-            (data-driven, métrica más baja) sigue intacta. */}
-        {status === "ADVERTENCIA" &&
-          (() => {
-            const m = acta.metricas;
-            const razon = !m
-              ? null
-              : m.sharpness <= m.contrast && m.sharpness <= m.brightness
-                ? "LEVE DESFOQUE"
-                : m.contrast <= m.brightness
-                  ? "CONTRASTE"
-                  : "LUMINOSIDAD";
-            return (
-              <div
-                className="w-full max-w-sm pt-2 shrink-0"
-                data-testid="banner-revision"
-              >
-                <div className="h-[46px] rounded-full bg-warn/12 border border-warn/30 px-3.5 flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-full bg-warn glow-md-warn flex items-center justify-center shrink-0">
-                    <WarnTriangleIcon className="w-3.5 h-3.5 text-neon-ink" />
-                  </span>
-                  <span className="font-data text-[11.5px] font-bold tracking-[0.12em] uppercase text-warn flex-1 min-w-0 truncate">
-                    REVISIÓN REQUERIDA{razon ? ` (${razon})` : ""}
-                  </span>
-                </div>
-              </div>
-            );
-          })()}
-
-        {/* ── BARRA DE CONTROLES FIJA (F5/D38): full width del editor,
-            shrink-0, alto CONSTANTE, anclada al borde inferior (justo
-            encima de los CTAs/BottomNav que renderiza page.tsx). D5 Rev. 2
-            (SPEC-rediseno-revision, confirmación del dueño): toolbar
-            UNIFICADA de 3 botones en TODOS los estados de corrección —
-            ADVERTENCIA, RECHAZADA y EN_REVISION_HUMANA (repetir-primero Y
-            contingencia). RECORTAR es la única acción que RE-EVALÚA
-            (aplicarRecorte re-corre pipeline+OCR+clasificación+gate SIN
-            consumir intento, F4/D37) — la cura ante una captura automática
-            o un quad mal detectado por el sistema («por si se tomó
-            automáticamente o se hizo un recorte mal hecho por el sistema,
-            se pueda editar y volver a evaluar»). Guards idénticos a los de
-            siempre — funcionan en EN_REVISION_HUMANA porque el acta trae
-            fotos reales del pipeline (D35: el gate es la foto, no la
-            fuente). Filtros y Texto SALEN de estos tres estados (Rev. 2):
-            los sheets sobreviven SOLO en OPTIMA-rescate. */}
-        {(status === "ADVERTENCIA" ||
-          status === "RECHAZADA" ||
-          status === "EN_REVISION_HUMANA") && (
-          <div className="w-full grid grid-cols-3 gap-2 pt-2 shrink-0 z-20">
-            {/* D5 Rev. 3 (chrome-3-estados): «Recortar» ROJO SÓLIDO solo en
-                RECHAZADA (mock 1) — Rotar y Pantalla completa quedan neutros
-                (mock 2 ADVERTENCIA: los 3 neutros). */}
+        {/* Fila de acciones (mock §3.2.5 — grid-cols-3 NEUTRA; el estado
+            vive en las esquinas AR y la píldora flotante). OPTIMA-rescate
+            conserva sus 5 acciones (Filtros + Texto, F2/F-OCR) — grid
+            auto-filas. Handlers actuales INTACTOS. */}
+        {status === "OPTIMA" && esReal ? (
+          <div className="grid grid-cols-3 gap-2 w-full select-none">
             <ToolbarBtn
-              icon={<CropIcon />}
-              label="Recortar"
-              tone={status === "RECHAZADA" ? "crit" : undefined}
-              onClick={esReal && acta.fotoOriginal ? () => setEditando(true) : undefined}
-            />
-            <ToolbarBtn
-              icon={<RotateIcon />}
-              label="Rotar 90°"
-              onClick={acta.fotoProcesada ? () => void rotarFoto() : undefined}
-            />
-            {/* §D4 (SPEC-e14-score-ocr): PANTALLA COMPLETA siempre habilitado
-                mientras haya UNA foto (procesada u original de respaldo). */}
-            <ToolbarBtn
-              icon={<FullscreenIcon />}
-              label="Pantalla completa"
-              onClick={fotoVisible ? () => setVisorAbierto(true) : undefined}
-            />
-          </div>
-        )}
-        {(status === "OPTIMA" && esReal) && (
-          <div className="w-full grid grid-cols-5 gap-2 pt-2 shrink-0 z-20">
-            <ToolbarBtn
-              icon={<CropIcon />}
+              icon={<StitchCropIcon />}
               label="Recortar"
               onClick={esReal && acta.fotoOriginal ? () => setEditando(true) : undefined}
             />
             <ToolbarBtn
-              icon={<RotateIcon />}
+              icon={<StitchRotateIcon />}
               label="Rotar 90°"
               onClick={esReal ? () => void rotarFoto() : undefined}
             />
-            {/* Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx
-                L2200-2204 (gatillo «Filtros» del toolbar del lab). */}
             <ToolbarBtn
               icon={<SlidersIcon />}
               label="Filtros"
@@ -646,9 +462,6 @@ export function ReviewView() {
                   : undefined
               }
             />
-            {/* Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx
-                L2205-2210 (ToolItem «Texto» del toolbar — active con OCR hecho;
-                NO ejecuta el OCR: abre el sheet, el OCR corre dentro). */}
             <ToolbarBtn
               icon={<ScanTextIcon />}
               label="Texto"
@@ -660,36 +473,58 @@ export function ReviewView() {
               }
             />
             <ToolbarBtn
-              icon={<FullscreenIcon />}
+              icon={<StitchFullscreenIcon />}
               label="Pantalla completa"
               onClick={fotoVisible ? () => setVisorAbierto(true) : undefined}
             />
           </div>
+        ) : status !== "ENVIADA" ? (
+          <div className="grid grid-cols-3 gap-2 w-full select-none">
+            <ToolbarBtn
+              icon={<StitchCropIcon />}
+              label="Recortar"
+              onClick={esReal && acta.fotoOriginal ? () => setEditando(true) : undefined}
+            />
+            <ToolbarBtn
+              icon={<StitchRotateIcon />}
+              label="Rotar 90°"
+              onClick={acta.fotoProcesada ? () => void rotarFoto() : undefined}
+            />
+            <ToolbarBtn
+              icon={<StitchFullscreenIcon />}
+              label="Pantalla completa"
+              onClick={fotoVisible ? () => setVisorAbierto(true) : undefined}
+            />
+          </div>
+        ) : null}
+
+        {/* Bloque ENVIADO (mock 6 §3.2.7 — solo ENVIADA): «✓ ENVIADO
+            AUTOMÁTICAMENTE» + chip de la hora real del envío. */}
+        {status === "ENVIADA" && (
+          <div className="bg-brand-greendark/60 border border-brand-green/60 rounded-xl px-3.5 py-2 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-brand-green font-bold text-xs shrink-0">✓</span>
+              <span className="text-brand-green font-bold text-[11px] uppercase tracking-wider font-mono truncate">
+                {acta.enviadoAutomaticamente ? "ENVIADO AUTOMÁTICAMENTE" : "ENVIADO CORRECTAMENTE"}
+              </span>
+            </div>
+            <span className="font-mono text-xs text-white font-bold bg-black/60 px-2.5 py-1 rounded-md border border-brand-border shrink-0">
+              {acta.enviadoAutomaticamente ?? "--:--:--"}
+            </span>
+          </div>
         )}
 
-        {/* D4 (antes de cyber-neón): el banner de razón de ADVERTENCIA
-            («REVISIÓN REQUERIDA (…)») subió a la posición de la barra de
-            estado — bajo la tarjeta, re-estilizado como cáscara ámbar §10. */}
-      </main>
+        {/* ── PANEL DE CORRECCIÓN §5 (SPEC-cabecera-clasificacion): SOLO
+            EN_REVISION_HUMANA con clasificación PENDIENTE al AGOTAR
+            intentos. Lógica intacta. */}
+        {status === "EN_REVISION_HUMANA" &&
+          acta.intento >= acta.maxIntentos &&
+          acta.clasificacion &&
+          acta.clasificacion.nivel !== "AUTO" && <PanelClasificacion />}
+      </div>
 
-      {/* ── PANEL DE CORRECCIÓN §5 (SPEC-cabecera-clasificacion): SOLO cuando
-          el acta está EN_REVISION_HUMANA con clasificación PENDIENTE (§4.2:
-          calidad OK pero cabecera SUGERIDA/MANUAL — la foto era buena). §7.3
-          (SPEC-rediseno-revision): además SOLO al AGOTAR intentos — antes es
-          «repetir-primero» (banner + REPETIR CAPTURA), el panel espera. El
-          camino C4 (RECHAZADA → contingencia) no lleva clasificación → el
-          panel no aparece. Encima de las acciones actuales, sin quitar nada. */}
-      {status === "EN_REVISION_HUMANA" &&
-        acta.intento >= acta.maxIntentos &&
-        acta.clasificacion &&
-        acta.clasificacion.nivel !== "AUTO" && <PanelClasificacion />}
-
-      {/* L5 §7.5 — EDITOR DE RECORTE (overlay a pantalla completa sobre la
-          foto ORIGINAL; quad inicial = detección automática o defaultQuad).
-          Puro por props (D19): el acta solo cambia vía store.aplicarRecorte
-          al APLICAR; CANCELAR descarta sin tocar nada (rotaciones y
-          detecciones del editor incluidas). F4/D37: APLICAR entrega
-          quad + rotación LOCAL del editor → quedan horneadas. */}
+      {/* L5 §7.5 — EDITOR DE RECORTE (overlay a pantalla completa).
+          Puro por props (D19). INTACTO — solo re-vestido por QuadEditor. */}
       {editando && acta.fotoOriginal ? (
         <QuadEditor
           fotoOriginal={acta.fotoOriginal}
@@ -703,11 +538,8 @@ export function ReviewView() {
         />
       ) : null}
 
-      {/* ── F2 (§F2.2) — SHEET DE FILTROS: copia del sheet del lab
-          (EditorView.tsx L2253-2309), re-vestida: vaul → fixed bottom sheet
-          + animate-editor-enter (e14 NO instala deps nuevas — SPEC §C);
-          #007AFF/#1c1c1e → tokens ok-tint/surface-1; page.original →
-          acta.fotoOriginal; activo por acta.filtro (default "bw", D36). */}
+      {/* ── F2 (§F2.2) — SHEET DE FILTROS (copia del lab, re-vestida con
+          tokens Stitch: ok-tint → brand-green, surface-1 → brand-surface). */}
       {filtrosAbierto && acta.fotoOriginal ? (
         <>
           <div
@@ -718,23 +550,20 @@ export function ReviewView() {
           <div
             role="dialog"
             aria-label="Filtros del acta"
-            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[22px] bg-surface-1 pb-safe outline-none animate-editor-enter"
+            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[22px] bg-brand-surface pb-safe outline-none animate-editor-enter"
           >
             <div className="mx-auto mt-2.5 h-1.5 w-9 rounded-full bg-white/25" />
             <h3 className="px-5 pb-1 pt-3 text-center text-[17px] font-semibold text-white">
               Filtros
             </h3>
             <p className="sr-only">Elige un filtro para el acta en edición</p>
-            <div className="flex gap-3 overflow-x-auto px-5 pb-5 pt-2">
+            <div className="flex gap-3 overflow-x-auto px-5 pb-5 pt-2 no-scrollbar">
               {FILTER_PRESETS.map((f) => {
                 const activo = acta.filtro === f.id;
                 return (
                   <button
                     key={f.id}
                     type="button"
-                    // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx
-                    // L1214-1218 (handleFilter — aplica y cierra; el toast
-                    // «Filtro aplicado: …» lo emite el store.cambiarFiltro).
                     onClick={() => {
                       void cambiarFiltro(f.id);
                       setFiltrosAbierto(false);
@@ -744,7 +573,7 @@ export function ReviewView() {
                     <span
                       className={`block h-[104px] w-full overflow-hidden rounded-xl border-2 ${
                         activo
-                          ? "border-ok-tint shadow-[0_0_0_3px_rgba(63,229,108,0.25)]"
+                          ? "border-brand-green shadow-[0_0_0_3px_rgba(0,230,118,0.25)]"
                           : "border-white/10"
                       }`}
                     >
@@ -758,7 +587,7 @@ export function ReviewView() {
                     </span>
                     <span
                       className={`text-[11px] ${
-                        activo ? "font-medium text-white" : "text-ink-faint"
+                        activo ? "font-medium text-white" : "text-gray-500"
                       }`}
                     >
                       {f.label}
@@ -771,13 +600,8 @@ export function ReviewView() {
         </>
       ) : null}
 
-      {/* ── F-OCR (§F3, D39) — SHEET «TEXTO RECONOCIDO»: copia del sheet de
-          OCR del lab (Fuente: apps/scanner-lab/src/components/scanner/
-          EditorView.tsx L2311-2416 — vaul → patrón del sheet de filtros e14),
-          re-vestido: #007AFF → ok-tint; #8e8e93 → ink-faint; ring-white/10 →
-          ring-line; motion.button → button con active:scale. F-FIND excluido
-          (barra de coincidencias L2347-2366 — e14 no tiene biblioteca
-          buscable); multi-página excluido (e14 = UN acta de UNA página). */}
+      {/* ── F-OCR (§F3, D39) — SHEET «TEXTO RECONOCIDO» (copia del lab,
+          re-vestida con tokens Stitch; feedback de COPIAR en el botón). */}
       {textoAbierto && acta ? (
         <>
           <div
@@ -788,35 +612,28 @@ export function ReviewView() {
           <div
             role="dialog"
             aria-label="Texto reconocido del acta"
-            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[22px] bg-surface-1 pb-safe outline-none animate-editor-enter"
+            className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-md rounded-t-[22px] bg-brand-surface pb-safe outline-none animate-editor-enter"
           >
             <div className="mx-auto mt-2.5 h-1.5 w-9 rounded-full bg-white/25" />
-            {/* Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx
-                L2327-2333 (título del sheet con ScanText en el acento). */}
             <h3 className="flex items-center justify-center gap-2 px-5 pb-1 pt-3 text-center text-[17px] font-semibold text-white">
-              <ScanTextIcon className="size-[18px] text-ok-tint" />
+              <ScanTextIcon className="size-[18px] text-brand-green" />
               Texto reconocido
             </h3>
             <p className="sr-only">Texto extraído por OCR del acta</p>
 
             <div className="px-5 pb-4 pt-1">
-              {/* Tres estados (lab L2336-2416 — idénticos). */}
               {ocrEjecutando ? (
-                /* Ejecutando (lab L2336-2344 — sin la variante multi-página). */
                 <div className="flex min-h-[140px] flex-col items-center justify-center gap-3">
-                  <LoaderIcon className="h-6 w-6 animate-spin text-ok-tint" />
+                  <LoaderIcon className="h-6 w-6 animate-spin text-brand-green" />
                   <span className="text-[13px] font-medium text-white/70">
                     Reconociendo texto…
                   </span>
                 </div>
               ) : hayTexto ? (
                 <>
-                  {/* Caja de texto (lab L2367-2369). (?? "" solo satisface a
-                      TS — hayTexto ya garantizó texto no vacío.) */}
-                  <div className="max-h-[38vh] overflow-y-auto rounded-xl bg-black/40 p-3.5 ring-1 ring-inset ring-line">
+                  <div className="max-h-[38vh] overflow-y-auto rounded-xl bg-black/40 p-3.5 ring-1 ring-inset ring-brand-border thin-scroll">
                     <OcrHighlightedText text={acta.ocrTexto ?? ""} query={null} />
                   </div>
-                  {/* Contadores informativos (lab L2370-2378, estilo chips iOS). */}
                   <div className="mt-2 flex flex-wrap items-center gap-1.5 px-0.5">
                     <span className="rounded-full bg-white/8 px-2.5 py-1 text-[11.5px] font-medium tabular-nums text-white/60">
                       {ocrStats.words} {ocrStats.words === 1 ? "palabra" : "palabras"}
@@ -825,7 +642,6 @@ export function ReviewView() {
                       {ocrStats.chars} {ocrStats.chars === 1 ? "carácter" : "caracteres"}
                     </span>
                   </div>
-                  {/* Fila de botones (lab L2379-2396). */}
                   <div className="mt-3 flex gap-2.5">
                     <button
                       type="button"
@@ -837,27 +653,35 @@ export function ReviewView() {
                     <button
                       type="button"
                       onClick={() => void copiarTexto()}
-                      className="flex flex-[1.3] items-center justify-center gap-1.5 rounded-full bg-ok-tint py-2.5 text-[14px] font-semibold text-ok-ink shadow-[0_4px_16px_rgba(63,229,108,0.4)] transition-all active:scale-[0.97]"
+                      className={`flex flex-[1.3] items-center justify-center gap-1.5 rounded-full py-2.5 text-[14px] font-semibold transition-all active:scale-[0.97] ${
+                        copiado === "ok"
+                          ? "bg-brand-green text-black shadow-[0_4px_16px_rgba(0,230,118,0.4)]"
+                          : copiado === "err"
+                            ? "bg-red-500/80 text-white"
+                            : "bg-brand-green text-black shadow-[0_4px_16px_rgba(0,230,118,0.4)]"
+                      }`}
                     >
                       <CopyIcon className="size-4" />
-                      Copiar texto
+                      {copiado === "ok"
+                        ? "COPIADO ✓"
+                        : copiado === "err"
+                          ? "NO SE PUDO COPIAR"
+                          : "Copiar texto"}
                     </button>
                   </div>
                 </>
               ) : (
-                /* Vacío (lab L2398-2415 — hint adaptado §F3.2.3: e14 no tiene
-                   biblioteca). */
                 <div className="flex min-h-[140px] flex-col items-center justify-center gap-3">
                   <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/8">
-                    <ScanTextIcon className="h-6 w-6 text-ink-faint" />
+                    <ScanTextIcon className="h-6 w-6 text-gray-500" />
                   </div>
-                  <span className="max-w-[260px] text-center text-[13px] leading-snug text-ink-faint">
+                  <span className="max-w-[260px] text-center text-[13px] leading-snug text-gray-500">
                     Extrae el texto del acta para copiarlo.
                   </span>
                   <button
                     type="button"
                     onClick={() => void ejecutarOcr()}
-                    className="rounded-full bg-ok-tint px-6 py-2.5 text-[14px] font-semibold text-ok-ink shadow-[0_4px_16px_rgba(63,229,108,0.4)] transition-all active:scale-[0.97]"
+                    className="rounded-full bg-brand-green px-6 py-2.5 text-[14px] font-semibold text-black shadow-[0_4px_16px_rgba(0,230,118,0.4)] transition-all active:scale-[0.97]"
                   >
                     Reconocer texto
                   </button>
@@ -875,8 +699,7 @@ export function ReviewView() {
           hint 6 s. Se conservan el role=dialog, el fondo bg-black/90 y
           Esc (efecto de arriba); el cierre por toque lo decide el
           ZoomableVisor (tap-fuera inmediato · tap sobre la imagen a 1×
-          diferido 320 ms para no matar el doble toque — decisión
-          documentada en el PR). */}
+          diferido 320 ms para no matar el doble toque). */}
       {visorAbierto && fotoVisible ? (
         <div
           role="dialog"
@@ -893,7 +716,7 @@ export function ReviewView() {
             }
             onClose={() => setVisorAbierto(false)}
           />
-          <span className="pointer-events-none absolute top-3 inset-x-0 text-center font-data text-[9px] tracking-[0.2em] text-ink-dim uppercase">
+          <span className="pointer-events-none absolute top-3 inset-x-0 text-center font-mono text-[9px] tracking-[0.2em] text-gray-400 uppercase">
             Toca o ESC para cerrar
           </span>
         </div>
@@ -902,7 +725,7 @@ export function ReviewView() {
   );
 }
 
-/** CTAs del footer por estado (se anclan sobre el BottomNav, §7.4/§7.5). */
+/** CTAs del footer por estado (anclan sobre el BottomNav, §7.4/§7.5). */
 
 // Candado del botón manual (D6-bis Rev. 4): «repetidamente» ≈ 3 capturas
 // rechazadas del ciclo. Con maxIntentos = 4, la ventana es la pantalla
@@ -910,20 +733,35 @@ export function ReviewView() {
 const UMBRAL_REVISION_HUMANA = 3;
 
 /** D6-bis (Rev. 4, DEV-2): escalación manual — SOLO se monta con el candado
- *  abierto (puedeEscalar): el diseño expresa el candado POR AUSENCIA (adv_1
- *  y rechazada_1 no dibujan el botón; adv_2 lo muestra ya activo). Icono
- *  persona+llave (imagen QR del dueño; el export dibuja 👤 simple — manda la
- *  referencia QR explícita). */
+ *  abierto (puedeEscalar). STITCH (§3.2.6): surface/border + icono lupa-ojo
+ *  del mock rechazada_2 (en ADVERTENCIA también surface — consolidación del
+ *  spec sobre el mock 5 ámbar; decisión documentada). */
 function BtnRevisionHumana({ onClick }: { onClick: () => void }) {
   return (
     <PrimaryBtn
-      variant="outline-warn"
+      variant="outline"
       onClick={onClick}
-      icon={<UserKeyIcon className="w-4 h-4" />}
+      icon={<StitchEyeIcon className="w-4 h-4" />}
       ariaLabel="Enviar esta acta a revisión humana"
     >
       <span>REVISIÓN HUMANA</span>
     </PrimaryBtn>
+  );
+}
+
+/** Badge azul de refresco de los CTAs de REPETIR (mock §3.2.6 — ZIP
+ *  literal: w-5/6 h-5/6 rounded-md bg-blue-600/80 border-blue-400 + SVG
+ *  rotate animate-spin). */
+function BadgeRefresco({ size = 6 }: { size?: 5 | 6 }) {
+  return (
+    <span
+      className={`${
+        size === 6 ? "w-6 h-6" : "w-5 h-5"
+      } rounded-md bg-blue-600/80 border border-blue-400 flex items-center justify-center shrink-0`}
+      aria-hidden
+    >
+      <StitchSpinIcon className={size === 6 ? "w-3.5 h-3.5" : "w-3 h-3"} />
+    </span>
   );
 }
 
@@ -932,7 +770,7 @@ export function ReviewCtas() {
   const navegar = useE14Store((s) => s.navegar);
   const enviarActa = useE14Store((s) => s.enviarActa);
   const repetirFoto = useE14Store((s) => s.repetirFoto);
-  // Selector extra en ReviewCtas + candado (una sola fuente de verdad):
+  // Selector extra + candado (una sola fuente de verdad):
   const escalarRevisionHumana = useE14Store((s) => s.escalarRevisionHumana);
 
   if (!acta) return null;
@@ -940,41 +778,25 @@ export function ReviewCtas() {
   const puedeEscalar = acta.intento >= UMBRAL_REVISION_HUMANA;
 
   if (status === "ENVIADA") {
-    // D6 (SPEC-rediseno-enviada Rev. 2, §6 + Rev. 3 chrome-3-estados): UN
-    // solo CTA verde — «SEGUIR ESCANEANDO» (veto Rev. 2: sin «MESA»). El
-    // mock no dibuja botón de exportación y el dueño lo confirmó («sip
-    // elimina el pdf»). El branch `if (esReal)` de dos botones DESAPARECE:
-    // ENVIADA devuelve este botón único con y sin foto (§7 eliminó la
-    // exportación de la cadena completa — sin código muerto).
-    // CYBER-NEÓN §8: pill 52px radio completo bg neon-strong (#03DF73) +
-    // glow-cta; «+» en círculo NEGRO 28px a la izquierda del bloque de
-    // texto; «SEGUIR / ESCANEANDO» en DOS LÍNEAS (como el mock) mono
-    // extrabold 14px tracking 0.18em texto negro.
+    // Mock 6 §3.2.7: CTA verde «SEGUIR ESCANEANDO» (bg-brand-green,
+    // texto NEGRO, glow verde, mono bold uppercase). El flujo es el
+    // mismo de siempre: navega a escanear.
     return (
       <button
         type="button"
         onClick={() => navegar("escanear")}
-        className="w-full h-[52px] rounded-full bg-neon-strong glow-cta active:scale-95 transition-transform flex items-center justify-center gap-4"
+        className="w-full bg-brand-green hover:bg-emerald-400 text-black font-extrabold text-sm py-3.5 px-6 rounded-2xl shadow-[0_4px_20px_rgba(0,230,118,0.35)] flex items-center justify-center gap-2 tap-action transition-all select-none"
       >
-        <span
-          className="w-7 h-7 rounded-full bg-black flex items-center justify-center shrink-0"
-          aria-hidden
-        >
-          <PlusIcon className="w-4 h-4 text-white" />
-        </span>
-        <span className="font-data font-extrabold text-[14px] tracking-[0.18em] leading-[1.35] text-center text-neon-ink uppercase">
-          SEGUIR
-          <br />
-          ESCANEANDO
+        <span className="tracking-wide uppercase font-mono font-bold">
+          SEGUIR ESCANEANDO
         </span>
       </button>
     );
   }
 
   if (status === "OPTIMA") {
-    // L5 D20: ÓPTIMA SOLO llega aquí tras un rescate por recorte (la ÓPTIMA
-    // de captura se auto-envía D4) → CTAs de ENVÍO MANUAL (sin auto-envío:
-    // evita la semántica de doble transmisión). "enviarActa" ya la acepta.
+    // L5 D20: ÓPTIMA SOLO llega aquí tras un rescate por recorte → CTAs de
+    // ENVÍO MANUAL. Re-vestidos: ok = verde sólido, outline = surface.
     return (
       <div className="flex flex-row items-center gap-2 w-full">
         <PrimaryBtn variant="ok" onClick={enviarActa}>
@@ -988,86 +810,84 @@ export function ReviewCtas() {
   }
 
   if (status === "ADVERTENCIA") {
-    // D6 Rev. 4 (export Stitch adv_1/adv_2): REPETIR FOTO = outline-warn
-    // (ÁMBAR, no rojo — DEV-4). Candado OCULTO (DEV-2): con intento < 3 va
-    // SOLO full-width (adv_1 no dibuja REVISIÓN HUMANA); al abrirse
-    // (intento ≥ 3), grid-cols-2 lado a lado, ambos ámbar idénticos (adv_2).
-    // El botón de confirmación manual de envío sigue FUERA (veto Rev. 2).
+    // Mock 4/5 (§2): CTA único ámbar «REPETIR FOTO» (outline ámbar mono);
+    // con candado → par [REPETIR FOTO] + [REVISIÓN HUMANA surface].
     return puedeEscalar ? (
-      <div className="grid grid-cols-2 gap-2 w-full">
-        <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
-          <RefreshIcon className="w-4 h-4" />
-          <span>REPETIR FOTO</span>
-        </PrimaryBtn>
+      <div className="flex gap-2.5 w-full">
+        <button
+          type="button"
+          onClick={repetirFoto}
+          className="flex-1 min-w-0 w-full py-2.5 px-2 rounded-xl bg-brand-surface border border-amber-500/80 hover:bg-brand-surfacelight text-amber-400 font-mono font-bold text-[10px] leading-tight uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm tap-action transition-all text-center"
+        >
+          <StitchRotateIcon className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">REPETIR FOTO</span>
+        </button>
         <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
     ) : (
-      // §D10 (SPEC-e14-score-ocr Rev. 4): retorno suelto ENVUELTO en flex
-      // w-full — flex-1 del PrimaryBtn estira el botón al ancho COMPLETO del
-      // slot de CTAs (mismos márgenes px-4 del BottomNav) con el label
-      // centrado. Sin el wrapper quedaba a ancho de contenido, alineado a la
-      // izquierda (defecto original). Pares grid-cols-2 y ÓPTIMA INTACTOS.
       <div className="flex w-full">
-        <PrimaryBtn variant="outline-warn" onClick={repetirFoto}>
-          <RefreshIcon className="w-4 h-4" />
+        <button
+          type="button"
+          onClick={repetirFoto}
+          className="w-full py-2.5 px-2 rounded-xl bg-brand-surface border border-amber-500/80 hover:bg-brand-surfacelight text-amber-400 font-mono font-bold text-[10px] leading-tight uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm tap-action transition-all text-center"
+        >
+          <StitchRotateIcon className="w-3.5 h-3.5 shrink-0" />
           <span>REPETIR FOTO</span>
-        </PrimaryBtn>
+        </button>
       </div>
     );
   }
 
   if (status === "RECHAZADA") {
-    // D6 Rev. 4: candado OCULTO — intento < 3: SOLO primario crítico
-    // full-width (rechazada_1/2); intento ≥ 3: grid-cols-2 crítico + RH
-    // (extrapolación de adv_2 — el export rechazada_2 confirma las 2
-    // columnas). El maxIntentos imprime «DE 4» real (el «DE 2» del mock es
-    // decorativo). El badge azul + spin del export = ruido de Stitch, NO se
-    // replica (decisión 11). El label largo envuelve a 2 líneas en
-    // half-width (leading-tight, como adv_2).
+    // Mock 2/3 (§2): CTA único rojo «OBLIGATORIO REPETIR FOTO (INTENTO X DE
+    // 4)» con badge azul giratorio; con candado → par [REPETIR] +
+    // [REVISIÓN HUMANA surface]. «DE 4» = política real (mock dice 3 — §6.2).
     return puedeEscalar ? (
-      <div className="grid grid-cols-2 gap-2 w-full">
-        <PrimaryBtn
-          variant="crit"
+      <div className="flex gap-2.5 w-full">
+        <button
+          type="button"
           onClick={repetirFoto}
-          icon={<RefreshIcon className="w-3.5 h-3.5" />}
+          className="flex-1 min-w-0 bg-[#E52222] hover:bg-red-600 text-white font-black text-xs py-3.5 px-3 rounded-2xl shadow-[0_4px_20px_rgba(229,34,34,0.4)] flex items-center justify-center gap-2 tap-action transition-all uppercase tracking-wider leading-tight text-center"
         >
-          <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
-        </PrimaryBtn>
+          <BadgeRefresco size={5} />
+          <span>REPETIR</span>
+        </button>
         <BtnRevisionHumana onClick={escalarRevisionHumana} />
       </div>
     ) : (
-      // §D10 (Rev. 4): envuelto → ancho completo, label centrado.
       <div className="flex w-full">
-        <PrimaryBtn
-          variant="crit"
+        <button
+          type="button"
+          id="btn-repeat-scan"
           onClick={repetirFoto}
-          icon={<RefreshIcon className="w-3.5 h-3.5" />}
+          className="w-full bg-[#E52222] hover:bg-red-600 text-white font-black text-xs sm:text-sm py-4 px-4 rounded-2xl shadow-[0_4px_20px_rgba(229,34,34,0.4)] flex items-center justify-center gap-2.5 tap-action transition-all uppercase tracking-wider leading-tight text-center"
         >
-          <span>OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})</span>
-        </PrimaryBtn>
+          <BadgeRefresco size={6} />
+          <span>
+            OBLIGATORIO REPETIR FOTO (INTENTO {acta.intento} DE {acta.maxIntentos})
+          </span>
+        </button>
       </div>
     );
   }
 
   if (status === "EN_REVISION_HUMANA") {
-    // §7.3 (SPEC-rediseno-revision): la pantalla parte por intento —
-    // «repetir-primero» (intento < max): REPETIR CAPTURA; contingencia
-    // (intento ≥ max): VOLVER AL ESCÁNER (hoy exacto).
+    // §7.3: «repetir-primero» (intento < max): REPETIR CAPTURA;
+    // contingencia (intento ≥ max): VOLVER AL ESCÁNER. Re-vestidos
+    // (surface/border — mismo orden/ancho, §2 última fila).
     if (acta.intento < acta.maxIntentos) {
-      // §D10 (Rev. 4): envuelto → ancho completo, label centrado.
       return (
         <div className="flex w-full">
           <PrimaryBtn
             variant="outline"
             onClick={repetirFoto}
-            icon={<RefreshIcon className="w-3.5 h-3.5" />}
+            icon={<StitchRotateIcon className="w-3.5 h-3.5" />}
           >
             <span>REPETIR CAPTURA (FOTO MÁS NÍTIDA)</span>
           </PrimaryBtn>
         </div>
       );
     }
-    // §D10 (Rev. 4): mismo slot, mismo defecto → mismo wrapper (coherencia).
     return (
       <div className="flex w-full">
         <PrimaryBtn variant="outline" onClick={() => navegar("escanear")}>

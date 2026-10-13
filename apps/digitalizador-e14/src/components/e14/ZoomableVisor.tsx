@@ -5,9 +5,9 @@
  * lab (apps/scanner-lab/src/components/scanner/EditorView.tsx): NO se
  * re-inventa; se copia la máquina de gestos PROBADA en táctil real (pinza ·
  * pan con clamps · doble toque · rueda · comparación por pulsación larga,
- * FIX v3/v6/v8 incluidos) y se re-veste con la estética Precision Monitor /
- * cyber-neón (ok-tint · ink · neon-ink · font-data; NADA de hex del lab tipo
- * #007aff/#1c1c1e). Encapsulado como componente PURO (mismo espíritu que
+ * FIX v3/v6/v8 incluidos) y se re-veste con la estética STITCH
+ * (SPEC-e14-redesign-stitch: tokens brand-* · Inter/JetBrains Mono).
+ * Encapsulado como componente PURO (mismo espíritu que
  * QuadEditor: cero store del core) para el visor fullscreen de ReviewView
  * (INSTRUCCIONES-e14-sync-visor-v1 §4).
  *
@@ -46,11 +46,13 @@
  *   · JSX wrapper motion + <img> (L2215–2252) — LITERAL: FIX v3 (willChange
  *     solo durante el gesto) + FIX v6 (touch-none en wrapper Y en img);
  *     sombra del lab → tokens e14 (shadow-2xl shadow-black).
- *   · JSX overlay de comparación (L2253–2278) — re-vestido: pill
- *     bg-white/95 · #1c1c1e → tokens ink/neon-ink, Eye icono propio de e14.
- *   · JSX chip de zoom % + Restablecer (L2285–2307) — re-vestido:
- *     #007aff → ok-tint, tipografía font-data.
- *   · JSX hint «Pellizca para ampliar…» (L2309–2316) — re-vestido e14.
+ *   · JSX overlay de comparación (L2253–2278) — re-vestido STITCH: pill
+ *     bg-white/95 · text-gray-900 (blanco/negro neutro del sistema), EyeIcon
+ *     propio de e14, font-mono uppercase.
+ *   · JSX chip de zoom % + Restablecer (L2285–2307) — re-vestido STITCH:
+ *     ok-tint → brand-green, font-mono.
+ *   · JSX hint «Pellizca para ampliar…» (L2309–2316) — re-vestido STITCH
+ *     (font-mono · gray-400).
  *
  * DECISIÓN de cierre por toque (§4.0 del instructivo — documentada):
  * el modal e14 cerraba con tap en cualquier lado; con doble-toque=2.5× ese
@@ -515,7 +517,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
                 />
                 {/* Pill re-vestida e14: bg-white/95 · #1c1c1e del lab →
                     tokens ink (blanco) / neon-ink (negro). */}
-                <span className="absolute left-1/2 top-3 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/95 px-3 py-1 font-data text-[10px] font-bold uppercase tracking-[0.14em] text-neon-ink shadow-lg shadow-black/80 backdrop-blur-md">
+                <span className="absolute left-1/2 top-3 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-gray-900 shadow-lg shadow-black/80 backdrop-blur-md">
                   <EyeIcon className="h-3.5 w-3.5" />
                   ORIGINAL
                 </span>
@@ -526,7 +528,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
       </motion.div>
 
       {/* F-ZOOM — chip de zoom con % y botón de reinicio (patrón Fotos).
-          Re-vestido e14: #007aff → ok-tint, font-data. */}
+          Re-vestido STITCH: brand-green + font-mono. */}
       <AnimatePresence>
         {zoomed && (
           <motion.div
@@ -541,11 +543,11 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
               type="button"
               aria-label="Restablecer el zoom"
               onClick={resetZoom}
-              className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1.5 font-data text-[10px] font-bold uppercase tracking-[0.1em] tabular-nums text-ink backdrop-blur-md transition-transform active:scale-95"
+              className="flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.1em] tabular-nums text-white backdrop-blur-md transition-transform active:scale-95"
             >
               {zoomPct}%
-              <span className="text-ink-dim" aria-hidden="true">·</span>
-              <span className="text-ok-tint">RESTABLECER</span>
+              <span className="text-gray-400" aria-hidden="true">·</span>
+              <span className="text-brand-green">RESTABLECER</span>
             </button>
           </motion.div>
         )}
@@ -554,7 +556,7 @@ export function ZoomableVisor({ src, alt, compareSrc, onClose }: ZoomableVisorPr
       {/* Hint de zoom (una vez por montaje — 6 s, texto re-vestido e14) */}
       {!zoomed && zoomHintVisible && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-6">
-          <span className="rounded-full bg-black/45 px-3 py-1.5 font-data text-[9px] font-bold uppercase tracking-[0.16em] text-ink-dim backdrop-blur-md">
+          <span className="rounded-full bg-black/45 px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-gray-400 backdrop-blur-md">
             {compareSrc
               ? "PELLIZCA PARA AMPLIAR · MANTÉN PULSADO PARA VER EL ORIGINAL"
               : "PELLIZCA PARA AMPLIAR · DOBLE TOQUE = 2.5×"}

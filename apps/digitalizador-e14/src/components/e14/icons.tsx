@@ -484,3 +484,222 @@ export const FileDocIcon = ({ className = "w-4 h-4" }: IconProps) => (
     <path d="M16 17H8" />
   </svg>
 );
+
+/* ══════════════════════════════════════════════════════════════════
+   STITCH REDESIGN (SPEC-e14-redesign-stitch §1) — SVG inline del ZIP
+   copiados TAL CUAL (download/stitch-e14-redesign/...). Se usan en el
+   chrome re-vestido; los paths/valores son verbatim de los code.html.
+   ══════════════════════════════════════════════════════════════════ */
+
+/** Grid de la píldora IA del escaneo (mock 1: puntos 4×4 + 4 rects rx 1.5). */
+export const StitchGridIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" aria-hidden>
+    <path
+      d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"
+      fill="currentColor"
+      opacity="0.2"
+    />
+    <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+    <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+  </svg>
+);
+
+/** Encuadre del botón amarillo de modo (mock 1, strokeWidth 2.2). */
+export const StitchFrameIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2.2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M3 7V5a2 2 0 012-2h2m10 0h2a2 2 0 012 2v2m0 10v2a2 2 0 01-2 2h-2m-10 0H5a2 2 0 01-2-2v-2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Importar del dock (mock 1: documento con flecha descendente). */
+export const StitchImportIcon = ({ className = "w-6 h-6" }: IconProps) => (
+  <svg className={`${className} stroke-current fill-none`} strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden>
+    <path
+      d="M9 12h6m-3-3v6m-7 4h14a2 2 0 002-2V7a2 2 0 00-2-2h-5l-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M12 11v5m0 0l-2-2m2 2l2-2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Documento del interior del obturador (mock 1, strokeWidth 2). */
+export const StitchShutterDocIcon = ({ className = "w-8 h-8" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none drop-shadow`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Rayo del Flash del dock (mock 1). */
+export const StitchBoltIcon = ({ className = "w-6 h-6" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Cámara del ítem ESCANEAR de la nav (mock, strokeWidth 2). */
+export const StitchCameraIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Documento del ítem ACTAS de la nav (mock, strokeWidth 1.8). */
+export const StitchDocIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="1.8"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Cuadrícula 2×2 del ítem RESUMEN de la nav (mock, strokeWidth 1.8). */
+export const StitchGrid2Icon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="1.8"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Lupa-ojo del CTA REVISIÓN HUMANA (mock rechazada_2, strokeWidth 2). */
+export const StitchEyeIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" strokeLinecap="round" strokeLinejoin="round" />
+    <path
+      d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Badge giratorio de los CTAs de repetir (mock, strokeWidth 2.5). */
+export const StitchSpinIcon = ({ className = "w-3.5 h-3.5" }: IconProps) => (
+  <svg
+    className={`${className} animate-spin stroke-current fill-none`}
+    strokeWidth="2.5"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.03 8.03 0 01-15.357-2m15.357 2H15"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Recortar de la fila de acciones (mock rechazada_1, strokeWidth 2). */
+export const StitchCropIcon = ({ className = "w-3.5 h-3.5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M6 2v14a2 2 0 002 2h14" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M18 22V8a2 2 0 00-2-2H2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Rotar 90° de la fila de acciones (mock rechazada_1, strokeWidth 2). */
+export const StitchRotateIcon = ({ className = "w-3.5 h-3.5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path
+      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.03 8.03 0 01-15.357-2m15.357 2H15"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+/** Pantalla completa de la fila de acciones (mock, strokeWidth 2). */
+export const StitchFullscreenIcon = ({ className = "w-3.5 h-3.5" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none shrink-0`}
+    strokeWidth="2"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Nube de transmisión del TopBar (mock — check, fill). */
+export const StitchCloudCheckIcon = ({ className = "w-4 h-4" }: IconProps) => (
+  <svg className={`${className} fill-current animate-pulse`} viewBox="0 0 24 24" aria-hidden>
+    <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM10 13.6l-2.6-2.6L6 12.4l4 4 8-8-1.4-1.4-6.6 6.6z" />
+  </svg>
+);
+
+/** Retro «←» del TopBar (mock, strokeWidth 2.5). */
+export const StitchArrowLeftIcon = ({ className = "w-6 h-6" }: IconProps) => (
+  <svg
+    className={`${className} stroke-current fill-none`}
+    strokeWidth="2.5"
+    viewBox="0 0 24 24"
+    aria-hidden
+  >
+    <path d="M19 12H5M12 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);

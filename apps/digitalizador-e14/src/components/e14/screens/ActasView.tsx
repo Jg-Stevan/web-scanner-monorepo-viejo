@@ -17,24 +17,24 @@ import { ChevronDownIcon, MapPinIcon, SensorsIcon, WarnTriangleIcon } from "../i
 function chipPagina(p: MesaPagina): { label: string; clases: string } {
   switch (p.estado) {
     case "OK":
-      return { label: `P${p.pagina} ✓`, clases: "px-2 py-0.5 bg-ok-tint/20 text-ok-tint font-data" };
+      return { label: `P${p.pagina} ✓`, clases: "px-2 py-0.5 bg-[#00E676]/10 border border-[#00E676]/40 text-brand-green font-mono" };
     case "RESCANEO":
-      return { label: `P${p.pagina} ⚠ Rescaneo`, clases: "px-2 py-0.5 bg-crit/20 text-crit font-data" };
+      return { label: `P${p.pagina} ⚠ Rescaneo`, clases: "px-2 py-0.5 bg-red-500/10 border border-red-500/40 text-red-500 font-mono" };
     case "EN_PROCESO":
-      return { label: `P${p.pagina} ⏳`, clases: "px-2 py-0.5 bg-warn/20 text-warn font-data" };
+      return { label: `P${p.pagina} ⏳`, clases: "px-2 py-0.5 bg-amber-400/10 border border-amber-400/40 text-amber-400 font-mono" };
     default:
-      return { label: `P${p.pagina}`, clases: "px-2 py-0.5 bg-surface-5 text-ink-dim font-data" };
+      return { label: `P${p.pagina}`, clases: "px-2 py-0.5 bg-brand-surfacelight border border-brand-border text-gray-400 font-mono" };
   }
 }
 
-function estadoMesa(mesa: Mesa): { label: string; clases: string } {
+function estadoMesa(mesa: Mesa): { label: string; clases: string; dot: string } {
   switch (mesa.estado) {
     case "COMPLETADA":
-      return { label: `COMPLETADA ${mesa.progresoPct}%`, clases: "text-ok-tint" };
+      return { label: `COMPLETADA ${mesa.progresoPct}%`, clases: "bg-brand-surface border-brand-green/30 text-brand-green", dot: "bg-brand-green" };
     case "EN_PROCESO":
-      return { label: "EN PROCESO", clases: "text-warn" };
+      return { label: "EN PROCESO", clases: "bg-amber-950/60 border-amber-500 text-amber-400", dot: "bg-amber-400" };
     default:
-      return { label: "PENDIENTE", clases: "text-ink-dim" };
+      return { label: "PENDIENTE", clases: "bg-brand-surface border-brand-border text-gray-400", dot: "bg-gray-400" };
   }
 }
 
@@ -46,33 +46,38 @@ function CardMesa({ mesa, abierta, onToggle }: { mesa: Mesa; abierta: boolean; o
   const estado = estadoMesa(mesa);
 
   return (
-    <div className="bg-surface-3 border-2 border-outline-dim p-2 flex flex-col gap-2 rounded-md">
+    <div className="bg-brand-surface border border-brand-border p-2.5 flex flex-col gap-2 rounded-2xl">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={abierta}
         className="flex justify-between items-center cursor-pointer select-none w-full"
       >
-        <span className="text-lg font-bold text-ink flex items-center gap-2">
+        <span className="text-lg font-mono font-bold text-white flex items-center gap-2">
           {mesa.id}
           <ChevronDownIcon
-            className={`w-4 h-4 text-ink-dim transition-transform duration-100 ease-linear ${
+            className={`w-4 h-4 text-gray-400 transition-transform duration-100 ease-linear ${
               abierta ? "rotate-180" : ""
             }`}
           />
         </span>
-        <span className={`label-caps ${estado.clases}`}>{estado.label}</span>
+        <span
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-mono text-[10px] font-bold uppercase tracking-wider ${estado.clases}`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${estado.dot}`} aria-hidden />
+          {estado.label}
+        </span>
       </button>
       {abierta && (
         <div className="grid grid-cols-2 gap-1 text-[12px] pt-1">
           {grupos.map(({ tipo, paginas }) => (
-            <div key={tipo} className="p-2 bg-surface-5/60 border border-outline-dim rounded-sm flex flex-col gap-1">
-              <span className="label-caps !text-[10px] text-ink-dim">{tipo}</span>
+            <div key={tipo} className="p-2 bg-brand-black/40 border border-brand-border rounded-xl flex flex-col gap-1">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-gray-400">{tipo}</span>
               <div className="flex gap-1 flex-wrap">
                 {paginas.map((p) => {
                   const chip = chipPagina(p);
                   return (
-                    <span key={`${p.tipo}-${p.pagina}`} className={`${chip.clases} rounded-sm text-[10px]`}>
+                    <span key={`${p.tipo}-${p.pagina}`} className={`${chip.clases} rounded-full text-[10px] whitespace-nowrap`}>
                       {chip.label}
                     </span>
                   );
@@ -132,35 +137,37 @@ export function ActasView() {
     .join(", ");
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll bg-bg bg-scanline flex flex-col">
+    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll bg-brand-black flex flex-col">
       {/* Header propio de la pantalla (§8) */}
-      <header className="sticky top-0 z-40 w-full bg-bg border-b-2 border-outline-dim flex items-center justify-between px-4 h-14 shrink-0">
-        <h1 className="text-2xl font-extrabold text-ok-tint tracking-tighter uppercase">
+      <header className="sticky top-0 z-40 w-full bg-brand-black/95 backdrop-blur border-b border-brand-border/60 flex items-center justify-between px-4 h-14 shrink-0">
+        <h1 className="font-mono text-sm font-bold tracking-widest text-brand-green uppercase">
           CONTROL ACTAS E-14
         </h1>
       </header>
 
       <div className="flex-grow flex flex-col gap-6 px-4 pt-4 pb-6 max-w-md mx-auto w-full">
         {/* Puesto actual */}
-        <section className="flex justify-between items-end border-b-2 border-outline-dim pb-2">
+        <section className="flex justify-between items-end border-b border-brand-border pb-2">
           <div className="flex flex-col gap-1 w-full">
-            <span className="label-caps text-ink-dim">PUESTO ACTUAL</span>
-            <h2 className="text-2xl font-extrabold text-ok-tint tracking-tighter uppercase">
+            <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-gray-400">PUESTO ACTUAL</span>
+            <h2 className="text-xl font-bold text-white uppercase tracking-wide">
               ROMA - CONSULADO
             </h2>
             <div className="flex items-center justify-between mt-1">
-              <span className="font-data text-[12px] text-ink-dim">
+              <span className="font-mono text-xs text-gray-400">
                 ITALIA &gt; ZONA 10 &gt; PUESTO 02
               </span>
               <button
                 type="button"
                 onClick={alternarConexion}
-                className={`label-caps flex items-center gap-1 ${
-                  online ? "text-ok" : "text-warn"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-mono text-[11px] font-bold uppercase tracking-wider ${
+                  online
+                    ? "bg-brand-greendark border-brand-green/40 text-brand-green"
+                    : "bg-amber-950/60 border-amber-500 text-amber-400"
                 }`}
                 aria-pressed={!online}
               >
-                <SensorsIcon className={`w-3 h-3 ${online ? "text-ok animate-pulse-sync" : "text-warn"}`} />
+                <SensorsIcon className={`w-3 h-3 ${online ? "text-brand-green animate-pulse-sync" : "text-amber-400"}`} />
                 {online ? "EN LÍNEA" : "OFFLINE"}
               </button>
             </div>
@@ -170,22 +177,22 @@ export function ActasView() {
         {/* Alerta de mesas incompletas */}
         {incompletas.length > 0 && (
           <div
-            className="bg-crit/10 border border-crit/40 p-2.5 flex items-center justify-between gap-2 rounded-md"
+            className="bg-red-500/10 border border-red-500/40 p-2.5 flex items-center justify-between gap-2 rounded-xl"
             role="alert"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <WarnTriangleIcon className="w-[18px] h-[18px] text-crit shrink-0" />
+              <WarnTriangleIcon className="w-[18px] h-[18px] text-red-500 shrink-0" />
               <div className="flex flex-col min-w-0">
-                <span className="label-caps text-crit tracking-wider">
+                <span className="font-mono text-[11px] font-bold uppercase tracking-wider text-red-500">
                   {incompletas.length} MESAS INCOMPLETAS
                   {online ? "" : ` · ${colaOffline} EN COLA`}
                 </span>
-                <span className="font-data text-[11px] text-ink-dim truncate">
+                <span className="font-mono text-[11px] text-gray-400 truncate">
                   {detalleIncompletas}
                 </span>
               </div>
             </div>
-            <span className="label-caps !text-[11px] bg-crit/20 text-crit px-2 py-0.5 border border-crit/30 uppercase tracking-wider shrink-0">
+            <span className="font-mono text-[10px] font-bold bg-[#E52222] text-white px-2.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
               ATENCIÓN
             </span>
           </div>
@@ -196,11 +203,11 @@ export function ActasView() {
         <div className="flex flex-col gap-4">
           {mesasReales.length > 0 && (
             <div className="flex items-center gap-2 pt-1">
-              <MapPinIcon className="w-3.5 h-3.5 text-ok-tint shrink-0" />
-              <span className="label-caps !text-[10px] text-ok-tint">
+              <MapPinIcon className="w-3.5 h-3.5 text-brand-green shrink-0" />
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-brand-green">
                 MESAS CLASIFICADAS ({mesasReales.length})
               </span>
-              <span className="h-px flex-1 bg-outline-dim" />
+              <span className="h-px flex-1 bg-brand-border" />
             </div>
           )}
           {todas.map((mesa) => (
