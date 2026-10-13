@@ -37,6 +37,12 @@ export interface ClasificacionE14 {
   kit: number | null;
   nivel: NivelClasificacion;
   confianzas: { departamento: number; municipio: number; puesto: number; tipo: number };
+  /** §D2 (SPEC-e14-score-ocr): lecturas CRUDAS display-only — cabecera E-14
+   *  matcheada, MESA de ANCLA_MESA y tipo de banda. NO se validan contra
+   *  divipol, NO afectan niveles AUTO/SUGERIDA/MANUAL ni el panel §5 —
+   *  alimentan la señal de contenido del score (§D1) y el chip MESA parcial
+   *  de REVISIÓN. Opcional: las construcciones manuales (panel) no lo llevan. */
+  parciales?: { cabecera: boolean; mesa: number | null; tipo: TipoCopia | null };
 }
 
 /** Regla de dominio E-14 (§4.5): la cabecera debe decir E-14/REGISTRADURÍA.
@@ -106,7 +112,14 @@ const ANCLA_DEPARTAMENTO = /^\s*(DEPARTAMENTO|CONSULADO)\s*[:.]?\s*(\d{1,2})?\s*
 const ANCLA_PAIS = /^\s*(PA[IÍ]S|MUNICIPIO)\s*[:.]?\s*(\d{1,3})?\s*[-–—]?\s*([A-ZÁÉÍÓÚÑÜ .'-]{3,})?/im;
 const ANCLA_ZONA = /ZONA\s*[:.]?\s*(\d{1,2}|URBANA|RURAL)/im;
 const ANCLA_PUESTO = /PUESTO\s*[:.]?\s*(\d{1,2})/im;
-const ANCLA_MESA = /MESA\s*[:.Nº#]?\s*(\d{1,3})/im;
+// §3b.2 (SPEC-e14-score-ocr Rev. 2): ancla MESA tolerante a la confusión M→N
+// del OCR — con el texto REAL de la acta cortada del chip MEDIO se leyó
+// «NESA. 001» (M→N) y la mesa se perdía. // Fuente: «05 PUESTO: 02 NESA. 001»
+// (OCR real del asset intermedia viejo). La validación 1≤mesa≤countTable
+// (regla 5) NO cambia; otras confusiones NO se tocan (riesgo de falsos
+// positivos: [MN]ESA solo matchea MESA/NESA, secuencias inexistentes en
+// castellano).
+const ANCLA_MESA = /[MN]ESA\s*[:.Nº#]?\s*(\d{1,3})/im;
 const ANCLA_LUGAR = /LUGAR\s*[:.]?\s*([A-ZÁÉÍÓÚÑÜ0-9().,\-' ]{3,})/im;
 const ANCLA_VERPAG = /Ver\.?\s*:?\s*(\d{1,2})\s*Pag\.?\s*:?\s*(\d{1,2})\s*de\s*(\d{1,2})/i;
 const ANCLA_KIT = /KIT\s*(\d{1,6})/i;
@@ -170,6 +183,110 @@ function puestosDelMunicipio(base: DivipolBase, dep2: string, mun3: string): Pue
 function numeroLimpio(crudo: string): number {
   const n = parseInt(normalizarCodigo(crudo), 10);
   return Number.isFinite(n) ? n : Number.NaN;
+}
+
+// ---------- Regla 4b (§3b.1 SPEC-e14-score-ocr Rev. 2): rescate global
+// ---------- por NOMBRE del puesto ----------
+
+/** Entrada del índice global: un puesto con su RUTA completa. */
+interface PuestoGlobal {
+  dep2: string;
+  mun3: string;
+  zon: string;
+  std: string;
+  nombre: string;
+}
+
+/** Índice invertido de trigramas de los nombres de TODOS los puestos
+ *  (14.438) — se construye UNA vez (lazy) SOLO cuando la regla 4b corre
+ *  (cascada sin resolver → costo CERO en capturas resueltas, §3b.1). Un
+ *  candidato con similitud > 0 comparte ≥1 trigrama con la línea → los que
+ *  no comparten ninguno tienen sim 0 (bajo UMBRAL_SUGERIDA) y se saltan sin
+ *  costo. Cacheado por identidad de la base (cargarDivipol la cachea en
+ *  memoria; una base distinta en pruebas reconstruye). */
+interface IndicePuestos {
+  base: DivipolBase;
+  entradas: PuestoGlobal[];
+  porTrigrama: Map<string, number[]>;
+}
+let indicePuestos: IndicePuestos | null = null;
+function indicePuestosGlobal(base: DivipolBase): IndicePuestos {
+  if (indicePuestos?.base === base) return indicePuestos;
+  const entradas: PuestoGlobal[] = [];
+  const porTrigrama = new Map<string, number[]>();
+  for (const [dep2, d] of Object.entries(base)) {
+    for (const [mun3, m] of Object.entries(d.m ?? {})) {
+      for (const [zon, z] of Object.entries(m.z ?? {})) {
+        for (const [std, p] of Object.entries(z.s ?? {})) {
+          const nombre = normalizarNombre(p.n);
+          const i = entradas.length;
+          entradas.push({ dep2, mun3, zon, std, nombre });
+          for (const t of trigramas(nombre)) {
+            const bucket = porTrigrama.get(t);
+            if (bucket) bucket.push(i);
+            else porTrigrama.set(t, [i]);
+          }
+        }
+      }
+    }
+  }
+  indicePuestos = { base, entradas, porTrigrama };
+  return indicePuestos;
+}
+
+/** Gap mínimo sobre el 2º mejor puesto para aceptar el rescate (§3b.1:
+ *  «exigir gap con el 2º» — con 2+ candidatos cercanos queda null/MANUAL,
+ *  mismo patrón de la regla 3 de municipios). Evidencia de calibración: el
+ *  mejor match único del caso medio viejo (EL CAIRO - CONSULADO, 0.92) deja
+ *  a los LUNES/MARTES… EL CAIRO - CONSULADO abajo por el prefijo del día. */
+const GAP_RESCATE = 0.05;
+
+/** Rescate global por NOMBRE (§3b.1): escanea las líneas del OCR
+ *  (normalizadas, ≥4 chars) contra TODOS los puestos de la base con
+ *  `similitud` (trigramas ya existentes). Devuelve el mejor puesto con su
+ *  ruta y sim SOLO si: mejor ≥ UMBRAL_SUGERIDA y gap ≥ 0.05 sobre el 2º
+ *  (puesto DISTINTO; el mismo puesto evaluado con varias líneas cuenta una
+ *  vez — máx). Con 2+ cercanos o nada reconocible → null (MANUAL, lista en
+ *  panel §5). */
+function rescatarRutaPorNombreGlobal(
+  texto: string,
+  base: DivipolBase,
+): (PuestoGlobal & { sim: number }) | null {
+  const lineas = (texto ?? "")
+    .split(/\n+/)
+    .map((l) => normalizarNombre(l))
+    .filter((l) => l.length >= 4);
+  if (lineas.length === 0) return null;
+  const indice = indicePuestosGlobal(base);
+  // Mejor sim por puesto (índice) a través de TODAS las líneas.
+  const mejores = new Map<number, number>();
+  for (const linea of lineas) {
+    const candidatos = new Set<number>();
+    for (const t of trigramas(linea)) {
+      const bucket = indice.porTrigrama.get(t);
+      if (bucket) for (const i of bucket) candidatos.add(i);
+    }
+    for (const i of candidatos) {
+      const sim = similitud(linea, indice.entradas[i].nombre);
+      const prev = mejores.get(i) ?? -1;
+      if (sim > prev) mejores.set(i, sim);
+    }
+  }
+  let mejorIdx = -1;
+  let mejorSim = 0;
+  let segundaSim = 0;
+  for (const [i, sim] of mejores) {
+    if (sim > mejorSim) {
+      segundaSim = mejorSim;
+      mejorSim = sim;
+      mejorIdx = i;
+    } else if (sim > segundaSim) {
+      segundaSim = sim;
+    }
+  }
+  if (mejorIdx < 0 || mejorSim < UMBRAL_SUGERIDA) return null;
+  if (mejorSim - segundaSim < GAP_RESCATE) return null;
+  return { ...indice.entradas[mejorIdx], sim: mejorSim };
 }
 
 // ---------- Clasificación (§3.4) ----------
@@ -402,6 +519,52 @@ export function clasificarCabecera(ocrTexto: string, base: DivipolBase): Clasifi
     }
   }
 
+  // ---- Regla 4b (§3b.1 SPEC-e14-score-ocr Rev. 2): RESCATE GLOBAL POR
+  //      NOMBRE — la cascada NO resolvió la ruta (p. ej. cabecera recortada:
+  //      «LADO: 88 - CONSULADOS» no matchea ANCLA_DEPARTAMENTO pero
+  //      «El Cairo - Consulado» sigue legible en el texto). Se escanea cada
+  //      línea del OCR contra TODOS los puestos de la base (índice invertido
+  //      de trigramas); con mejor match ≥ UMBRAL_SUGERIDA y gap ≥ 0.05 sobre
+  //      el 2º se deduce la RUTA COMPLETA: dep/mun/zon de la ruta del puesto
+  //      (conf 0.9 «deducida») y puesto con conf=sim (resuelto si ≥
+  //      UMBRAL_AUTO). Con 2+ candidatos cercanos → queda null (MANUAL, lista
+  //      en panel §5 — mismo patrón de la regla 3 de municipios). SOLO corre
+  //      cuando la cascada no resolvió → costo CERO en capturas buenas.
+  //      PROHIBIDO resolver AUTO por nombre solo: el nivel sigue exigiendo
+  //      ruta + mesa válida + tipo leído (abajo, intacto). ----
+  if (!(depResuelto && munResuelto && puestoResuelto)) {
+    const rescate = rescatarRutaPorNombreGlobal(texto, base);
+    // Guard de consistencia: el rescate JAMÁS contradice lo que la cascada
+    // resolvió por códigos (conf 1) — solo RELLENA huecos (mismo municipio,
+    // otra ruta → se descarta el rescate).
+    if (
+      rescate &&
+      (departamento === null || departamento.codigo === rescate.dep2) &&
+      (municipio === null || municipio.codigo === rescate.mun3) &&
+      (zona === null || zona.codigo === rescate.zon)
+    ) {
+      if (!departamento) {
+        departamento = { codigo: rescate.dep2, nombre: base[rescate.dep2]?.n ?? "" };
+        confDep = 0.9; // «deducida»: ruta del puesto, no lectura del acta
+        depResuelto = true;
+      }
+      if (!municipio) {
+        municipio = {
+          codigo: rescate.mun3,
+          nombre: base[rescate.dep2]?.m?.[rescate.mun3]?.n ?? "",
+        };
+        confMun = 0.9; // «deducida»
+        munResuelto = true;
+      }
+      zona ??= { codigo: rescate.zon };
+      if (!puesto) {
+        puesto = { codigo: rescate.std, nombre: rescate.nombre };
+        confPuesto = rescate.sim;
+        puestoResuelto = rescate.sim >= UMBRAL_AUTO;
+      }
+    }
+  }
+
   // ---- MESA (regla 5: validar 1 ≤ mesa ≤ countTable; si falla → sugerida
   //      con aviso, NUNCA descartar el número leído). ----
   const rutaCompleta = Boolean(departamento && municipio && zona && puesto);
@@ -446,6 +609,14 @@ export function clasificarCabecera(ocrTexto: string, base: DivipolBase): Clasifi
     pagina,
     kit,
     nivel,
+    // §D2 (SPEC-e14-score-ocr): paquete display-only — lecturas crudas ANTES
+    // de la validación divipol (la jerarquía puede no resolver y aun así la
+    // MESA/tipo leídos son información real del acta para el chip parcial).
+    parciales: {
+      cabecera: PATRON_CABECERA.test(texto),
+      mesa: Number.isFinite(mesaLeida) ? mesaLeida : null,
+      tipo,
+    },
     confianzas: {
       departamento: Math.round(confDep * 100) / 100,
       municipio: Math.round(confMun * 100) / 100,
@@ -491,9 +662,10 @@ export function nombreExportacion(c: ClasificacionE14): string | null {
 // ---------- Título y ubicación reales (SPEC-titulo-ubicacion §1) ----------
 
 /**
- * Deriva el TÍTULO y la UBICACIÓN del acta desde una clasificación RESUELTA
- * (nivel AUTO — del gate o del panel de corrección). Devuelve null cuando la
- * clasificación no está en AUTO o le falta la ruta — el llamador conserva el
+ * Deriva el TÍTULO y la UBICACIÓN del acta desde una clasificación con RUTA
+ * COMPLETA resuelta (nivel AUTO — del gate o del panel de corrección — o
+ * SUGERIDA con ruta completa, §3b.3 Rev. 2: display-only). Devuelve null
+ * cuando falta la ruta o el nivel es MANUAL — el llamador conserva el
  * seed (§0: sin datos reales no se inventa nada).
  *
  * Convención de ActaUbicacion (igual que ACTA_MOCK): departamento/municipio
@@ -507,7 +679,23 @@ export function tituloYUbicacionDe(
   titulo: string;
   ubicacion: { departamento: string; municipio: string; zona: string; puesto: string; mesa: string };
 } | null {
-  if (!c || c.nivel !== "AUTO" || !c.puesto || c.mesa === null) return null;
+  // §3b.3 (SPEC-e14-score-ocr Rev. 2): título/ubicación REALES también con
+  // nivel SUGERIDA cuando la RUTA COMPLETA está resuelta (display-only — el
+  // banner y los chips muestran «EL CAIRO - CONSULADO» y la ruta deducida;
+  // el tipo puede seguir pendiente). El AUTO-ENVÍO sigue exigiendo AUTO+gate
+  // (sin cambio en envío/transmisión). Sin ruta completa o nivel MANUAL →
+  // null: el llamador conserva el seed (§0: sin datos reales no se inventa).
+  if (
+    !c ||
+    (c.nivel !== "AUTO" && c.nivel !== "SUGERIDA") ||
+    !c.departamento ||
+    !c.municipio ||
+    !c.zona ||
+    !c.puesto ||
+    c.mesa === null
+  ) {
+    return null;
+  }
   return {
     titulo: (c.puesto.nombre || "PUESTO SIN NOMBRE").toUpperCase(),
     ubicacion: {

@@ -29,8 +29,10 @@ export type Vista = "escanear" | "analizando" | "revision" | "actas" | "resumen"
 export type BandaSim = "optima" | "medio" | "baja";
 
 /** §D3: score INYECTADO por banda (el del bracket del chip). El desenlace
- *  real lo decide el gate (§D4): 8.2 + AUTO → piso identificada 10.0 ÓPTIMA
- *  enviada · 7.0 sin AUTO → EN_REVISION_HUMANA repetir-primero · 4.3 →
+ *  real lo decide el gate (§D4). §D8.5 (SPEC-e14-score-ocr Rev. 3): la b/n
+ *  del dueño as-is = medio 7.0 · la borrosa original as-is = bajo 4.3 ·
+ *  8.2 + AUTO → piso 10.0 (ÓPTIMA enviada) · 7.0 con AUTO → ADVERTENCIA
+ *  (el chip manda — el piso solo re-aplica con score ≥ 8) · 4.3 →
  *  RECHAZADA. Los mismos números viven pintados en NIVELES_CALIDAD. */
 export const SCORE_SIMULADO: Record<BandaSim, number> = {
   optima: 8.2,
@@ -493,13 +495,22 @@ export const useE14Store = create<E14Store>((set, get) => {
         });
         // §F-6 (SPEC-camara-funcional): toast rechazo-aware — INCOMPLETA
         // explica QUÉ hacer (aléjate y repite); el resto conserva el score.
+        // §D3 (SPEC-e14-score-ocr): variante BAJO — sin señal de contenido
+        // del acta, el desenlace del dueño es «score bajo → repetir foto».
         const esIncompleta = actaActual.rechazo?.tipo === "INCOMPLETA";
+        const esBajo = actaActual.rechazo?.tipo === "BAJO";
         notificar(
           "crit",
-          esIncompleta ? "ACTA INCOMPLETA" : "ACTA NO RECONOCIDA",
-          esIncompleta
-            ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
-            : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
+          esBajo
+            ? "SCORE BAJO"
+            : esIncompleta
+              ? "ACTA INCOMPLETA"
+              : "ACTA NO RECONOCIDA",
+          esBajo
+            ? "No se reconoce información del acta. Repita la foto."
+            : esIncompleta
+              ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
+              : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
         );
       }
       set({ vista: "revision" });

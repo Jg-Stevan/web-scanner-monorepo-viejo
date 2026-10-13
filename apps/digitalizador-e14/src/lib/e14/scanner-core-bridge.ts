@@ -53,12 +53,17 @@ import {
   tituloYUbicacionDe,
   type ClasificacionE14,
 } from "./clasificador";
+import { procesadaVaciaDataUrl } from "./image-utils";
 // §1 (SPEC-ux-real-bn-editor): acta E-14 real del dueño (Galaxy A56 5G) —
 // import estático: Next resuelve el basePath /web-scanner del deploy estático.
 import actaSimUrl from "@/assets/acta-e14-real.jpg";
 // §G-1 (SPEC-camara-funcional): las 3 actas del dueño para la SIMULACIÓN de
-// scores — [0] óptima (acta-e14-real) · [1] intermedia (nítida pero cortada
-// abajo, 1770×2360) · [2] baja (borrosa, rotada, cortada, 1902×1426).
+// scores — [0] óptima (acta-e14-real, 2287×1715, pipeline COMPLETO con
+// detect+warp+bw) · [1] intermedia (la b/n del dueño 980×2112, §D6 Rev. 3:
+// acta El Cairo completa en el encuadre, cortada abajo por el borde de la
+// FOTO, as-is) · [2] baja (la borrosa del dueño 1902×1426, §D7 Rev. 3:
+// as-is, sin filtro ni recorte automático). Los flags viajan en la tabla
+// ACTAS_SIM de abajo (§D8).
 import actaSimIntermediaUrl from "@/assets/acta-sim-intermedia.jpg";
 import actaSimBajaUrl from "@/assets/acta-sim-baja.jpg";
 import type { Acta, ActaFirma, ActaStatus, ProgresoAnalisis } from "./types";
@@ -73,6 +78,30 @@ const DETALLE_GENERICO = "SCORE INSUFICIENTE PARA TRANSMISIÓN";
 // §F-5 (SPEC-camara-funcional): detalle del rechazo por acta INCOMPLETA —
 // la captura corta el papel aunque la cabecera sea legible.
 const DETALLE_INCOMPLETA = "EL ACTA ESTÁ CORTADA EN EL ENCUADRE — ALÉJATE UN POCO Y CAPTURA EL ACTA COMPLETA";
+// §D1 (SPEC-e14-score-ocr): modelo del score por RECONOCIMIENTO — techo de
+// una foto SIN SEÑAL de contenido del acta (bolsa de papas, pared, borrosa
+// total): por debajo de RECHAZADA (6.5) → «score bajo» garantizado. El
+// detalle es el rechazo determinista §D3 (repetir, NUNCA RH en 1ª ronda).
+const TECHO_SIN_SENAL = 4.9;
+const DETALLE_BAJO = "NO SE RECONOCE INFORMACIÓN DEL ACTA — REPITA LA FOTO";
+
+/**
+ * §D1 (SPEC-e14-score-ocr): SEÑAL DE CONTENIDO del acta — se calcula DESPUÉS
+ * del OCR + clasificación. El score del dueño mide el RECONOCIMIENTO («el
+ * score se basa en el reconocimiento del acta por ocr y que el acta esté
+ * completa»), no solo las métricas fotográficas. Señales: cabecera E-14 o
+ * alguna lectura cruda del clasificador (MESA/tipo). `ocrTextIsValid` NO es
+ * señal (la bolsa de papas lo pasa con texto ficticio del empaque).
+ */
+function senalDeContenido(texto: string, clasificacion: ClasificacionE14): boolean {
+  const p = clasificacion.parciales;
+  return (
+    PATRON_CABECERA.test(texto) ||
+    p?.cabecera === true ||
+    (p?.mesa != null && Number.isFinite(p.mesa)) ||
+    p?.tipo != null
+  );
+}
 
 /**
  * §F-1 (SPEC-camara-funcional) — señal de ACTA COMPLETA en el encuadre.
@@ -116,6 +145,18 @@ function esActaCompleta(quad: Quad): boolean {
 // PATRON_CABECERA vive ahora en ./clasificador (§4.5: se mantiene como
 // constante para traza/log — ya NO decide sola el estado del gate).
 
+/** §D8.3 (SPEC-e14-score-ocr Rev. 3): quad IDENTIDAD — «el recorte es la
+ *  foto entera». Con sinRecorte la detección de bordes NO corre y el quad
+ *  (fracciones 0-1 de la foto) cubre TODO el encuadre: se imprime en el log
+ *  como hoy (traza de auditoría) y alimenta el editor (recorte manual real
+ *  sobre la foto completa) y revelar/filtros (mismo quad). */
+const QUAD_IDENTITY: Quad = [
+  { x: 0, y: 0 },
+  { x: 1, y: 0 },
+  { x: 1, y: 1 },
+  { x: 0, y: 1 },
+];
+
 /**
  * Grab del <video> a RESOLUCIÓN DEL STREAM (§5 CAMARA): canvas de
  * videoWidth×videoHeight → JPEG 0.92. Síncrono (~10 ms) — se llama ANTES de
@@ -135,8 +176,11 @@ function capturarFrame(video: HTMLVideoElement): string | null {
   }
 }
 
-/** Entrada del pipeline: File (ARCHIVO o foto CÁMARA) o dataUrl ya crudo. */
-type EntradaPipeline = { archivo: File } | { dataUrl: string };
+/** Entrada del pipeline: File (ARCHIVO o foto CÁMARA) o dataUrl ya crudo.
+ *  §D8.2 (SPEC-e14-score-ocr Rev. 3): el flag «sin recorte automático» viaja
+ *  con el ASSET de SIMULACIÓN dentro de la entrada (parámetro interno
+ *  privado — OpcionesEscaneo queda INTACTO, nada público nuevo). */
+type EntradaPipeline = { archivo: File; sinRecorte?: boolean } | { dataUrl: string };
 
 /**
  * SIMULACIÓN = pipeline real sobre el acta E-14 incluida (D35).
@@ -145,26 +189,45 @@ type EntradaPipeline = { archivo: File } | { dataUrl: string };
  * actual y avanza el contador de módulo. Mismo camino que IMPORTAR: File →
  * fileToCaptureDataUrl (F-IMPORT: EXIF/12MP). Caché POR ÍNDICE a nivel de
  * módulo para no re-descargar un acta ya servida en el ciclo.
+ * §D8.1 (SPEC-e14-score-ocr Rev. 3): flag «sin recorte» por ENTRADA — el
+ * flag viaja con el ASSET, no con el chip (el ciclo rotativo §G lo hereda
+ * automáticamente): [0] óptima = pipeline completo (hoy) · [1] b/n as-is ·
+ * [2] borrosa as-is.
  */
-const ACTAS_SIM = [actaSimUrl, actaSimIntermediaUrl, actaSimBajaUrl];
-const NOMBRES_ACTAS_SIM = ["acta-e14-real.jpg", "acta-sim-intermedia.jpg", "acta-sim-baja.jpg"];
+interface ActaSim {
+  src: typeof actaSimUrl;
+  nombre: string;
+  sinRecorte: boolean;
+}
+const ACTAS_SIM: readonly ActaSim[] = [
+  { src: actaSimUrl, nombre: "acta-e14-real.jpg", sinRecorte: false },
+  { src: actaSimIntermediaUrl, nombre: "acta-sim-intermedia.jpg", sinRecorte: true },
+  { src: actaSimBajaUrl, nombre: "acta-sim-baja.jpg", sinRecorte: true },
+];
 let actaSimIdx = 0;
-const actasSimCache: File[] = [];
-async function fetchActaSimulada(): Promise<File> {
+interface EntradaSim {
+  archivo: File;
+  sinRecorte: boolean;
+}
+const actasSimCache: EntradaSim[] = [];
+async function fetchActaSimulada(): Promise<EntradaSim> {
   const idx = actaSimIdx;
   actaSimIdx = (actaSimIdx + 1) % ACTAS_SIM.length;
   const cache = actasSimCache[idx];
   if (cache) return cache;
-  // ACTAS_SIM[idx].src es StaticImageData — .src ya resuelve el basePath
+  // ACTAS_SIM[idx].src es StaticImageData — .src.src ya resuelve el basePath
   // /web-scanner del deploy estático (en dev: /_next/static/media/...).
-  const res = await fetch(ACTAS_SIM[idx].src);
+  const res = await fetch(ACTAS_SIM[idx].src.src);
   if (!res.ok) throw new Error("SIMULACIÓN: no se pudo cargar la imagen incluida");
   // File con nombre real del asset (.jpg — evita el camino HEIC).
-  const file = new File([await res.blob()], NOMBRES_ACTAS_SIM[idx], {
-    type: "image/jpeg",
-  });
-  actasSimCache[idx] = file;
-  return file;
+  const entrada: EntradaSim = {
+    archivo: new File([await res.blob()], ACTAS_SIM[idx].nombre, {
+      type: "image/jpeg",
+    }),
+    sinRecorte: ACTAS_SIM[idx].sinRecorte,
+  };
+  actasSimCache[idx] = entrada;
+  return entrada;
 }
 
 /**
@@ -173,24 +236,28 @@ async function fetchActaSimulada(): Promise<File> {
  * borrosa = bajo): 8.2 → acta-e14-real.jpg · 7.0 → acta-sim-intermedia.jpg ·
  * 4.3 → acta-sim-baja.jpg. Reutiliza la MISMA caché por índice del ciclo
  * rotativo (§G del PR #33, que queda INTACTO — esta vía solo cambia QUÉ
- * índice se sirve: el del chip, nunca el contador rotativo).
+ * índice se sirve: el del chip, nunca el contador rotativo). El flag
+ * sinRecorte del asset viaja con la entrada (§D8.1).
  */
 function indiceActaPorScore(score: number): number {
   if (score >= 8) return 0; // ÓPTIMA [8.2] → la acta completa, nítida
-  if (score >= 6.5) return 1; // MEDIO [7.0] → la acta cortada abajo, nítida
-  return 2; // BAJA [4.3] → la acta borrosa, rotada, cortada
+  if (score >= 6.5) return 1; // MEDIO [7.0] → la b/n del dueño, as-is (Rev. 3)
+  return 2; // BAJA [4.3] → la borrosa del dueño, as-is (Rev. 3)
 }
-async function fetchActaSimPorScore(score: number): Promise<File> {
+async function fetchActaSimPorScore(score: number): Promise<EntradaSim> {
   const idx = indiceActaPorScore(score);
   const cache = actasSimCache[idx];
   if (cache) return cache;
-  const res = await fetch(ACTAS_SIM[idx].src);
+  const res = await fetch(ACTAS_SIM[idx].src.src);
   if (!res.ok) throw new Error("SIMULACIÓN: no se pudo cargar la imagen incluida");
-  const file = new File([await res.blob()], NOMBRES_ACTAS_SIM[idx], {
-    type: "image/jpeg",
-  });
-  actasSimCache[idx] = file;
-  return file;
+  const entrada: EntradaSim = {
+    archivo: new File([await res.blob()], ACTAS_SIM[idx].nombre, {
+      type: "image/jpeg",
+    }),
+    sinRecorte: ACTAS_SIM[idx].sinRecorte,
+  };
+  actasSimCache[idx] = entrada;
+  return entrada;
 }
 
 function dosDigitos(n: number): string {
@@ -217,10 +284,12 @@ function contrasteEfectivoDe(q: PageQuality, ocrLegible: boolean): number {
 
 /** Mapeo §4.1: PageQuality del core → score 0-10 (1 decimal) con techos por
  *  level. §X (SPEC-score-legible): recibe señales de legibilidad — OCR válido
- *  y clasificación AUTO (identificación completa). */
+ *  y clasificación AUTO (identificación completa). §D1 (SPEC-e14-score-ocr):
+ *  `conSenal` extiende el paquete — SIN señal de contenido del acta el score
+ *  no describe una digitalización → techo 4.9 («score bajo»). */
 function scoreDeCalidad(
   q: PageQuality,
-  senales?: { ocrLegible: boolean; identificada: boolean },
+  senales?: { ocrLegible: boolean; identificada: boolean; conSenal?: boolean },
 ): number {
   const contrasteEf = contrasteEfectivoDe(q, senales?.ocrLegible ?? false);
   const bruto = (q.sharpness * 0.4 + q.brightness * 0.3 + contrasteEf * 0.3) / 10;
@@ -236,6 +305,10 @@ function scoreDeCalidad(
   }
   if (level === "fair") score10 = Math.min(score10, 7.9); // techo ADVERTENCIA
   if (level === "poor") score10 = Math.min(score10, 6.4); // techo RECHAZADA
+  // §D1 (SPEC-e14-score-ocr): techo SIN SEÑAL de contenido — ANTES del piso
+  // de identificada (no colisiona: AUTO exige tipo leído → implica señal).
+  // Fórmulas/techos/piso existentes BYTE A BYTE intactos (§7 prohibido).
+  if (senales && !senales.conSenal) score10 = Math.min(score10, TECHO_SIN_SENAL);
   // §X.2 piso por IDENTIFICACIÓN — ÚLTIMO (manda sobre los techos): una
   // clasificación AUTO (jerarquía divipol validada + mesa ≤ countTable + tipo)
   // es evidencia directa de legibilidad → el acta identificada nunca queda en
@@ -322,13 +395,13 @@ export class RealCoreBridge implements E14Bridge {
       // Mismo camino que IMPORTAR: File → fileToCaptureDataUrl (F-IMPORT: EXIF/12MP).
       // §D3 (SPEC-e14-simulacion-scores): con `simular` el asset es el FIJO de
       // la banda del chip (determinista) — el ciclo rotativo §G queda intacto
-      // para el disparo normal de la fuente.
-      entrada = {
-        archivo:
-          opciones.simular && opciones.scoreSimulado != null
-            ? await fetchActaSimPorScore(opciones.scoreSimulado)
-            : await fetchActaSimulada(),
-      };
+      // para el disparo normal de la fuente. §D8.2 (Rev. 3): el flag
+      // sinRecorte del asset viaja con la entrada (parámetro interno privado).
+      const sim =
+        opciones.simular && opciones.scoreSimulado != null
+          ? await fetchActaSimPorScore(opciones.scoreSimulado)
+          : await fetchActaSimulada();
+      entrada = { archivo: sim.archivo, sinRecorte: sim.sinRecorte };
     } else {
       throw new Error("SIN IMAGEN PARA ANALIZAR (fuente ARCHIVO)");
     }
@@ -396,24 +469,33 @@ export class RealCoreBridge implements E14Bridge {
     parcial.fotoOriginal = fotoOriginal;
 
     // 2) Detección de bordes (worker OpenCV → fallback Sobel del core).
+    //    §D8.3 (SPEC-e14-score-ocr Rev. 3): con sinRecorte la detección NO
+    //    corre — «el recorte es la foto entera»: QUAD_IDENTITY (se imprime
+    //    en el log como hoy, traza de auditoría). SOLO alcanzable desde la
+    //    rama SIMULACIÓN (ARCHIVO/CÁMARA corren detect byte a byte, AC15).
+    const sinRecorte = "archivo" in entrada && entrada.sinRecorte === true;
     let quad: Quad;
     const tDetect = performance.now();
-    try {
-      quad = await conRampa(
-        detectDocumentEdges(fotoOriginal),
-        900,
-        (f) => ({ etapa: "DETECTANDO", progreso: 0.5 + f * 0.4 }),
-        emitir,
-      );
-    } catch {
-      // El core SIEMPRE devuelve Quad; una EXCEPCIÓN aquí = imagen no
-      // detectable → RECHAZADA ILEGIBLE inmediata (§5 paso 1, spec §7.5).
-      // El piso escénico D16 de ANALIZANDO completa la animación solo.
-      return this.construirActa(opciones, parcial, {
-        score: 0,
-        status: "RECHAZADA",
-        rechazo: { tipo: "ILEGIBLE", detalle: DETALLE_ILEGIBLE },
-      });
+    if (sinRecorte) {
+      quad = QUAD_IDENTITY;
+    } else {
+      try {
+        quad = await conRampa(
+          detectDocumentEdges(fotoOriginal),
+          900,
+          (f) => ({ etapa: "DETECTANDO", progreso: 0.5 + f * 0.4 }),
+          emitir,
+        );
+      } catch {
+        // El core SIEMPRE devuelve Quad; una EXCEPCIÓN aquí = imagen no
+        // detectable → RECHAZADA ILEGIBLE inmediata (§5 paso 1, spec §7.5).
+        // El piso escénico D16 de ANALIZANDO completa la animación solo.
+        return this.construirActa(opciones, parcial, {
+          score: 0,
+          status: "RECHAZADA",
+          rechazo: { tipo: "ILEGIBLE", detalle: DETALLE_ILEGIBLE },
+        });
+      }
     }
     ms.detect = performance.now() - tDetect;
     emitir({ etapa: "DETECTANDO", progreso: 1 });
@@ -431,24 +513,51 @@ export class RealCoreBridge implements E14Bridge {
     const completa = opciones.simular ? true : esActaCompleta(quad);
 
     // 3) Recorte + realce (warp real INTER_CUBIC + filtro default "bw").
+    //    §D8.3 (SPEC-e14-score-ocr Rev. 3): con sinRecorte se OMITE
+    //    processImage — fotoProcesada = fotoOriginal (sin warp, sin filtro
+    //    "bw", sin realce: la b/n del dueño YA trae su filtro · la borrosa
+    //    queda original), motor "canvas" (solo traza) y el acta nace con
+    //    filtro "original" (veracidad en el editor — al elegir B/N aplica
+    //    sobre la foto completa). Los ramps RECORTANDO/REALZANDO se
+    //    CONSERVAN (misma animación de ANALIZANDO — la etapa resuelve al
+    //    instante). El editor (recortar/cambiarFiltro) sigue operando normal
+    //    con quadDetectado = identidad.
     emitir({ etapa: "RECORTANDO", progreso: 0.2 });
     const tProceso = performance.now();
-    const resultado = await conRampa(
-      // Fuente: apps/scanner-lab/src/components/scanner/CameraView.tsx L602-604
-      // (captura arranca en B/N adaptativo) + types.ts L50 (default del
-      // producto) — D36: e14 no tiene ajustes → el default fijo es "bw".
-      processImage(fotoOriginal, quad, "bw"),
-      1400,
-      // RECORTANDO .2→.6 (warp) → REALZANDO .4→1 (enhance), interpolado.
-      (f) =>
-        f < 0.55
-          ? { etapa: "RECORTANDO", progreso: 0.2 + (f / 0.55) * 0.4 }
-          : { etapa: "REALZANDO", progreso: 0.4 + ((f - 0.55) / 0.45) * 0.6 },
-      emitir,
-    );
-    ms.proceso = performance.now() - tProceso;
-    emitir({ etapa: "REALZANDO", progreso: 1 });
-    const fotoProcesada = resultado.processed;
+    let fotoProcesada: string;
+    let filtroActa: PageFilter;
+    let motor: "worker" | "canvas";
+    if (sinRecorte) {
+      fotoProcesada = fotoOriginal;
+      filtroActa = "original";
+      motor = "canvas";
+      emitir({ etapa: "REALZANDO", progreso: 1 });
+    } else {
+      const resultado = await conRampa(
+        // Fuente: apps/scanner-lab/src/components/scanner/CameraView.tsx L602-604
+        // (captura arranca en B/N adaptativo) + types.ts L50 (default del
+        // producto) — D36: e14 no tiene ajustes → el default fijo es "bw".
+        processImage(fotoOriginal, quad, "bw"),
+        1400,
+        // RECORTANDO .2→.6 (warp) → REALZANDO .4→1 (enhance), interpolado.
+        (f) =>
+          f < 0.55
+            ? { etapa: "RECORTANDO", progreso: 0.2 + (f / 0.55) * 0.4 }
+            : { etapa: "REALZANDO", progreso: 0.4 + ((f - 0.55) / 0.45) * 0.6 },
+        emitir,
+      );
+      ms.proceso = performance.now() - tProceso;
+      emitir({ etapa: "REALZANDO", progreso: 1 });
+      fotoProcesada = resultado.processed;
+      filtroActa = "bw";
+      motor = resultado.precision?.engine ?? "canvas";
+    }
+    // §D4 (SPEC-e14-score-ocr): visor nunca vacío — tinta de la PROCESADA
+    // (muestreo 64×64): un warp sin tinta (quad degenerado sobre superficie
+    // lisa → blanco puro del B/N adaptativo) marca el acta para que REVISIÓN
+    // muestre la ORIGINAL con su nota. Con tinta (aunque poca, p. ej. la
+    // borrosa B/N) se muestra la procesada como hoy — sin regresión.
+    const procesadaVacia = await procesadaVaciaDataUrl(fotoProcesada);
 
     // 4) Calidad de la página (Laplaciano + contraste + brillo sobre el crudo).
     emitir({ etapa: "CALIDAD", progreso: 0 });
@@ -466,7 +575,7 @@ export class RealCoreBridge implements E14Bridge {
     emitir({ etapa: "OCR", progreso: 1 });
     ms.total = performance.now() - inicio;
 
-    const motor = resultado.precision?.engine ?? "canvas";
+    // (motor/filtroActa calculados en el paso 3 — §D8.3: as-is → "canvas"/"original")
 
     // 6) Mapeo §4 → status/score/rechazo + clasificación de cabecera
     //    (SPEC-cabecera-clasificacion §4: RECHAZADA solo por CALIDAD;
@@ -476,19 +585,29 @@ export class RealCoreBridge implements E14Bridge {
     //    identificación manda sobre las métricas globales del crudo.
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
+    // §D1 (SPEC-e14-score-ocr): señal de CONTENIDO del acta — alimenta el
+    // score (techo 4.9 sin señal) y el desenlace §D3 (rechazo BAJO).
+    const senalActa = senalDeContenido(texto, clasificacion);
     let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
+      conSenal: senalActa,
     });
     // §D3 (SPEC-e14-simulacion-scores): inyección determinista del chip —
     // reemplaza el calculado DESPUÉS de scoreDeCalidad y ANTES del gate. El
-    // piso de identificada §X.3 RE-APLICA cuando el chip reemplazó el score
-    // (la óptima sí se identifica: 8.2 + AUTO → 10.0 — AC2); sin AUTO el
-    // score inyectado llega limpio al gate (7.0 → EN_REVISION_HUMANA ·
-    // 4.3 → RECHAZADA, §D4). Nada se fuerza a mano: `evaluarGate` decide.
+    // piso de identificada §X.3 RE-APLICA SOLO en la banda óptima (§D6.3
+    // SPEC-e14-score-ocr Rev. 3: `scoreSimulado >= 8` — la foto b/n del MEDIO
+    // clasifica AUTO real y sin esta condición el piso la subiría a 10.0
+    // ÓPTIMA y la banda medio moriría; el chip manda: 7.0 → ADVERTENCIA).
+    // La óptima sí se identifica: 8.2 + AUTO → 10.0 — AC2/AC13; sin AUTO el
+    // score inyectado llega limpio al gate (7.0 → ADVERTENCIA · 4.3 →
+    // RECHAZADA, §D4). Capturas REALES: piso INTACTO (la guarda vive SOLO
+    // dentro de este if simular). Nada se fuerza a mano: `evaluarGate` decide.
     if (opciones.simular && opciones.scoreSimulado != null) {
       score = opciones.scoreSimulado;
-      if (clasificacion.nivel === "AUTO") score = Math.max(score, PISO_IDENTIFICADA);
+      if (clasificacion.nivel === "AUTO" && opciones.scoreSimulado >= 8) {
+        score = Math.max(score, PISO_IDENTIFICADA);
+      }
     }
     // §F-2 (SPEC-camara-funcional): acta INCOMPLETA → resolución por la vía
     // de rechazo SIN tocar evaluarGate (el piso de identificada solo
@@ -510,8 +629,20 @@ export class RealCoreBridge implements E14Bridge {
         };
     if (!completa) score = Math.min(score, 6.4);
 
+    // §D3 (SPEC-e14-score-ocr): desenlace «SCORE BAJO» determinista — sin
+    // señal de contenido, el rechazo se sustituye por BAJO SEA CUAL SEA el
+    // status (el status lo sigue decidiendo el gate/los intentos: al agotar,
+    // contingencia C4 con su rechazo BAJO real). Con señal, nada cambia
+    // (INCOMPLETA/ILEGIBLE/GENERICO como hoy). Mismo patrón que INCOMPLETA:
+    // FUERA de evaluarGate (§7 prohibido tocarlo).
+    const rechazoFinal: Acta["rechazo"] = senalActa
+      ? gate.rechazo
+      : { tipo: "BAJO", detalle: DETALLE_BAJO };
+
     const evidenciaSim =
       opciones.simular && opciones.scoreSimulado != null ? ` sim=${opciones.scoreSimulado}` : "";
+    // §D8.3: traza de auditoría del as-is (solo cuando sinRecorte).
+    const evidenciaAsis = sinRecorte ? " recorte=as-is" : "";
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
         `total=${Math.round(ms.total)}ms ` +
@@ -519,8 +650,9 @@ export class RealCoreBridge implements E14Bridge {
         `proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `senal=${senalActa} vacia=${procesadaVacia}${evidenciaAsis} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
-        `score=${score} filtro=${"bw"} clasif={${fmtClasif(gate.clasificacion)}} ` +
+        `score=${score} filtro=${filtroActa} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
         `contrast:${calidad.contrast} contEff:${contrasteEfectivoDe(calidad, ocrLegible)} ` +
         `level:${calidad.level}})${evidenciaSim}`,
@@ -528,13 +660,17 @@ export class RealCoreBridge implements E14Bridge {
 
     return this.construirActa(opciones, parcial, {
       fotoProcesada,
+      procesadaVacia,
       quadDetectado: quad,
       calidad,
       ocrTexto: texto,
       motor,
+      // §D8.3 (SPEC-e14-score-ocr Rev. 3): as-is nace "original" (veracidad
+      // en el editor — el acta NO pasó por filtro); pipeline normal "bw".
+      filtro: filtroActa,
       score,
       status: gate.status,
-      rechazo: gate.rechazo,
+      rechazo: rechazoFinal,
       clasificacion: gate.clasificacion,
     });
   }
@@ -625,6 +761,9 @@ export class RealCoreBridge implements E14Bridge {
     ms.proceso = performance.now() - tProceso;
     emitir({ etapa: "REALZANDO", progreso: 1 });
     const fotoProcesada = resultado.processed;
+    // §D4 (SPEC-e14-score-ocr): tinta de la procesada re-recortada — mismo
+    // criterio del pipeline (un crop sobre zona sin tinta → ORIGINAL).
+    const procesadaVacia = await procesadaVaciaDataUrl(fotoProcesada);
 
     // 2) Calidad de la página (sobre el crudo — misma regla §5 paso 4).
     emitir({ etapa: "CALIDAD", progreso: 0 });
@@ -656,9 +795,13 @@ export class RealCoreBridge implements E14Bridge {
     const completa = esActaCompleta(quad);
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
+    // §D1 (SPEC-e14-score-ocr): señal de contenido — mismo criterio §4.4
+    // (helper único, AMBOS pipelines con el MISMO criterio).
+    const senalActa = senalDeContenido(texto, clasificacion);
     let score = scoreDeCalidad(calidad, {
       ocrLegible,
       identificada: clasificacion.nivel === "AUTO",
+      conSenal: senalActa,
     });
     const gate: ResultadoGate = completa
       ? this.evaluarGate(score, texto, clasificacion, acta.intento, acta.maxIntentos)
@@ -671,12 +814,18 @@ export class RealCoreBridge implements E14Bridge {
           clasificacion: null,
         };
     if (!completa) score = Math.min(score, 6.4);
+    // §D3 (SPEC-e14-score-ocr): sustitución BAJO sin señal — igual que el
+    // escaneo (el recorte de una foto sin acta no fabrica señal).
+    const rechazoFinal: Acta["rechazo"] = senalActa
+      ? gate.rechazo
+      : { tipo: "BAJO", detalle: DETALLE_BAJO };
 
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
         `(proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
+        `senal=${senalActa} vacia=${procesadaVacia} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
         `score=${score} filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
@@ -695,6 +844,7 @@ export class RealCoreBridge implements E14Bridge {
     const actaActualizada: Acta = {
       ...acta,
       fotoProcesada,
+      procesadaVacia,
       quadDetectado: quad,
       rotation: rotacion,
       ocrTexto: texto,
@@ -706,7 +856,7 @@ export class RealCoreBridge implements E14Bridge {
       motor,
       score,
       status: gate.status,
-      rechazo: gate.rechazo,
+      rechazo: rechazoFinal,
       clasificacion: gate.clasificacion ?? undefined,
       firmas: this.firmasPorStatus(acta.firmas, gate.status),
     };
@@ -828,10 +978,16 @@ export class RealCoreBridge implements E14Bridge {
     parcial: { fotoOriginal?: string },
     campos: {
       fotoProcesada?: string;
+      /** §D4 (SPEC-e14-score-ocr): la procesada salió sin tinta. */
+      procesadaVacia?: boolean;
       quadDetectado?: Quad;
       calidad?: PageQuality;
       ocrTexto?: string;
       motor?: "worker" | "canvas";
+      /** §D8.3 (SPEC-e14-score-ocr Rev. 3): filtro del acta al nacer —
+       *  "original" cuando el asset sim corrió as-is, "bw" (default del
+       *  producto) en el pipeline normal. */
+      filtro?: PageFilter;
       score: number;
       status: ActaStatus;
       rechazo: Acta["rechazo"];
@@ -889,6 +1045,7 @@ export class RealCoreBridge implements E14Bridge {
       fuente: opciones.fuente,
       fotoOriginal: parcial.fotoOriginal,
       fotoProcesada: campos.fotoProcesada,
+      procesadaVacia: campos.procesadaVacia,
       ocrTexto: campos.ocrTexto,
       metricas: campos.calidad
         ? {
@@ -902,7 +1059,8 @@ export class RealCoreBridge implements E14Bridge {
       rotation: 0,
       // F2/D36: default del producto (types.ts L50 del core) — toda captura
       // nace en B/N adaptativo (Fuente: CameraView.tsx L602-604 del lab).
-      filtro: "bw" as PageFilter,
+      // §D8.3 (Rev. 3): EXCEPTO los assets sim as-is, que nacen "original".
+      filtro: campos.filtro ?? ("bw" as PageFilter),
       // SPEC-cabecera-clasificacion §6: clasificación de cabecera (AUTO →
       // archivada al envío; SUGERIDA/MANUAL → panel de corrección §5).
       clasificacion: campos.clasificacion ?? undefined,
