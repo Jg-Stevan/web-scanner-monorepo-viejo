@@ -1003,6 +1003,7 @@ export default function CameraView() {
                       ...(pipeMeta.pipeDataUrlMs !== null
                         ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
                         : {}),
+                      ...(pipeMeta.heapProbe ? { heapProbe: pipeMeta.heapProbe } : {}),
                     }
                   : {}),
               }

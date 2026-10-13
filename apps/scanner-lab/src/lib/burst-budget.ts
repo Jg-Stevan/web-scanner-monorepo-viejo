@@ -99,7 +99,7 @@ const DEFAULTS: BurstBudgetConfig = {
    *  (4000 px) una ventana honesta; worst case ~5-6 s por captura con
    *  acta a 4000 px, frente a 17 s a 960 px. Dispositivos sanos (foto en
    *  0.22–1 s) jamás lo tocan. */
-  timeBudgetMs: 5000,
+  timeBudgetMs: 2000,
   /** v3 Fase D — 2000. Experimento de palanca del dueño (A13, build
    *  73d7be2, muros 5 s y 6.5 s): la foto huérfana llega +18-42 ms
    *  después del corte en 6/6 capturas — la gracia que la rescata cuesta
@@ -127,6 +127,32 @@ export function getBurstConfig(): BurstBudgetConfig {
 }
 
 /** Estadísticas de UNA adquisición (telemetría QA, `window.__lastBurst`). */
+/** v5 §3.2 — telemetría aditiva: sonda de heap JS durante el tramo opaco
+ *  (SOLO rutas con corte). */
+export interface BurstHeapProbe {
+  intervalMs: number; // ~200
+  samples: number;
+  minMB: number; // mínimo de usedJSHeapSize en el tramo
+  maxMB: number; // máximo
+  sawtoothMB: number; // suma de CAÍDAS consecutivas entre muestras (estimador de lo que GC liberó)
+  seriesMB: number[]; // serie compacta redondeada a 0.1 MB; si samples>100, submuestrea con paso uniforme
+}
+
+const HEAP_PROBE_INTERVAL_MS = 200;
+
+function readUsedHeapMB(): number | null {
+  if (typeof window === "undefined" || typeof window.performance === "undefined") {
+    return null;
+  }
+  const mem = (window.performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+  if (!mem) return null;
+  const used = mem.usedJSHeapSize;
+  if (typeof used !== "number" || !Number.isFinite(used)) {
+    return null;
+  }
+  return used / 1048576;
+}
+
 export interface BurstStats {
   at: number;
   exitReason: BurstExitReason;
@@ -163,6 +189,9 @@ export interface BurstStats {
   /** v4 §2.3 (v4.3) — jobs del editor en vuelo (autoQuad/filtros/preview)
    *  al llegar al mark (solo rutas con corte; null: sin corte). */
   bgJobsAtShot: number | null;
+  /** v5 §3.2 — sonda aditiva de heap JS durante el tramo opaco (SOLO rutas
+   *  con corte; null: sin corte o sin performance.memory). */
+  heapProbe: BurstHeapProbe | null;
 }
 
 let lastStats: BurstStats | null = null;
@@ -191,7 +220,34 @@ export function recordBurst(
   // v4 §2.1 — el corte de ESTA salida abre (o cierra) el tramo opaco. Se
   // toma AQUÍ el instante (junto al waitedMs que se registra) para que
   // pipeToMarkMs cuadre con la aritmética del informe (§2.4).
-  pipe = extra?.cutPipe === true ? { openedAt: performance.now(), sniffMs: null, dataUrlMs: null } : null;
+  // v4 §2.1 / v5 §3.2 — el corte de ESTA salida abre (o cierra) el tramo opaco.
+  if (pipe !== null && pipe.heapInterval !== null) {
+    window.clearInterval(pipe.heapInterval);
+    pipe.heapInterval = null;
+  }
+  let heapInterval: number | null = null;
+  let heapSamples: number[] | null = null;
+  if (extra?.cutPipe === true) {
+    const initialMB = readUsedHeapMB();
+    if (initialMB !== null) {
+      heapSamples = [initialMB];
+      heapInterval = window.setInterval(() => {
+        const currentMB = readUsedHeapMB();
+        if (currentMB !== null && heapSamples !== null) {
+          heapSamples.push(currentMB);
+        }
+      }, HEAP_PROBE_INTERVAL_MS);
+    }
+    pipe = {
+      openedAt: performance.now(),
+      sniffMs: null,
+      dataUrlMs: null,
+      heapInterval,
+      heapSamples,
+    };
+  } else {
+    pipe = null;
+  }
   lastStats = {
     at: Date.now(),
     exitReason,
@@ -206,6 +262,7 @@ export function recordBurst(
     pipeDataUrlMs: null,
     pipeToMarkMs: null,
     bgJobsAtShot: null,
+    heapProbe: null,
   };
   if (typeof window !== "undefined") {
     (window as unknown as Record<string, unknown>).__lastBurst = { ...lastStats };
@@ -232,6 +289,10 @@ interface BurstPipeState {
   sniffMs: number | null;
   /** Duración de blobToDataUrl (camino foto; null: no corrió). */
   dataUrlMs: number | null;
+  /** v5 §3.2 — timer de la sonda de heap (null: sin performance.memory). */
+  heapInterval: number | null;
+  /** Muestras de usedJSHeapSize en MB recogidas durante el tramo. */
+  heapSamples: number[] | null;
 }
 
 let pipe: BurstPipeState | null = null;
@@ -258,6 +319,7 @@ export interface BurstPipeMeta {
   pipeDataUrlMs: number | null;
   pipeToMarkMs: number;
   bgJobsAtShot: number;
+  heapProbe: BurstHeapProbe | null;
 }
 
 /** v4 §2.1/§2.3 — CIERRA el tramo opaco EN el mark capture_shot y devuelve
@@ -266,11 +328,54 @@ export interface BurstPipeMeta {
  *  (recordBurst escribió antes de que el pipe corriera). Idempotente. */
 export function collectBurstPipeMeta(): BurstPipeMeta | null {
   if (pipe === null) return null;
+  if (pipe.heapInterval !== null) {
+    window.clearInterval(pipe.heapInterval);
+    pipe.heapInterval = null;
+  }
+  let heapProbe: BurstHeapProbe | null = null;
+  const raw = pipe.heapSamples;
+  if (raw !== null && raw.length > 0) {
+    let min = raw[0]!;
+    let max = raw[0]!;
+    let sawtooth = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const v = raw[i]!;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      if (i > 0) {
+        const drop = raw[i - 1]! - v;
+        if (drop > 0) sawtooth += drop;
+      }
+    }
+    const samples = raw.length;
+    const seriesMB =
+      samples > 100
+        ? (() => {
+            const targetCount = 100;
+            const step = (samples - 1) / (targetCount - 1);
+            const out: number[] = [];
+            for (let i = 0; i < targetCount; i++) {
+              const idx = Math.min(samples - 1, Math.round(i * step));
+              out.push(Math.round(raw[idx]! * 10) / 10);
+            }
+            return out;
+          })()
+        : raw.map((v) => Math.round(v * 10) / 10);
+    heapProbe = {
+      intervalMs: HEAP_PROBE_INTERVAL_MS,
+      samples,
+      minMB: Math.round(min * 10) / 10,
+      maxMB: Math.round(max * 10) / 10,
+      sawtoothMB: Math.round(sawtooth * 10) / 10,
+      seriesMB,
+    };
+  }
   const meta: BurstPipeMeta = {
     pipeSniffMs: pipe.sniffMs,
     pipeDataUrlMs: pipe.dataUrlMs,
     pipeToMarkMs: Math.max(0, Math.round(performance.now() - pipe.openedAt)),
     bgJobsAtShot: backgroundJobs,
+    heapProbe,
   };
   pipe = null;
   if (lastStats !== null) {
@@ -278,6 +383,7 @@ export function collectBurstPipeMeta(): BurstPipeMeta | null {
     lastStats.pipeDataUrlMs = meta.pipeDataUrlMs;
     lastStats.pipeToMarkMs = meta.pipeToMarkMs;
     lastStats.bgJobsAtShot = meta.bgJobsAtShot;
+    lastStats.heapProbe = meta.heapProbe;
     if (typeof window !== "undefined") {
       (window as unknown as Record<string, unknown>).__lastBurst = { ...lastStats };
     }
@@ -639,4 +745,10 @@ if (typeof window !== "undefined") {
       return getBackgroundJobs();
     },
   };
+}
+
+declare module "@/lib/perf-probe" {
+  interface PerfProbeApi {
+    mark(ev: string, meta?: Record<string, unknown>): void;
+  }
 }

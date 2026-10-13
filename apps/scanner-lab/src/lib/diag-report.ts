@@ -172,6 +172,17 @@ export interface DiagReport {
           congestionWait: Array<{ count: number; totalMs: number }>;
           congestionPipe: Array<{ count: number; totalMs: number }>;
         };
+        /** v5 §3.4 — sonda aditiva de heap JS durante el tramo opaco (solo
+         *  capturas con corte; null si la plataforma no expone
+         *  performance.memory). Ausente en lotes sin cortes → array vacío. */
+        heapProbe: Array<{
+          intervalMs: number;
+          samples: number;
+          minMB: number;
+          maxMB: number;
+          sawtoothMB: number;
+          seriesMB: number[];
+        } | null>;
       };
     };
     editor: {
@@ -449,6 +460,14 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const burstPipeBgJobs: number[] = [];
   const burstCongestionWait: Array<{ count: number; totalMs: number }> = [];
   const burstCongestionPipe: Array<{ count: number; totalMs: number }> = [];
+  const burstHeapProbe: Array<{
+    intervalMs: number;
+    samples: number;
+    minMB: number;
+    maxMB: number;
+    sawtoothMB: number;
+    seriesMB: number[];
+  } | null> = [];
   const longTaskEntries = perfProbe.longTaskEntries;
   for (const s of shotMarks) {
     const fired = lastBefore(firedShots, s.ts);
@@ -491,6 +510,27 @@ export async function buildDiagReport(): Promise<DiagReport> {
         const jobs = s.meta?.bgJobsAtShot;
         if (typeof jobs === "number" && Number.isFinite(jobs)) {
           burstPipeBgJobs.push(jobs);
+        }
+        const hp = s.meta?.heapProbe;
+        if (
+          hp &&
+          typeof hp === "object" &&
+          typeof (hp as { samples?: unknown }).samples === "number" &&
+          typeof (hp as { minMB?: unknown }).minMB === "number" &&
+          typeof (hp as { maxMB?: unknown }).maxMB === "number" &&
+          typeof (hp as { sawtoothMB?: unknown }).sawtoothMB === "number" &&
+          Array.isArray((hp as { seriesMB?: unknown }).seriesMB)
+        ) {
+          burstHeapProbe.push(hp as {
+            intervalMs: number;
+            samples: number;
+            minMB: number;
+            maxMB: number;
+            sawtoothMB: number;
+            seriesMB: number[];
+          });
+        } else {
+          burstHeapProbe.push(null);
         }
         if (fired) {
           // v4 §2.2 — instante del corte = mark − pipeToMarkMs (el tramo
@@ -583,6 +623,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
             congestionWait: burstCongestionWait,
             congestionPipe: burstCongestionPipe,
           },
+          heapProbe: burstHeapProbe,
         }
       : undefined;
 
@@ -911,6 +952,14 @@ export function buildDiagTxt(r: DiagReport): string {
         })
         .join(" · ");
       push(`  congestión espera→pipe: ${congTxt || DASH}`);
+      const heapProbes = s.pages.burst.heapProbe ?? [];
+      for (const hp of heapProbes) {
+        if (hp) {
+          push(
+            `  sonda heap: ${hp.samples} muestras · ${hp.minMB}–${hp.maxMB} MB · sierra ${hp.sawtoothMB} MB`
+          );
+        }
+      }
     }
   }
   const renders2 = s.editor.firstRenders[1];
