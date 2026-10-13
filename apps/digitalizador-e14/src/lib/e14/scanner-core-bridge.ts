@@ -54,10 +54,6 @@ import {
   type ClasificacionE14,
 } from "./clasificador";
 import { procesadaVaciaDataUrl } from "./image-utils";
-// GUARD-BORDE Rev. 2 (SPEC-e14-guard-borde §2-§3, D1/D3): la verificación de
-// completitud vive en helper ÚNICO (completitud.ts) — «la geometría sospecha,
-// la tinta condena» — usado por AMBOS pipelines (escaneo y recorte, AC11).
-import { verificarCompletitud, type ResultadoCompletitud } from "./completitud";
 // §1 (SPEC-ux-real-bn-editor): acta E-14 real del dueño (Galaxy A56 5G) —
 // import estático: Next resuelve el basePath /web-scanner del deploy estático.
 import actaSimUrl from "@/assets/acta-e14-real.jpg";
@@ -88,11 +84,6 @@ const DETALLE_INCOMPLETA = "EL ACTA ESTÁ CORTADA EN EL ENCUADRE — ALÉJATE UN
 // detalle es el rechazo determinista §D3 (repetir, NUNCA RH en 1ª ronda).
 const TECHO_SIN_SENAL = 4.9;
 const DETALLE_BAJO = "NO SE RECONOCE INFORMACIÓN DEL ACTA — REPITA LA FOTO";
-// D10 (SPEC-e14-guard-borde): techo del ESCUDO anti-fondo — el recorte trae
-// fondo/sombra al filo (franjas ≥85% oscuras, NO tinta cortada): el acta pasa
-// al gate pero NUNCA ÓPTIMA (statusDeScore: ≥8 sería ÓPTIMA — el operador
-// puede preferir repetir porque el recorte trae fondo). Sin copy nuevo.
-const TECHO_ESCUDO_FONDO = 7.9;
 
 /**
  * §D1 (SPEC-e14-score-ocr): SEÑAL DE CONTENIDO del acta — se calcula DESPUÉS
@@ -112,12 +103,45 @@ function senalDeContenido(texto: string, clasificacion: ClasificacionE14): boole
   );
 }
 
-// GUARD-BORDE Rev. 2 (D1/D3): la función esActaCompleta del guard del PR #33
-// (geometría: esquina al filo ≤0.001/≥0.999 o área <30% → INCOMPLETA) VIVIÓ
-// aquí y hoy vive en ./completitud (verificarCompletitud) — la geometría
-// pasó de CONDENAR a SER SOSPECHA: la condena exige tinta impresa cortada al
-// filo del recorte (tabla de decisión §2 del spec). Historia completa del
-// guard y su calibración: comentario del helper + CHANGES 0-decimoquinto.
+/**
+ * §F-1 (SPEC-camara-funcional) — señal de ACTA COMPLETA en el encuadre.
+ * El quad de detección son 4 puntos en fracciones (0-1) de la foto. Regla de
+ * producto (cerrada por el dueño): una captura que corta el acta NUNCA se
+ * acepta, aunque la cabecera sea legible. DOS señales — calibradas con los
+ * quads REALES medidos de las 3 actas del dueño (QA M22-1, motor=worker):
+ *  1. BORDE — esquina esencialmente SOBRE el borde de la foto (≥0.999 de
+ *     cualquiera de los 4 lados): el papel corre hasta el filo → cortada.
+ *     La Rev. 1 del spec fijaba MARGEN 0.02; medido: el acta BUENA del
+ *     dueño enmarca apretado (esquinas 0.988/0.998) → con 0.02 el caso
+ *     bueno se rechazaría (falso positivo) — umbral ajustado a «sobre el
+ *     borde» literal. Evidencia en CHANGES.md 0-decimoquinto.
+ *  2. COBERTURA — el quad debe cubrir ≥30% de la foto: cuando el papel está
+ *     cortado, el worker NO logra cerrar su contorno y devuelve un fragmento
+ *     INTERNO (la tabla del acta: áreas 0.13/0.18 medidas vs 0.39 de la
+ *     completa) → no se puede VERIFICAR que el acta esté completa →
+ *     incompleta (mensaje «aléjate un poco y captura el acta completa»:
+ *     también el consejo correcto para un encuadre lejano).
+ */
+const MARGEN_BORDE = 0.001;
+const AREA_MINIMA = 0.3;
+function esActaCompleta(quad: Quad): boolean {
+  const alBorde = quad.some(
+    (p) =>
+      p.x <= MARGEN_BORDE ||
+      p.x >= 1 - MARGEN_BORDE ||
+      p.y <= MARGEN_BORDE ||
+      p.y >= 1 - MARGEN_BORDE,
+  );
+  if (alBorde) return false;
+  // Área del cuadrilátero (shoelace — robusta al orden de las esquinas).
+  let dobleArea = 0;
+  for (let i = 0; i < quad.length; i++) {
+    const p = quad[i];
+    const q = quad[(i + 1) % quad.length];
+    dobleArea += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(dobleArea) / 2 >= AREA_MINIMA;
+}
 // PATRON_CABECERA vive ahora en ./clasificador (§4.5: se mantiene como
 // constante para traza/log — ya NO decide sola el estado del gate).
 
@@ -476,15 +500,17 @@ export class RealCoreBridge implements E14Bridge {
     ms.detect = performance.now() - tDetect;
     emitir({ etapa: "DETECTANDO", progreso: 1 });
 
-    // GUARD-BORDE Rev. 2 (§3b, D1/D3/D4): la señal de ACTA COMPLETA ya NO se
-    // decide aquí con la geometría (el falso positivo del dueño: quad al filo
-    // con la imagen perfecta — score 6.4). El cálculo se MUEVE a DESPUÉS del
-    // paso 3 (recorte): la condena exige analizar la TINTA del recorte al
-    // filo («la geometría sospecha, la tinta condena»). Helper ÚNICO
-    // verificarCompletitud (AC11) — con `simular` la verificación SE OMITE
-    // (completa = true forzado): la foto del chip MEDIO ES una acta cortada a
-    // propósito y jamás debe caer INCOMPLETA desde un chip (AC3/AC6 de
-    // simulacion-scores; AC7 del guard).
+    // §F-2 (SPEC-camara-funcional): señal de ACTA COMPLETA — el quad de
+    // detección YA contiene la evidencia (esquinas sobre el borde de la foto
+    // = papel cortado); se calcula aquí y se consulta ANTES del gate en el
+    // paso 6. Una captura que corta el acta NUNCA se acepta, aunque la
+    // cabecera sea legible y el clasificador la identifique.
+    // §D3 (SPEC-e14-simulacion-scores): con `simular` la verificación SE OMITE
+    // (completa = true forzado) — la foto del chip MEDIO ES una acta cortada a
+    // propósito y jamás debe caer INCOMPLETA desde un chip (AC3/AC6); el
+    // desenlace lo decide el gate con el score inyectado. Sin `simular` la
+    // regla queda byte a byte (AC6: regresión cero del fix del PR #33).
+    const completa = opciones.simular ? true : esActaCompleta(quad);
 
     // 3) Recorte + realce (warp real INTER_CUBIC + filtro default "bw").
     //    §D8.3 (SPEC-e14-score-ocr Rev. 3): con sinRecorte se OMITE
@@ -526,17 +552,6 @@ export class RealCoreBridge implements E14Bridge {
       filtroActa = "bw";
       motor = resultado.precision?.engine ?? "canvas";
     }
-    // GUARD-BORDE Rev. 2 (§3b): la verificación de completitud corre DESPUÉS
-    // del paso 3 — fotoProcesada ya existe (la tinta al filo se mide SOBRE el
-    // recorte, no sobre la foto cruda). Helper ÚNICO (D3/AC11). El análisis
-    // SOLO arranca si la geometría sospecha (D4: quad sano → costo cero) y
-    // vuela EN PARALELO con CALIDAD/OCR: se espera justo antes del gate
-    // (presupuesto propio <30 ms p95 — §3d/AC9). Con `simular` NO corre
-    // (completa = true forzado — AC7). Nota sinRecorte: SOLO alcanzable desde
-    // la rama SIMULACIÓN (AC15 score-ocr) → también cubierto por el skip.
-    const verificacion: Promise<ResultadoCompletitud> | null = opciones.simular
-      ? null
-      : verificarCompletitud(quad, fotoProcesada);
     // §D4 (SPEC-e14-score-ocr): visor nunca vacío — tinta de la PROCESADA
     // (muestreo 64×64): un warp sin tinta (quad degenerado sobre superficie
     // lisa → blanco puro del B/N adaptativo) marca el acta para que REVISIÓN
@@ -594,26 +609,12 @@ export class RealCoreBridge implements E14Bridge {
         score = Math.max(score, PISO_IDENTIFICADA);
       }
     }
-    // §F-2 (SPEC-camara-funcional) + GUARD-BORDE Rev. 2: acta INCOMPLETA →
-    // resolución por la vía de rechazo SIN tocar evaluarGate (el veto sigue
-    // VIVIENDO FUERA del gate — §7 score-ocr intocado, D6/AC10; el piso de
-    // identificada solo beneficia a actas COMPLETAS — en la práctica anulado
-    // por el techo 6.4 del veto, mismo que «poor"). La decisión del guard
-    // llega aquí: la sospecha geométrica SOLO condena con tinta cortada al
-    // filo del recorte (D1 — el falso positivo del quad al filo con imagen
-    // perfecta queda curado). El resto del pipeline corrió igual
+    // §F-2 (SPEC-camara-funcional): acta INCOMPLETA → resolución por la vía
+    // de rechazo SIN tocar evaluarGate (el piso de identificada solo
+    // beneficia a actas COMPLETAS — aquí queda anulado en la práctica por
+    // el techo 6.4, mismo que «poor"). El resto del pipeline corrió igual
     // (recorte/calidad/OCR) para que REVISIÓN muestre la imagen y el
     // operador entienda el problema.
-    const verificacionResuelta = verificacion ? await verificacion : null;
-    const completa = opciones.simular ? true : (verificacionResuelta?.completa ?? true);
-    // D10 — escudo anti-fondo: franja(s) ≥85% oscura(s) al filo = fondo/sombra
-    // incluida por el warp (NO tinta cortada) → el acta pasa al gate con
-    // TECHO 7.9 (nunca ÓPTIMA — statusDeScore: ≥8; el recorte trae fondo y el
-    // operador puede preferir repetir) sin copy nuevo. SOLO actas completas
-    // (la condenada por tinta no llega al gate).
-    if (completa && verificacionResuelta?.fondo) {
-      score = Math.min(score, TECHO_ESCUDO_FONDO);
-    }
     const gate: ResultadoGate = completa
       ? this.evaluarGate(score, texto, clasificacion, opciones.intento, opciones.maxIntentos)
       : {
@@ -642,18 +643,6 @@ export class RealCoreBridge implements E14Bridge {
       opciones.simular && opciones.scoreSimulado != null ? ` sim=${opciones.scoreSimulado}` : "";
     // §D8.3: traza de auditoría del as-is (solo cuando sinRecorte).
     const evidenciaAsis = sinRecorte ? " recorte=as-is" : "";
-    // §3c (GUARD-BORDE) — log de auditoría del guard: SOLO cuando hubo
-    // sospecha geométrica se añaden los campos nuevos (AC8: sin sospecha el
-    // log queda como hoy). `borde=` lados sospechosos ("S|E"), `tintaFilo=`
-    // condena, `franja=` densidades de tinta en % por lado sospechoso (mismo
-    // orden que borde) y `fondo=` escudo D10.
-    const evidenciaBorde =
-      verificacionResuelta && verificacionResuelta.sospecha
-        ? ` borde=${verificacionResuelta.sospecha}` +
-          ` tintaFilo=${verificacionResuelta.tintaFilo}` +
-          ` franja=[${verificacionResuelta.densidades.map((d) => d.toFixed(1)).join(",")}]` +
-          ` fondo=${verificacionResuelta.fondo}`
-        : "";
     console.info(
       `[e14] pipeline ${opciones.fuente}/${"archivo" in entrada ? "file" : "video-grab"} ` +
         `total=${Math.round(ms.total)}ms ` +
@@ -661,7 +650,7 @@ export class RealCoreBridge implements E14Bridge {
         `proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
-        `senal=${senalActa} vacia=${procesadaVacia}${evidenciaAsis}${evidenciaBorde} ` +
+        `senal=${senalActa} vacia=${procesadaVacia}${evidenciaAsis} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
         `score=${score} filtro=${filtroActa} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
@@ -798,16 +787,12 @@ export class RealCoreBridge implements E14Bridge {
     //    escaneo — helper ÚNICO evaluarGate, §4.4: AMBOS pipelines con el
     //    MISMO criterio). §X (SPEC-score-legible): clasificación primero,
     //    score con señales de legibilidad.
-    // §F-3 (SPEC-camara-funcional) + GUARD-BORDE Rev. 2 (D3/AC11): el quad
-    // del editor está en coordenadas de `fotoOriginal` → la MISMA regla de
-    // completitud ANTES del gate — el helper ÚNICO verificarCompletitud
-    // (geometría sospecha, tinta condena: el rescate de un encuadre apretado
-    // con filo limpio ya NO muere por geometría sola). El rescate NO sirve
-    // de bypass: si el papel está cortado EN VERDAD (tinta al filo), ningún
-    // crop lo completa; si el acta SÍ está entera (detección falló por
-    // sombra), el recorte manual la rescata legítimamente.
-    const verificacion = await verificarCompletitud(quad, fotoProcesada);
-    const completa = verificacion.completa;
+    // §F-3 (SPEC-camara-funcional): el quad del editor está en coordenadas
+    // de `fotoOriginal` → la MISMA esActaCompleta(quadManual) ANTES del gate.
+    // El rescate NO sirve de bypass: si el papel está cortado en la foto,
+    // ningún crop lo completa; si el acta SÍ está entera (detección falló
+    // por sombra), el recorte manual la rescata legítimamente.
+    const completa = esActaCompleta(quad);
     const clasificacion = clasificarCabecera(texto, await cargarDivipol());
     const ocrLegible = ocrTextIsValid(texto);
     // §D1 (SPEC-e14-score-ocr): señal de contenido — mismo criterio §4.4
@@ -818,11 +803,6 @@ export class RealCoreBridge implements E14Bridge {
       identificada: clasificacion.nivel === "AUTO",
       conSenal: senalActa,
     });
-    // D10 — escudo anti-fondo (mismo criterio del escaneo): el rescate trae
-    // fondo/sombra al filo → gate con TECHO 7.9 (nunca ÓPTIMA), sin copy.
-    if (completa && verificacion.fondo) {
-      score = Math.min(score, TECHO_ESCUDO_FONDO);
-    }
     const gate: ResultadoGate = completa
       ? this.evaluarGate(score, texto, clasificacion, acta.intento, acta.maxIntentos)
       : {
@@ -840,21 +820,12 @@ export class RealCoreBridge implements E14Bridge {
       ? gate.rechazo
       : { tipo: "BAJO", detalle: DETALLE_BAJO };
 
-    // §3c (GUARD-BORDE): log de auditoría del guard — SOLO con sospecha
-    // geométrica (AC8). Mismos campos que el pipeline de escaneo.
-    const evidenciaBordeRecorte =
-      verificacion.sospecha
-        ? ` borde=${verificacion.sospecha}` +
-          ` tintaFilo=${verificacion.tintaFilo}` +
-          ` franja=[${verificacion.densidades.map((d) => d.toFixed(1)).join(",")}]` +
-          ` fondo=${verificacion.fondo}`
-        : "";
     console.info(
       `[e14] recorte ${acta.fuente} total=${Math.round(ms.total)}ms ` +
         `(proceso=${Math.round(ms.proceso)} calidad=${Math.round(ms.calidad)} ` +
         `ocr=${Math.round(ms.ocr)} motor=${motor} ocrValido=${ocrTextIsValid(texto)} ` +
         `cabeceraE14=${PATRON_CABECERA.test(texto)} completa=${completa} ` +
-        `senal=${senalActa} vacia=${procesadaVacia}${evidenciaBordeRecorte} ` +
+        `senal=${senalActa} vacia=${procesadaVacia} ` +
         `quad=[${quad.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(" ")}] ` +
         `score=${score} filtro=${filtro} clasif={${fmtClasif(gate.clasificacion)}} ` +
         `metricas={sharpness:${calidad.sharpness} brightness:${calidad.brightness} ` +
