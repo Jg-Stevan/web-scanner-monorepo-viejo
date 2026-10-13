@@ -504,8 +504,14 @@ export function ScanView() {
   const loopRef = useRef<CameraFrameLoop | null>(null);
   const procesandoRef = useRef(false);
   const cooldownRef = useRef(0);
-  // D22/D24: AUTO default OFF — el operador decide si arma (intentos finitos).
-  const [autoArmado, setAutoArmado] = useState(false);
+  // D9 (SPEC-e14-guard-borde Rev. 2): captura automática ARMADA por defecto —
+  // REVISA el default OFF de D22/D24 por mandato del dueño («cuando se habra
+  // la camara siempre este activado la captura automatica»). El estado nace
+  // armado Y cada APERTURA de cámara RE-ARMA (setAutoArmado(true) en el
+  // arranque exitoso del stream — el estado persiste entre aperturas, hay
+  // que forzarlo). El operador conserva el toggle: desarmar EN VIVO se
+  // respeta dentro de la MISMA apertura (no se re-arma solo — AC14-AC16).
+  const [autoArmado, setAutoArmado] = useState(true);
   const autoRef = useRef(false);
   /** F-FLASH: preferencia de linterna de la sesión (re-aplicada por stream). */
   const [flashPrefOn, setFlashPrefOn] = useState(false);
@@ -1167,6 +1173,12 @@ export function ScanView() {
 
       streamRef.current = stream;
       setCamEstado("viva");
+      // D9 (SPEC-e14-guard-borde Rev. 2): cada APERTURA de cámara nace ARMADA
+      // — primera vez, [ACTIVAR CÁMARA] tras un aviso, o reabrir tras cambiar
+      // de fuente («repetir captura» remonta el componente → useState(true)).
+      // El desarme EN VIVO del operador se respeta hasta la próxima apertura
+      // (AC15: re-armado en cada apertura; AC16: desarme respetado en vivo).
+      setAutoArmado(true);
       // F-SENSOR-PROFILER (PASO 2) — Fuente: apps/scanner-lab/... L1032-1034:
       // mide la nativa de FOTO del sensor y fija el tope seguro (4032/3200
       // px) para tomarFoto, una vez por apertura (remediación H2).
