@@ -1,31 +1,22 @@
 "use client";
 
 /**
- * TopBar — solo en REVISIÓN (SPEC §8): ← + pill de estado + pill de
- * conexión (clic alterna EN LÍNEA/OFFLINE con toast). En ACTAS/RESUMEN el
- * título vive dentro de la propia pantalla.
- *
- * D1 (SPEC-rediseno-revision §1, heredada de SPEC-rediseno-enviada Rev. 2):
- * estado dinámico por acta con score y palabra REALES (palabras aprobadas:
- * ÓPTIMA/ENVIADA CON ADVERTENCIA/ADVERTENCIA/REVISIÓN HUMANA/RECHAZADA — el
- * acento de «ÓPTIMA» se conserva, el mock lo omite por estilización);
- * fallback «REVISIÓN DE ACTA» cuando no hay acta. Pill de conexión INTACTA.
- * D1 Rev. 3 (SPEC-rediseno-chrome-3-estados): el título del acta BAJA al
- * banner de ubicación (D2 en ReviewView) — la TopBar porta SOLO la pill
- * BORDEADA de estado del mock.
- * CYBER-NEÓN (SPEC-e14-cyber-neon §3): cápsula 34px bg surface-1 con anillo
- * verde (borde 35% + glow-sm por tono de estado, §10); punto SÓLIDO 12px
- * SIN animar (fuera animate-pulse-sync y el ▲ de warn — la estructura del
- * mock es punto + score + palabra); score verde neón y palabra BLANCA en
- * dos spans (13px bold tracking 0.08em, mono); botón derecho = cápsula con
- * anillo verde + nube 18px + punto 1.5px (la función de alternar conexión
- * queda INTACTA). Flecha «←» neón con strokeWidth 2.5 (§3.3).
+ * TopBar — solo en REVISIÓN. STITCH REDESIGN (SPEC-e14-redesign-stitch
+ * §3.2.1, mock 6/2/4): [retro ← verde w-10 h-10] · [píldora de estado:
+ * dot ping del color + score font-mono del color + label blanco uppercase
+ * 11px; contenedor bg-brand-surface con borde del color (rechazada
+ * border-red-500/40 · advertencia bg-amber-950/60 + glow · óptima
+ * border-brand-green/30 + glow verde)] · [nube de transmisión: verde
+ * (bg-brand-greenDark) online+transmitida · roja offline/rechazada ·
+ * ámbar pendiente de envío — mapeo §6.4/AC11].
+ * La lógica de datos (palabra real por estado, score real, alternar
+ * conexión) queda INTACTA de D1 — solo re-vestida.
  */
 import { useE14Store } from "@/lib/e14/store";
 import type { Acta, ActaStatus } from "@/lib/e14/types";
-import { ArrowLeftIcon, CloudCheckIcon, CloudOffIcon } from "./icons";
+import { StitchArrowLeftIcon, StitchCloudCheckIcon } from "./icons";
 
-/** D1: estilo por estado — palabra + tono + dot + borde + glow (mock vinculante). */
+/** D1: estilo por estado — palabra + colores del mock vinculante. */
 function estiloTopBar(status: ActaStatus, score: number) {
   switch (status) {
     case "ENVIADA":
@@ -34,55 +25,72 @@ function estiloTopBar(status: ActaStatus, score: number) {
       // <8 ENVIADA CON ADVERTENCIA (envío observado).
       return {
         palabra: score >= 8 ? "ÓPTIMA" : "ENVIADA CON ADVERTENCIA",
-        tono: "text-ok-tint",
-        dot: "bg-ok-tint",
-        tonoBorde: "border-ok-tint/35",
-        glow: "glow-sm",
+        pill: "bg-brand-surface border border-brand-green/30 shadow-[0_0_12px_rgba(0,230,118,0.15)]",
+        dot: "bg-brand-green",
+        ping: true,
+        score: "text-brand-green",
       };
     case "ADVERTENCIA":
-      // Enmienda de la spec de revisión: «ADVERTENCIA», tono ámbar.
+      // Mock 4: píldora ámbar con glow (bg amber-950/60).
       return {
         palabra: "ADVERTENCIA",
-        tono: "text-warn",
-        dot: "bg-warn",
-        tonoBorde: "border-warn/35",
-        glow: "glow-sm-warn",
+        pill:
+          "bg-amber-950/60 border border-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.25)]",
+        dot: "bg-amber-400",
+        ping: false,
+        score: "text-amber-400",
       };
     case "RECHAZADA":
       return {
         palabra: "RECHAZADA",
-        tono: "text-crit",
-        dot: "bg-crit",
-        tonoBorde: "border-crit/35",
-        glow: "glow-sm-crit",
+        pill: "bg-brand-surface border border-red-500/40 shadow-sm",
+        dot: "bg-red-500",
+        ping: true,
+        score: "text-red-500",
       };
     case "EN_REVISION_HUMANA":
       return {
         palabra: "REVISIÓN HUMANA",
-        tono: "text-warn",
-        dot: "bg-warn",
-        tonoBorde: "border-warn/35",
-        glow: "glow-sm-warn",
+        pill:
+          "bg-amber-950/60 border border-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.25)]",
+        dot: "bg-amber-400",
+        ping: false,
+        score: "text-amber-400",
       };
   }
 }
 
-// D1 (SPEC-rediseno-chrome-3-estados): el título del acta BAJA al banner
-// (D2 en ReviewView); la TopBar solo porta la pill de ESTADO del mock.
-/** D1 Rev. 3: pill bordeada redondeada — CYBER-NEÓN §3.1: cápsula 34px
- *  bg surface-1, punto sólido 12px sin animar, score neón + palabra blanca. */
+/** Nube de transmisión (§6.4/AC11 — mapeo implementado):
+ *  · VERDE  = online y (ENVIADA u ÓPTIMA a punto de auto-enviarse)
+ *  · ROJA   = offline (cola pendiente) o RECHAZADA (no se transmite)
+ *  · ÁMBAR  = ADVERTENCIA / EN_REVISION_HUMANA online (pendiente de envío) */
+function nubeTransmision(status: ActaStatus, online: boolean) {
+  if (!online || status === "RECHAZADA") {
+    return "bg-red-500/20 border border-red-500/40 text-red-500";
+  }
+  if (status === "ENVIADA" || status === "OPTIMA") {
+    return "bg-brand-greendark border border-brand-green/40 text-brand-green";
+  }
+  return "bg-amber-950/60 border border-amber-500 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.25)]";
+}
+
 function PillEstado({ acta }: { acta: Acta }) {
   const est = estiloTopBar(acta.status, acta.score);
   return (
     <div
-      className={`flex items-center gap-1.5 h-[34px] px-3.5 rounded-full bg-surface-1 border font-data ${est.tonoBorde} ${est.glow}`}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs ${est.pill}`}
       role="status"
     >
-      <span className={`w-3 h-3 rounded-full shrink-0 ${est.dot}`} aria-hidden />
-      <span className={`text-[13px] font-bold tracking-[0.08em] shrink-0 ${est.tono}`}>
-        {acta.score.toFixed(1)}/10
-      </span>
-      <span className="text-[13px] font-bold tracking-[0.08em] text-white shrink-0">
+      {est.ping ? (
+        <span className="relative flex h-2.5 w-2.5">
+          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${est.dot} opacity-75`} />
+          <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${est.dot}`} />
+        </span>
+      ) : (
+        <span className={`w-2 h-2 rounded-full shrink-0 ${est.dot}`} aria-hidden />
+      )}
+      <span className={`font-mono font-bold ${est.score}`}>{acta.score.toFixed(1)}/10</span>
+      <span className="text-white font-semibold uppercase tracking-wider text-[11px]">
         {est.palabra}
       </span>
     </div>
@@ -95,43 +103,43 @@ export function TopBar() {
   const navegar = useE14Store((s) => s.navegar);
   const acta = useE14Store((s) => s.actaActual);
 
+  const nube = acta ? nubeTransmision(acta.status, online) : null;
+
   return (
-    <header className="relative z-40 bg-bg pt-safe shrink-0">
-      <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
+    <header className="relative z-30 pt-safe shrink-0 bg-brand-black/95 backdrop-blur border-b border-brand-border/60">
+      <div className="max-w-md mx-auto px-4 pt-4 pb-2.5 flex items-center justify-between gap-2">
         <button
           aria-label="Volver al menú de escaneo"
           type="button"
           onClick={() => navegar("escanear")}
-          className="w-11 h-11 -ml-2 rounded-full flex items-center justify-center text-ok-tint active:bg-white/10 active:scale-95 transition-transform duration-150"
+          className="w-10 h-10 rounded-full flex items-center justify-center text-brand-green hover:bg-brand-surfacelight tap-action transition-colors"
         >
-          <ArrowLeftIcon />
+          <StitchArrowLeftIcon />
         </button>
         {acta ? (
           <PillEstado acta={acta} />
         ) : (
-          <h1 className="font-data text-[13px] font-bold tracking-[0.08em] text-ok-tint uppercase text-center">
+          <h1 className="font-mono font-bold text-[11px] uppercase tracking-wider text-brand-green text-center">
             REVISIÓN DE ACTA
           </h1>
         )}
-        <div className="w-11 h-11 -mr-2 flex items-center justify-center">
+        {nube ? (
           <div
-            className={`flex items-center gap-1.5 h-[34px] px-3 rounded-full bg-surface-1 border ${
-              online ? "border-ok-tint/40 glow-sm" : "border-warn/40 glow-sm-warn"
-            }`}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs ${nube}`}
+            title={
+              online
+                ? "En línea — los envíos se transmiten al servidor"
+                : "Sin conexión — los envíos se acumulan en cola local"
+            }
           >
-            {online ? (
-              <CloudCheckIcon className="w-[18px] text-ok-tint" />
-            ) : (
-              <CloudOffIcon className="w-[18px] text-warn" />
-            )}
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${online ? "bg-ok-tint" : "bg-warn"}`}
-              aria-hidden
-            />
+            <StitchCloudCheckIcon className="w-4 h-4" />
+            <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden />
           </div>
-        </div>
+        ) : (
+          <div className="w-10 h-10" aria-hidden />
+        )}
       </div>
-      {/* La pill del header también alterna la conexión (§7.4). */}
+      {/* §7.4: la pill alterna la conexión (accesible por teclado). */}
       <button type="button" aria-hidden tabIndex={-1} className="sr-only" onClick={alternarConexion}>
         Alternar conexión
       </button>

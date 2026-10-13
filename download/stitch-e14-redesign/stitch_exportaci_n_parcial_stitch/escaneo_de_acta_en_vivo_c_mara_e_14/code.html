@@ -1,0 +1,242 @@
+<!DOCTYPE html><html class="h-full bg-black" lang="es" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport">
+<title>Captura de Acta Electoral E-14</title>
+<!-- Tailwind CSS CDN with plugins -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Configuration -->
+<script data-purpose="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              green: '#00E676',
+              greenDark: '#00B359',
+              greenMuted: '#003B20',
+              panel: '#0C110F',
+              chip: '#121915',
+              border: '#1B2620'
+            }
+          },
+          fontFamily: {
+            mono: ['SF Mono', 'ui-monospace', 'Menlo', 'Monaco', 'Cascadia Mono', 'Courier New', 'monospace'],
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+<!-- Custom Styles for Scanner and Viewport -->
+<style data-purpose="custom-animations">
+    @keyframes scan-laser {
+      0% {
+        top: 2%;
+        opacity: 0.15;
+      }
+      50% {
+        opacity: 0.95;
+      }
+      100% {
+        top: 98%;
+        opacity: 0.15;
+      }
+    }
+
+    .animate-scan {
+      animation: scan-laser 2.8s ease-in-out infinite alternate;
+    }
+
+    @keyframes pulse-ring {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.4);
+      }
+      50% {
+        transform: scale(1.02);
+        box-shadow: 0 0 0 8px rgba(0, 230, 118, 0);
+      }
+    }
+
+    .shutter-glow {
+      animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="h-full w-full bg-black text-white font-sans antialiased overflow-hidden select-none touch-none">
+<!-- BEGIN: CameraRootView -->
+<main class="relative h-full w-full max-w-md mx-auto flex flex-col justify-between overflow-hidden bg-[#050706] shadow-2xl">
+<!-- BEGIN: LiveCameraFeedSimulation -->
+<!-- Background camera feed simulated with realistic subtle vignette, dark paper grain, and dark gradient -->
+<div class="absolute inset-0 pointer-events-none z-0 overflow-hidden" data-purpose="camera-viewport-background">
+<div class="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/90 z-10"></div>
+<!-- Simulated dark wood/table surface and optical lens distortion -->
+<div class="w-full h-full opacity-35 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-800 via-[#101512] to-[#040605] mix-blend-screen scale-105"></div>
+<!-- Fine scanline texture overlay -->
+<div class="absolute inset-0 bg-[linear-gradient(rgba(18,25,21,0)_50%,rgba(0,0,0,0.45)_50%)] bg-[length:100%_4px] opacity-40"></div>
+</div>
+<!-- END: LiveCameraFeedSimulation -->
+<!-- BEGIN: TopBarAndStatusControls -->
+<header class="relative z-20 pt-3 px-4 pb-2 flex flex-col gap-3">
+<!-- Camera Quick Settings Bar -->
+<div class="flex items-center justify-between h-11" data-purpose="top-camera-controls"><!-- Botón Cerrar (✕) -->
+
+
+<!-- Centro: Píldora Cámara Inteligente (IA + Grid + AUTO) -->
+<div class="flex items-center gap-2 bg-black/60 border border-white/10 rounded-full px-2.5 py-1 backdrop-blur-md shadow-sm">
+  <span class="inline-flex items-center justify-center bg-white text-black text-[10px] font-black rounded px-1.5 py-0.5 leading-none select-none">
+    IA
+  </span>
+  <button aria-label="Alternar cuadrícula" class="p-0.5 text-white/80 hover:text-white transition flex items-center justify-center" type="button">
+    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z" opacity="0.2"></path>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect>
+      <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect>
+      <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect>
+      <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect>
+    </svg>
+  </button>
+  <span class="inline-flex items-center gap-1.5 text-[11px] font-bold text-white tracking-wide pr-1 select-none">
+    <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+    AUTO
+  </span>
+</div>
+
+<!-- Derecha: Flash, Detección circular destacada y Menú ⋮ -->
+<div class="flex items-center gap-2">
+  <!-- Botón Flash Rápido -->
+  
+  <!-- Botón de Encuadre/Detección circular destacado (estilo IMAGE_4) -->
+  <button aria-label="Modo de escaneo y detección" class="w-9 h-9 flex items-center justify-center rounded-full bg-yellow-500/10 border-2 border-yellow-400 text-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.25)] hover:scale-105 active:scale-95 transition" type="button">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+      <path d="M3 7V5a2 2 0 012-2h2m10 0h2a2 2 0 012 2v2m0 10v2a2 2 0 01-2 2h-2m-10 0H5a2 2 0 01-2-2v-2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  </button>
+  <!-- Menú de 3 puntos verticales -->
+  <button aria-label="Más opciones" class="w-8 h-9 flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 rounded-full transition" type="button">
+    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"></path>
+    </svg>
+  </button>
+</div></div>
+<!-- Live Detection Feedback Pill (As seen in IMAGE_1) -->
+
+<!-- Technical Context Chips Bar (Faithful reconstruction of IMAGE_10) -->
+<div class="flex items-center justify-center gap-1.5 pt-1" data-purpose="military-electoral-context-chips">
+<!-- Status: Transmisión -->
+
+<!-- Mesa Identifier -->
+
+<!-- Page Indicator -->
+
+</div>
+</header>
+<!-- END: TopBarAndStatusControls -->
+<!-- BEGIN: ViewfinderArea -->
+<!-- Center Framing Zone with E-14 Silhouette and Precision Reticle -->
+
+<!-- END: ViewfinderArea -->
+<!-- BEGIN: BottomCaptureControlsBar -->
+<!-- Bottom dock based strictly on layout of IMAGE_1 with military/electoral dark theme -->
+<footer class="relative z-20 bg-[#0a0e0c]/90 border-t border-brand-border/60 backdrop-blur-xl px-4 pt-3 pb-6 flex flex-col items-center">
+<!-- Primary Controls Row -->
+<div class="w-full max-w-sm mx-auto mb-1 px-1 flex items-center justify-between text-[10px] font-mono font-medium tracking-widest uppercase text-gray-400 select-none"><span class="flex items-center gap-1"><span class="w-1 h-1 rounded-full bg-brand-green/60"></span>SIMULACIÓN</span><span class="text-[9px] text-gray-400 opacity-75">TEST SCORES</span></div><div class="w-full max-w-sm mx-auto mb-3 px-1 flex items-center justify-between gap-1.5 bg-black/60 border border-white/10 rounded-xl p-1.5 backdrop-blur-md shadow-sm z-30" data-purpose="score-simulation-bar"><button type="button" class="flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-[#00E676]/10 border border-[#00E676]/40 hover:bg-[#00E676]/20 active:scale-95 transition-all text-[#00E676] focus:outline-none" title="Simular Score Óptimo"><span class="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse"></span><span class="text-[10px] font-bold tracking-wider uppercase font-mono">Óptimo</span><span class="text-[9px] opacity-75 font-mono">(9.8)</span></button><button type="button" class="flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-yellow-500/10 border border-yellow-500/40 hover:bg-yellow-500/20 active:scale-95 transition-all text-yellow-400 focus:outline-none" title="Simular Score Intermedio"><span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span><span class="text-[10px] font-bold tracking-wider uppercase font-mono">Medio</span><span class="text-[9px] opacity-75 font-mono">(7.8)</span></button><button type="button" class="flex-1 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-red-500/10 border border-red-500/40 hover:bg-red-500/20 active:scale-95 transition-all text-red-400 focus:outline-none" title="Simular Score Bajo"><span class="w-1.5 h-1.5 rounded-full bg-red-400"></span><span class="text-[10px] font-bold tracking-wider uppercase font-mono">Bajo</span><span class="text-[9px] opacity-75 font-mono">(4.2)</span></button></div><div class="w-full flex items-center justify-between max-w-sm px-2 mb-2" data-purpose="shutter-action-dock">
+<!-- Action 1: Importar (Gallery / File picker) -->
+<button class="group flex flex-col items-center justify-center gap-1 text-center w-16 active:opacity-70 transition-all focus:outline-none" type="button">
+<div class="w-10 h-10 rounded-full flex items-center justify-center text-white/90 group-hover:text-brand-green transition-colors">
+<!-- Icon: Document with downward download arrow -->
+<svg class="w-6 h-6 stroke-[1.8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+<path d="M9 12h6m-3-3v6m-7 4h14a2 2 0 002-2V7a2 2 0 00-2-2h-5l-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M12 11v5m0 0l-2-2m2 2l2-2" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+<span class="text-[11px] font-medium text-white/80 tracking-tight">Importar</span>
+</button>
+<!-- Action 2: 0 páginas (Batch page counter) -->
+
+<!-- Action 3: Shutter Button (Central High-Contrast Capture Action) -->
+<div class="flex flex-col items-center -mt-2">
+<button aria-label="Capturar fotografía del acta E-14" class="shutter-glow relative w-[72px] h-[72px] rounded-full p-1 bg-transparent border-[3.5px] border-white flex items-center justify-center active:scale-90 transition-transform duration-100 shadow-[0_0_20px_rgba(0,0,0,0.8)] focus:outline-none focus:border-brand-green" id="shutter-capture-btn" type="button">
+<!-- Inner circular button housing document icon -->
+<div class="w-full h-full rounded-full bg-brand-panel border border-brand-green/40 flex items-center justify-center text-white active:bg-brand-green/20">
+<!-- Document icon with technical text lines -->
+<svg class="w-8 h-8 text-white drop-shadow" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+</button>
+</div>
+<!-- Action 4: Flash / Torch Toggle in bottom bar -->
+<button class="group flex flex-col items-center justify-center gap-1 text-center w-16 active:opacity-70 transition-all focus:outline-none" type="button">
+<div class="w-10 h-10 rounded-full flex items-center justify-center text-white/90 group-hover:text-brand-green transition-colors">
+<!-- Icon: Flash / Torch light crossed or toggleable -->
+<svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+<span class="text-[11px] font-medium text-white/80 tracking-tight">Flash</span>
+</button>
+</div>
+<!-- iOS / Mobile Home Indicator Bar -->
+<nav class="w-full bg-[#080C0A] border-t border-brand-border/80 px-4 py-2 z-30 flex justify-around items-center select-none" aria-label="Navegación principal">
+  <!-- Nav Item: ESCANEAR (Active) -->
+  <button type="button" class="flex flex-col items-center gap-1 group py-1 px-3 focus:outline-none">
+    <div class="w-10 h-8 rounded-full bg-brand-green/20 border border-brand-green flex items-center justify-center text-brand-green shadow-[0_0_10px_rgba(0,230,118,0.2)]">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </div>
+    <span class="text-[10px] font-bold text-brand-green tracking-wider uppercase font-sans">ESCANEAR</span>
+  </button>
+  <!-- Nav Item: ACTAS (1) -->
+  <button type="button" class="flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 group py-1 px-3 focus:outline-none">
+    <div class="w-8 h-8 flex items-center justify-center">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </div>
+    <span class="text-[10px] font-medium tracking-wider uppercase text-gray-400 font-sans">ACTAS (1)</span>
+  </button>
+  <!-- Nav Item: RESUMEN -->
+  <button type="button" class="flex flex-col items-center gap-1 text-gray-400 hover:text-gray-200 group py-1 px-3 focus:outline-none">
+    <div class="w-8 h-8 flex items-center justify-center">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+        <path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </div>
+    <span class="text-[10px] font-medium tracking-wider uppercase text-gray-400 font-sans">RESUMEN</span>
+  </button>
+</nav><div class="w-32 h-1 bg-white/30 rounded-full mt-2" data-purpose="home-indicator"></div>
+</footer>
+<!-- END: BottomCaptureControlsBar -->
+</main>
+<!-- END: CameraRootView -->
+<!-- BEGIN: InteractiveCameraFeedbackScript -->
+<script data-purpose="camera-haptic-simulation">
+    // Subtle visual feedback when pressing shutter button
+    const shutterBtn = document.getElementById('shutter-capture-btn');
+    if (shutterBtn) {
+      shutterBtn.addEventListener('click', () => {
+        // Flash screen animation simulation
+        const flashOverlay = document.createElement('div');
+        flashOverlay.className = 'fixed inset-0 bg-white z-50 pointer-events-none transition-opacity duration-300 opacity-90';
+        document.body.appendChild(flashOverlay);
+        
+        requestAnimationFrame(() => {
+          flashOverlay.style.opacity = '0';
+          setTimeout(() => {
+            flashOverlay.remove();
+          }, 320);
+        });
+      });
+    }
+  </script>
+<!-- END: InteractiveCameraFeedbackScript -->
+
+
+
+
+
+
+
+
+</body></html>

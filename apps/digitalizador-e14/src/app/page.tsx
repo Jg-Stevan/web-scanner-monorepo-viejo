@@ -2,12 +2,16 @@
 
 /**
  * Shell único (D3): TopBar (solo REVISIÓN) + vista activa por estado (zustand)
- * + BottomNav + overlay de notificaciones flotantes. Transiciones 150 ms.
+ * + BottomNav. Transiciones 150 ms.
+ * STITCH REDESIGN (SPEC-e14-redesign-stitch §4/D2): el sistema de
+ * notificaciones flotantes queda ELIMINADO — FloatingBanner ya NO se monta
+ * (archivo borrado) y `notificar` desaparece del store. El feedback vive
+ * SIEMPRE en la UI persistente de estado (píldora/nube/bloque ENVIADO/
+ * franja del visor/feedback en botón).
  */
 import { useE14Store } from "@/lib/e14/store";
 import { TopBar } from "@/components/e14/TopBar";
 import { BottomNav } from "@/components/e14/BottomNav";
-import { FloatingBanner } from "@/components/e14/FloatingBanner";
 import { ScanView } from "@/components/e14/screens/ScanView";
 import { AnalyzingView } from "@/components/e14/screens/AnalyzingView";
 import { ReviewView, ReviewCtas } from "@/components/e14/screens/ReviewView";
@@ -23,7 +27,7 @@ export default function Page() {
     // barra de controles vive SIEMPRE pegada a los CTAs/BottomNav, sin importar
     // la orientación del documento. Cada vista gestiona su propio scroll
     // (Actas/Resumen ya son overflow-y-auto; ScanView cabe por diseño).
-    <div className="h-dvh bg-bg text-ink flex flex-col font-sans overflow-hidden">
+    <div className="h-dvh bg-brand-black text-gray-100 flex flex-col font-sans overflow-hidden">
       {vista === "revision" && <TopBar />}
 
       <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
@@ -41,8 +45,6 @@ export default function Page() {
           {vista === "revision" && <ReviewCtas />}
         </BottomNav>
       )}
-
-      <FloatingBanner />
     </div>
   );
 }

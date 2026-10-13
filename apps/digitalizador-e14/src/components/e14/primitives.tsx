@@ -1,43 +1,42 @@
 /**
- * Primitivas del design system Precision Monitor (SPEC §3).
- * Tone: "ok" | "warn" | "crit" | "neutral" — siempre sobre tokens §5.
+ * Primitivas del design system STITCH (SPEC-e14-redesign-stitch §1/§3.2).
+ * Todo re-vestido con los tokens canónicos del ZIP — NADA del tema
+ * anterior (AC9). Tone: "ok" | "warn" | "crit" | "neutral".
+ * "use client";
  */
-"use client";
 
 import type { ReactNode } from "react";
 
 export type Tone = "ok" | "warn" | "crit" | "neutral";
 
+const toneDot: Record<Tone, string> = {
+  ok: "bg-brand-green",
+  warn: "bg-amber-400",
+  crit: "bg-red-500",
+  neutral: "bg-gray-400",
+};
+
 const toneText: Record<Tone, string> = {
-  ok: "text-ok-tint",
-  warn: "text-warn",
-  crit: "text-crit",
-  neutral: "text-ink-dim",
+  ok: "text-brand-green",
+  warn: "text-amber-400",
+  crit: "text-red-500",
+  neutral: "text-gray-400",
 };
 
-const toneBg: Record<Tone, string> = {
-  ok: "bg-ok-tint",
-  warn: "bg-warn",
-  crit: "bg-crit",
-  neutral: "bg-ink-dim",
-};
-
-/** Dot de estado (8px) con latido opcional (code.html: animate-pulse-sync). */
+/** Dot de estado (mock: w-2 h-2 rounded-full del color del estado). */
 export function StatusDot({ tone, pulse = false }: { tone: Tone; pulse?: boolean }) {
   return (
     <span
-      className={`inline-block w-2 h-2 rounded-full ${toneBg[tone]} ${
+      className={`inline-block w-2 h-2 rounded-full ${toneDot[tone]} ${
         pulse ? "animate-pulse-sync" : ""
       }`}
     />
   );
 }
 
-/** Chip del chrome — CYBER-NEÓN (SPEC-e14-cyber-neon §5): cápsula 34px
- *  mono bold tracking 0.14em. `solid` = relleno SÓLIDO del tono con texto
- *  NEGRO + glow-sm (chip 1 TRANSMISIÓN — cambio núm. 1 de la fila);
- *  inactivo = navy surface-3 + texto blanco + borde white/6 (§5).
- *  El TONO del sólido sigue elegido por estado (§10: ok/crit/ámbar). */
+/** Chip del chrome (mock §3.2.3): `grid grid-cols-3 gap-2` — el ACTIVO es
+ *  relleno sólido del color del estado (mono extrabold xs), los otros 2
+ *  surfaceLight con borde. `solid` = relleno del tono. */
 export function Chip({
   tone = "neutral",
   solid = false,
@@ -52,14 +51,14 @@ export function Chip({
   if (solid) {
     return (
       <span
-        className={`inline-flex items-center h-[34px] px-4 rounded-full font-data text-[11px] font-bold tracking-[0.14em] uppercase whitespace-nowrap ${
+        className={`py-2 px-1 rounded-xl font-mono font-extrabold text-xs tracking-wider uppercase shadow-sm tap-action flex items-center justify-center ${
           tone === "ok"
-            ? "bg-ok-tint text-neon-ink glow-sm"
+            ? "bg-brand-green text-black"
             : tone === "warn"
-              ? "bg-warn text-neon-ink glow-sm-warn"
+              ? "bg-[#F59E0B] text-black"
               : tone === "crit"
-                ? "bg-crit text-neon-ink glow-sm-crit"
-                : "bg-ink-dim text-bg"
+                ? "bg-red-600 text-white"
+                : "bg-brand-surfacelight text-white"
         } ${className}`}
       >
         {children}
@@ -68,33 +67,14 @@ export function Chip({
   }
   return (
     <span
-      className={`inline-flex items-center h-[34px] px-4 rounded-full font-data text-[11px] font-bold tracking-[0.14em] uppercase whitespace-nowrap bg-surface-3 text-white border border-white/6 ${className}`}
+      className={`py-2 px-1 rounded-xl bg-brand-surfacelight border border-brand-border text-white font-mono font-bold text-xs tracking-wider uppercase tap-action flex items-center justify-center ${className}`}
     >
       {children}
     </span>
   );
 }
 
-/** Badge de score ("✓ 9.8/10 ÓPTIMA" / "✕ 4.2/10 RECHAZADA"). */
-export function ScoreBadge({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return (
-    <span
-      className={`flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded border font-data whitespace-nowrap ${
-        tone === "ok"
-          ? "text-ok-tint bg-ok-tint/15 border-ok-tint/30"
-          : tone === "warn"
-            ? "text-warn bg-warn/15 border-warn/30"
-            : tone === "crit"
-              ? "text-crit bg-crit/15 border-crit/30"
-              : "text-ink-dim bg-black/60 border-line"
-      }`}
-    >
-      {children}
-    </span>
-  );
-}
-
-/** Barra segmentada (4px) para datos fraccionarios (DESIGN.md). */
+/** Barra segmentada (4px) para datos fraccionarios. */
 export function SegmentedBar({
   total,
   filled,
@@ -111,56 +91,44 @@ export function SegmentedBar({
       {Array.from({ length: total }, (_, i) => (
         <span
           key={i}
-          className={`h-1 flex-1 rounded-[1px] ${i < filled ? toneBg[tone] : "bg-line"}`}
+          className={`h-1 flex-1 rounded-[1px] ${i < filled ? toneDot[tone] : "bg-brand-border"}`}
         />
       ))}
     </div>
   );
 }
 
-/** Botón de la barra fija de revisión (Recortar / Rotar / Filtros / Texto /
- *  Pantalla completa). F5/D38: alto táctil 44px GARANTIZADO y label
- *  `truncate` — la barra nunca cambia de tamaño al girar el documento o
- *  cambiar de estado. F-OCR/D39: prop opcional `active` — re-vestido del
- *  ToolItem del lab (Fuente: apps/scanner-lab/src/components/scanner/
- *  EditorView.tsx L2205-2210 — `active={page?.ocrDone === true}`, L2208):
- *  cuando active, solo cambia el TINTE (borde + texto + fondo 10%) —
- *  alto/tamaño IDÉNTICOS (criterio D38 sigue vigente).
- *  D5 (SPEC-rediseno-chrome-3-estados Rev. 3): prop opcional `tone` —
- *  con "crit" el botón se pinta ROJO SÓLIDO (mock 1) — SOLO lo usa
- *  «Recortar» en RECHAZADA.
- *  CYBER-NEÓN (SPEC-e14-cyber-neon §2 tipografía + §10): cápsula
- *  rounded-full, mono bold uppercase tracking 0.1em, neutro = navy
- *  surface-3 + borde white/6 (mismo lenguaje que los chips 2-3),
- *  tono crit sólido con glow-sm-crit. */
+/** Botón de la fila de acciones de revisión (Recortar · Rotar 90° ·
+ *  Pantalla completa — mock §3.2.5): `py-2 px-2 rounded-xl bg-brand-surface
+ *  border border-brand-border text-gray-300 text-xs`. La fila es NEUTRA
+ *  (el estado vive en esquinas AR + píldora flotante — la prop `tone`
+ *  queda aceptada por compat y NO pinta nada especial). `active` (F-OCR
+ *  D39) solo cambia el tinte (borde + texto verde), mismo tamaño. */
 export function ToolbarBtn({
   icon,
   label,
   onClick,
   active = false,
-  tone,
 }: {
   icon: ReactNode;
   label: string;
   onClick?: () => void;
   /** D39/F-OCR: distingue el botón cuando ya hay texto reconocido. */
   active?: boolean;
-  /** D5 Rev. 3: «Recortar» rojo sólido en RECHAZADA (mock 1). */
+  /** Compat — ignorado (fila neutra, SPEC §3.2.5). */
   tone?: "crit";
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 min-w-0 min-h-11 h-11 px-3 rounded-full active:scale-95 transition-all flex items-center justify-center gap-1.5 font-data text-[10px] font-bold tracking-[0.1em] uppercase border ${
-        tone === "crit"
-          ? "bg-crit border-crit text-white glow-sm-crit"
-          : active
-            ? "border-ok-tint/40 bg-ok-tint/10 text-ok-tint"
-            : "bg-surface-3 border-white/6 text-ink"
+      className={`min-h-11 py-2 px-2 rounded-xl border font-sans font-medium text-xs flex items-center justify-center gap-1.5 tap-action transition-colors leading-tight text-center ${
+        active
+          ? "bg-brand-surface border-brand-green/50 text-brand-green"
+          : "bg-brand-surface border-brand-border text-gray-300 hover:bg-brand-surfacelight"
       }`}
     >
-      <span className={`${tone === "crit" ? "text-white" : "text-ok-tint"} shrink-0 flex items-center justify-center`}>
+      <span className={`shrink-0 flex items-center justify-center ${active ? "text-brand-green" : "text-gray-300"}`}>
         {icon}
       </span>
       <span className="truncate">{label}</span>
@@ -168,14 +136,11 @@ export function ToolbarBtn({
   );
 }
 
-/**
- * Botón CTA grande del footer — CYBER-NEÓN (SPEC-e14-cyber-neon §8):
- * cápsula 52px radio completo, mono extrabold uppercase; el relleno
- * sólido lleva glow-cta del tono (§10) y el outline-warn (REVISIÓN
- * HUMANA, §10) = bg warn/12 + borde warn/40 + glow ámbar.
- * variant: "ok" (neón sólido #03DF73 + texto negro) · "warn" · "crit" ·
- * "outline" (oscuro) · "outline-crit" · "outline-warn".
- */
+/** Botón CTA grande del footer (mocks 2-6):
+ *  · ok → verde sólido «SEGUIR ESCANEANDO» (py-3.5 rounded-2xl, glow verde)
+ *  · crit → rojo sólido «OBLIGATORIO REPETIR FOTO» (py-3.5-4, glow rojo)
+ *  · warn → ámbar outline «REPETIR FOTO» (py-2.5 rounded-xl mono)
+ *  · outline / outline-* → REVISIÓN HUMANA surface/border (§3.2.6). */
 export function PrimaryBtn({
   variant = "ok",
   onClick,
@@ -193,14 +158,17 @@ export function PrimaryBtn({
   disabled?: boolean;
 }) {
   const base =
-    "flex-1 min-w-0 h-[52px] px-2.5 rounded-full flex items-center justify-center gap-2 font-data font-extrabold text-[10px] md:text-[11px] uppercase tracking-[0.1em] transition-all transform active:scale-[0.98] leading-tight text-center";
+    "flex-1 min-w-0 px-3 flex items-center justify-center gap-2 uppercase tracking-wider leading-tight text-center transition-all tap-action";
   const styles: Record<string, string> = {
-    ok: "bg-neon-strong hover:bg-neon-strong/90 text-neon-ink glow-cta",
-    warn: "bg-warn hover:bg-warn/90 active:bg-warn/80 text-warn-ink glow-cta-warn",
-    crit: "bg-crit hover:bg-crit/90 active:bg-crit-deep text-white glow-cta-crit",
-    outline: "bg-surface-2 hover:bg-hover text-ink-dim border border-outline-dim",
-    "outline-crit": "bg-white/5 hover:bg-white/10 text-ink-dim border border-crit/30",
-    "outline-warn": "bg-warn/12 hover:bg-warn/20 text-warn border border-warn/40 glow-sm-warn",
+    ok: "bg-brand-green hover:bg-emerald-400 text-black font-extrabold text-sm py-3.5 px-6 rounded-2xl shadow-[0_4px_20px_rgba(0,230,118,0.35)]",
+    crit: "bg-[#E52222] hover:bg-red-600 text-white font-black text-xs sm:text-sm py-3.5 rounded-2xl shadow-[0_4px_20px_rgba(229,34,34,0.4)]",
+    warn: "bg-brand-surface hover:bg-brand-surfacelight border border-amber-500/80 text-amber-400 font-mono font-bold text-[10px] py-2.5 rounded-xl shadow-sm",
+    outline:
+      "bg-brand-surface hover:bg-brand-surfacelight border border-brand-border text-gray-200 font-bold text-xs py-3.5 rounded-2xl",
+    "outline-crit":
+      "bg-brand-surface hover:bg-brand-surfacelight border border-brand-border text-gray-200 font-bold text-xs py-3.5 rounded-2xl",
+    "outline-warn":
+      "bg-brand-surface hover:bg-brand-surfacelight border border-brand-border text-gray-200 font-bold text-xs py-3.5 rounded-2xl",
   };
   return (
     <button
@@ -211,38 +179,8 @@ export function PrimaryBtn({
       aria-disabled={disabled}
       className={`${base} ${styles[variant]} ${disabled ? "opacity-40 cursor-not-allowed shadow-none" : ""}`}
     >
-      {icon && <span className="shrink-0 flex items-center justify-center">{icon}</span>}
+      {icon && <span className={`shrink-0 flex items-center justify-center ${toneText[variant === "ok" ? "ok" : variant === "crit" ? "crit" : variant === "warn" ? "warn" : "neutral"]}`}>{icon}</span>}
       <span>{children}</span>
-    </button>
-  );
-}
-
-/** Pill de conexión ("● EN LÍNEA" / "● OFFLINE") — clicable. */
-export function StatusPill({
-  online,
-  onClick,
-  compact = false,
-}: {
-  online: boolean;
-  onClick?: () => void;
-  compact?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={!online}
-      title={online ? "Sincronizado en tiempo real — tocar para simular offline" : "Sin conexión — tocar para reconectar"}
-      className={`flex items-center gap-1.5 ${
-        compact ? "px-2 py-1" : "px-2.5 py-1.5"
-      } rounded-full border transition-colors ${
-        online
-          ? "bg-ok-ink/60 border-ok-tint/40 text-ok-tint"
-          : "bg-warn-ink/70 border-warn/40 text-warn"
-      }`}
-    >
-      <StatusDot tone={online ? "ok" : "warn"} pulse />
-      <span className="label-caps !text-[10px] tracking-widest">{online ? "EN LÍNEA" : "OFFLINE"}</span>
     </button>
   );
 }
