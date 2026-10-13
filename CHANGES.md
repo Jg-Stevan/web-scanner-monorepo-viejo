@@ -661,6 +661,7 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 
 **Verificado:** `tsc` core/app 0 · `eslint` 0 · e14 = 0 · ocr.ts = 0 · packages = 0 · sensor-profiler/photoSettings = 0 · package.json = 0 · `git diff main -- apps/digitalizador-e14 packages` = 0. E2E en navegador / dev server (gate 5): corte forzado `timeBudgetMs: 200` genera `window.__lastBurst.heapProbe` y `burst.pipe` con `samples > 5`, `seriesMB.length === samples`, `minMB <= maxMB`, `sawtoothMB >= 0`; informe diag JSON con `burst.pipe` y `burst.heapProbe` poblados; línea TXT `  sonda heap: 6 muestras · 44–55 MB · sierra 16 MB`; cuadre aritmético (gate 6) `wallFireMs + graceWaitedMs + pipeToMarkMs ≈ acquisitionMs` verificado con `cap 0 OK Δ 244 ms` (dentro de ±250 ms); capturas sin corte permanecen sin campos nuevos ni líneas TXT extras.
 
+  perf/lote2-preview
 ## 0-vigesimo-sexto. PERF — Post-captura caliente F2 Lote 1 (rama `perf/post-capture-f2`)
 
 **Base:** INSTRUCCIONES FASE 2: post-captura caliente (F2) — v1 sobre rama nueva desde `main` (`3b3b74b`, PR #39 mergeado). Baseline SM-A135M diag 0951 (`c515e3b`): generación PDF 18.8 s (QA 59.6 s), OCR frío 38.1 s y caliente 38.3 s (reinstalando motor en cada llamada), filtros bw 29.6 s sin visibilidad de engine, 613 long tasks (113 s bloqueados). Lote 1 ataca las causas raíz en JS sin tocar el pipeline de captura.
@@ -687,3 +688,4 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 **NO-objetivos respetados:** OCR downscale (futuro, con harness de accuracy) — `ocr.ts` CERO toques · muro 2000 ms / photo grace cerrados · sin refactors ni renombres · `store.ts`, `detector-client.ts`, `sw.js`, `apps/digitalizador-e14/`, `package.json`, `bun.lock` byte a byte intactos.
 
 **Verificado:** `bun run core:check` (tsc) = 0 · `bun run app:check` (tsc) = 0 · `bun run lint` (eslint) = 0 · `git diff --stat` contra `perf/post-capture-f2` = SOLO `image-processor.ts` + `EditorView.tsx` + `diag-report.ts` + `pdf-export.ts` (excepción F2-F §3) + `CHANGES.md`. Pendiente del dueño: gates físicos A13 (L2-G1…L2-G5, §6 de la spec) con el test estándar.
+ main
