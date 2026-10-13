@@ -148,12 +148,36 @@ export function sanitizeFileName(title: string): string {
 async function pageForAttempt(
   src: string,
   filter: ScanDocument["pages"][number]["filter"],
-  attempt: ExportAttempt
+  attempt: ExportAttempt,
+  allowJpegFast = true
 ): Promise<{ dataUrl: string; w: number; h: number; isPng: boolean }> {
   const isPng = PNG_FILTERS.has(filter) && src.startsWith("data:image/png");
   if (isPng) {
-    const img = await loadImage(src);
-    return { dataUrl: src, w: img.naturalWidth, h: img.naturalHeight, isPng: true };
+    if (allowJpegFast) {
+      const r = await toJpegAt(src, 0, 0.95);
+      return { dataUrl: r.dataUrl, w: r.width, h: r.height, isPng: false };
+    }
+    let w = 0;
+    let h = 0;
+    if (typeof createImageBitmap === "function") {
+      try {
+        const res = await fetch(src);
+        const blob = await res.blob();
+        const bmp = await createImageBitmap(blob);
+        w = bmp.width;
+        h = bmp.height;
+        bmp.close();
+      } catch {
+        const img = await loadImage(src);
+        w = img.naturalWidth;
+        h = img.naturalHeight;
+      }
+    } else {
+      const img = await loadImage(src);
+      w = img.naturalWidth;
+      h = img.naturalHeight;
+    }
+    return { dataUrl: src, w, h, isPng: true };
   }
   const r = await toJpegAt(src, attempt.longSide, attempt.quality);
   return { dataUrl: r.dataUrl, w: r.width, h: r.height, isPng: false };
@@ -362,6 +386,7 @@ export async function buildDocPdf(
   const totalPages = doc.pages.length;
   const budgetBytes = Math.min(Math.max(totalPages, 3), 8) * MB;
   const attempts = attemptsFor(quality);
+  const allowJpegFast = quality !== "máxima";
   let attemptIdx = 0;
   let bytes = 0;
   let pdf: jsPDF | null = null;
@@ -372,7 +397,7 @@ export async function buildDocPdf(
     pdf = null;
     for (let i = 0; i < totalPages; i += 1) {
       const p = doc.pages[i]!;
-      const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
+      const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt, allowJpegFast);
       const { pageW, pageH, orientation } = adaptivePageSize(w, h);
       if (first) {
         pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
@@ -488,6 +513,7 @@ export async function buildLibraryPdf(
   // Presupuesto global: escalado por nº de páginas con techo de 30 MB.
   const budgetBytes = Math.min(Math.max(pageCount, 3), 30) * MB;
   const attempts = attemptsFor(quality);
+  const allowJpegFast = quality !== "máxima";
   let attemptIdx = 0;
   let bytes = 0;
   let pdf: jsPDF | null = null;
@@ -515,7 +541,7 @@ export async function buildLibraryPdf(
       onProgress?.({ docIndex: d + 1, docCount: docs.length, title: doc.title });
       for (let i = 0; i < doc.pages.length; i += 1) {
         const p = doc.pages[i]!;
-        const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt);
+        const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt, allowJpegFast);
         const { pageW, pageH, orientation } = adaptivePageSize(w, h);
         if (first) {
           pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
