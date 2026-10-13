@@ -149,6 +149,29 @@ export interface DiagReport {
           graceWaitedMsMedian: number | null;
           dispatchSource: { photo: number; frames: number };
         };
+        /** v4.3 (v4 §2.1) — tramo opaco por captura CON CORTE (recordBurst →
+         *  mark capture_shot): total + sub-marks del pipe de foto (sniff /
+         *  dataURL — solo camino photo) + jobs del editor al aterrizar.
+         *  Cuadre §2.4: acquisitionMs ≈ burstWaitedMs(neto de gracia) +
+         *  grace + pipeToMarkMs. Ausente en lotes sin cortes → arrays
+         *  vacíos (informes viejos comparables). */
+        pipe: {
+          toMarkMs: number[];
+          toMarkMsMedian: number | null;
+          sniffMs: number[];
+          dataUrlMs: number[];
+          bgJobsAtShot: number[];
+        };
+        /** v4.3 (v4 §2.2) — congestión del hilo partida por el CORTE (solo
+         *  capturas con corte; mismo observer de long tasks): espera
+         *  (capture_fired → corte: muro + gracia) vs pipe (corte →
+         *  capture_shot: el tramo opaco). Cuadre §2.4: espera + pipe ≈
+         *  windowCongestion de la MISMA captura. */
+        congestion: {
+          cutCaptures: number;
+          congestionWait: Array<{ count: number; totalMs: number }>;
+          congestionPipe: Array<{ count: number; totalMs: number }>;
+        };
       };
     };
     editor: {
@@ -417,6 +440,15 @@ export async function buildDiagReport(): Promise<DiagReport> {
   // ms que la gracia esperó a la huérfana; ausente = la gracia no corrió).
   const burstGraceWaitedMs: number[] = [];
   let burstGraceRan = 0;
+  // v4.3 (v4 §2.1/§2.2) — tramo opaco + congestión partida por el corte:
+  // SOLO capturas con corte traen pipeToMarkMs en el meta (ausente en
+  // rutas sin corte → arrays alineados únicamente con cortes).
+  const burstPipeToMarkMs: number[] = [];
+  const burstPipeSniffMs: number[] = [];
+  const burstPipeDataUrlMs: number[] = [];
+  const burstPipeBgJobs: number[] = [];
+  const burstCongestionWait: Array<{ count: number; totalMs: number }> = [];
+  const burstCongestionPipe: Array<{ count: number; totalMs: number }> = [];
   const longTaskEntries = perfProbe.longTaskEntries;
   for (const s of shotMarks) {
     const fired = lastBefore(firedShots, s.ts);
@@ -442,6 +474,48 @@ export async function buildDiagReport(): Promise<DiagReport> {
       if (typeof grace === "number" && Number.isFinite(grace)) {
         burstGraceRan += 1;
         burstGraceWaitedMs.push(grace);
+      }
+      // v4.3 — tramo opaco: SOLO capturas con corte (campo pipeToMarkMs del
+      // meta, ausente en rutas sin corte — gate 3 de la spec v4).
+      const pipeToMark = s.meta?.pipeToMarkMs;
+      if (typeof pipeToMark === "number" && Number.isFinite(pipeToMark)) {
+        burstPipeToMarkMs.push(pipeToMark);
+        const sniff = s.meta?.pipeSniffMs;
+        if (typeof sniff === "number" && Number.isFinite(sniff)) {
+          burstPipeSniffMs.push(sniff);
+        }
+        const dataUrl = s.meta?.pipeDataUrlMs;
+        if (typeof dataUrl === "number" && Number.isFinite(dataUrl)) {
+          burstPipeDataUrlMs.push(dataUrl);
+        }
+        const jobs = s.meta?.bgJobsAtShot;
+        if (typeof jobs === "number" && Number.isFinite(jobs)) {
+          burstPipeBgJobs.push(jobs);
+        }
+        if (fired) {
+          // v4 §2.2 — instante del corte = mark − pipeToMarkMs (el tramo
+          // abrió en el recordBurst que siguió a la gracia). MISMO criterio
+          // de ventana que windowCongestion (arranque dentro), partido por
+          // el corte → espera + pipe cuadran con la ventana (§2.4).
+          const cutTs = Math.max(fired.ts, s.ts - pipeToMark);
+          let wCount = 0;
+          let wTotal = 0;
+          let pCount = 0;
+          let pTotal = 0;
+          for (const lt of longTaskEntries) {
+            if (lt.start >= fired.ts && lt.start <= s.ts) {
+              if (lt.start < cutTs) {
+                wCount += 1;
+                wTotal += lt.duration;
+              } else {
+                pCount += 1;
+                pTotal += lt.duration;
+              }
+            }
+          }
+          burstCongestionWait.push({ count: wCount, totalMs: wTotal });
+          burstCongestionPipe.push({ count: pCount, totalMs: pTotal });
+        }
       }
       if (fired) {
         let count = 0;
@@ -493,6 +567,21 @@ export async function buildDiagReport(): Promise<DiagReport> {
                 (burstByReason["frame_cap"] ?? 0) +
                 (burstByReason["error"] ?? 0),
             },
+          },
+          // v4.3 (v4) — tramo opaco (§2.1) + congestión partida (§2.2):
+          // bloques ADITIVOS; sin cortes en la sesión → arrays vacíos y
+          // cutCaptures 0 (informes pre-v4 comparables campo a campo).
+          pipe: {
+            toMarkMs: burstPipeToMarkMs,
+            toMarkMsMedian: median(burstPipeToMarkMs),
+            sniffMs: burstPipeSniffMs,
+            dataUrlMs: burstPipeDataUrlMs,
+            bgJobsAtShot: burstPipeBgJobs,
+          },
+          congestion: {
+            cutCaptures: burstPipeToMarkMs.length,
+            congestionWait: burstCongestionWait,
+            congestionPipe: burstCongestionPipe,
           },
         }
       : undefined;
@@ -784,6 +873,44 @@ export function buildDiagTxt(r: DiagReport): string {
           ` · ${gr.framesFallback} a frames` +
           ` · espera mediana ${fmtMs(gr.graceWaitedMsMedian)}`
       );
+    }
+    // v4.3 (v4 §2.1/§2.2) — tramo opaco + congestión partida por el corte.
+    // SOLO si hubo cortes en la sesión (sin cortes: líneas ausentes, TXT
+    // idéntico a pre-v4 — gate 4). Cuadre §2.4 por captura: gap
+    // disparo→foto ≈ muro (neto de gracia) + gracia + tramo opaco.
+    const pip = s.pages.burst.pipe;
+    const cong = s.pages.burst.congestion;
+    if (cong.cutCaptures > 0) {
+      const toMarkTxt = pip.toMarkMs
+        .slice(0, 5)
+        .map((v) => `${(v / 1000).toFixed(1)} s`)
+        .join(" · ");
+      push(
+        `  tramo opaco: ${cong.cutCaptures} corte${cong.cutCaptures === 1 ? "" : "s"} · mediana ${fmtMs(pip.toMarkMsMedian)} (${toMarkTxt})`
+      );
+      const sub: string[] = [];
+      if (pip.sniffMs.length > 0) {
+        sub.push(
+          `sniff ${pip.sniffMs.slice(0, 5).map((v) => `${Math.round(v)} ms`).join(" · ")}`
+        );
+      }
+      if (pip.dataUrlMs.length > 0) {
+        sub.push(
+          `dataURL ${pip.dataUrlMs.slice(0, 5).map((v) => `${(v / 1000).toFixed(2)} s`).join(" · ")}`
+        );
+      }
+      if (pip.bgJobsAtShot.length > 0) {
+        sub.push(`bgJobs@shot ${pip.bgJobsAtShot.slice(0, 5).join(" · ")}`);
+      }
+      if (sub.length > 0) push(`  pipe foto: ${sub.join(" · ")}`);
+      const congTxt = cong.congestionWait
+        .slice(0, 5)
+        .map((c, i) => {
+          const p = cong.congestionPipe[i];
+          return `${c.count}t/${(c.totalMs / 1000).toFixed(1)}s→${p ? `${p.count}t/${(p.totalMs / 1000).toFixed(1)}s` : DASH}`;
+        })
+        .join(" · ");
+      push(`  congestión espera→pipe: ${congTxt || DASH}`);
     }
   }
   const renders2 = s.editor.firstRenders[1];

@@ -83,6 +83,7 @@ import { dataUrlBytes, formatBytes } from "@jg-stevan/scanner-core/format";
 import { cn } from "@/lib/utils";
 import { perfProbe } from "@/lib/perf-probe";
 import { readImageLongSide } from "@/lib/image-size";
+import { beginBackgroundJob, endBackgroundJob } from "@/lib/burst-budget";
 import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
@@ -624,6 +625,12 @@ export default function EditorView() {
     setPreview(null);
     setPreviewLoading(true);
     void (async () => {
+      // v4 §2.3 (v4.3, burst-budget) — jobs en background #2/#3 del editor:
+      // aplicación de filtros bw/text + generación del preview procesado
+      // (el MISMO processImage). Pueden solaparse con la captura SIGUIENTE
+      // (candidato #3 del tramo opaco) → contador aditivo que el mark
+      // capture_shot estampa como bgJobsAtShot. Instrumentación pura.
+      beginBackgroundJob();
       try {
         // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
         // estricto por construcción: lo que ves ES la imagen guardada.
@@ -665,6 +672,9 @@ export default function EditorView() {
       } catch {
         if (!cancelled) setPreview({ url: page.original, w: 0, h: 0, engine: "canvas" });
       } finally {
+        // v4 §2.3 — SIEMPRE libera el contador (jobs pareados), incluso si
+        // el efecto se canceló a mitad del reproceso.
+        endBackgroundJob();
         if (!cancelled) setPreviewLoading(false);
       }
     })();

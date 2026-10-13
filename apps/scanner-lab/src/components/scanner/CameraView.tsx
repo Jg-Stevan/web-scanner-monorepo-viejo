@@ -71,9 +71,14 @@ import {
 import { dataUrlBytes } from "@jg-stevan/scanner-core/format";
 import { perfProbe } from "@/lib/perf-probe";
 import {
+  beginBackgroundJob,
+  collectBurstPipeMeta,
+  endBackgroundJob,
   getBurstConfig,
   isAcquisitionActive,
   makeThumbSampler,
+  noteBurstPipeDataUrl,
+  noteBurstPipeSniff,
   recordBurst,
   recordVideoTrackSize,
   setAcquisitionActive,
@@ -891,6 +896,10 @@ export default function CameraView() {
     async (pageId: string, src: HTMLImageElement | HTMLCanvasElement) => {
       const apply = (patch: Partial<CapturePage>) =>
         useScannerStore.getState().updateCapturePage(pageId, patch);
+      // v4 §2.3 (v4.3) — job en background #1: la detección de bordes
+      // full-res de ESTA captura puede solaparse con la SIGUIENTE (candidato
+      // #3 del tramo opaco). Contador aditivo — instrumentación pura.
+      beginBackgroundJob();
       try {
         const detected = await detectDocumentEdges(src);
         const page = useScannerStore
@@ -912,6 +921,9 @@ export default function CameraView() {
         apply({ quad: detected, autoQuadPending: false });
       } catch {
         apply({ autoQuadPending: false });
+      } finally {
+        // v4 §2.3 — SIEMPRE libera el contador (jobs pareados).
+        endBackgroundJob();
       }
     },
     []
@@ -954,6 +966,11 @@ export default function CameraView() {
         // presupuesto (burstWaitedMs = wallFireMs del informe) + salud del
         // sampler §B (muestras y coste de la última).
         const burstMeta = pendingBurstRef.current;
+        // v4 §2.1/§2.3 (v4.3) — cierra el tramo opaco (recordBurst → ESTE
+        // mark) AQUÍ: cuelga pipeSniffMs/pipeDataUrlMs/pipeToMarkMs/
+        // bgJobsAtShot del meta. Null en rutas sin corte (foto normal,
+        // legacy, galería) → meta byte-a-byte con pre-v4 (gate 3).
+        const pipeMeta = burstMeta === null ? null : collectBurstPipeMeta();
         perfProbe.mark(
           "capture_shot",
           burstMeta === null
@@ -970,6 +987,23 @@ export default function CameraView() {
                 // v1/v1.1 intactos, nada renombrado ni eliminado).
                 ...(burstMeta.graceWaitedMs !== null
                   ? { grace: burstMeta.graceWaitedMs }
+                  : {}),
+                // v4 (v4.3) — tramo opaco, SOLO en capturas con corte:
+                // total recordBurst→mark + jobs del editor al aterrizar +
+                // sub-marks del pipe de foto (ausentes si el dispatch fue de
+                // frames). Campos aditivos opcionales — marks v1/v1.1
+                // intactos, cero nombres nuevos de mark.
+                ...(pipeMeta !== null
+                  ? {
+                      pipeToMarkMs: pipeMeta.pipeToMarkMs,
+                      bgJobsAtShot: pipeMeta.bgJobsAtShot,
+                      ...(pipeMeta.pipeSniffMs !== null
+                        ? { pipeSniffMs: pipeMeta.pipeSniffMs }
+                        : {}),
+                      ...(pipeMeta.pipeDataUrlMs !== null
+                        ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
+                        : {}),
+                    }
                   : {}),
               }
         );
@@ -1608,12 +1642,21 @@ export default function CameraView() {
       try {
         const capPx =
           sensorProfileRef.current?.safeCapPx ?? getSensorSafeCap();
+        // v4 §2.1 (v4.3) — sub-marks del TRAMO OPACO (reloj monotónico):
+        // cuánto de los ~14.6 s post-corte es sniff real (~192 KB), cuánto
+        // FileReader (3.5 MB → base64 4.7 MB) y cuánto NADA medible (la
+        // congestión que v5 debe atacar). Solo rutas con corte — el tramo
+        // está abierto por recordBurst({cutPipe}); en el resto son no-ops.
+        const sniffT0 = performance.now();
         const sniffed = await readBlobLongSide(blob);
+        noteBurstPipeSniff(performance.now() - sniffT0);
         const clamped =
           sniffed !== null && sniffed <= capPx
             ? blob
             : await clampBlobToSafeCap(blob, capPx);
+        const urlT0 = performance.now();
         const url = await blobToDataUrl(clamped);
+        noteBurstPipeDataUrl(performance.now() - urlT0);
         if (!url) return false;
         await handleCaptureDataUrl(url);
         return true;
@@ -1668,6 +1711,9 @@ export default function CameraView() {
             photoBytes: gracePhoto.size,
             graceWaitedMs,
             dispatchSource: "photo",
+            // v4 §2.1 — ruta con corte: abre el tramo opaco que el mark
+            // capture_shot cerrará (pipeToMarkMs + sub-marks del pipe).
+            cutPipe: true,
           }
         );
         if (await dispatchPhotoBlob(gracePhoto)) return;
@@ -1683,10 +1729,12 @@ export default function CameraView() {
         reason,
         n,
         performance.now() - burstT0,
-        { ...burstExtra, graceWaitedMs, dispatchSource: "frames" }
+        // v4 §2.1 — ruta con corte (dispatch de frames): abre el tramo
+        // opaco para pipeToMarkMs (sniff/dataUrl quedan null — no corrieron).
+        { ...burstExtra, graceWaitedMs, dispatchSource: "frames", cutPipe: true }
       );
       if (!(await dispatchBestFrame(cands))) {
-        pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, burstExtra);
+        pendingBurstRef.current = recordBurst("error", 0, performance.now() - burstT0, { ...burstExtra, cutPipe: true });
       }
     };
 

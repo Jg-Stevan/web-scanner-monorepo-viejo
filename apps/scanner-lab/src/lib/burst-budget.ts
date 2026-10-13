@@ -29,6 +29,15 @@
  *        llega dentro de la gracia → foto COMPLETA (~4000 px); si no →
  *        caída al camino actual de frames. `photoGraceMs: 0` = método
  *        A/B de retroceso (comportamiento exacto de antes de la Fase D).
+ *   §4 — v4 «DIAGNÓSTICO del tramo opaco» (100 % instrumentación, cero
+ *        cambios de comportamiento): tras el corte, el tramo
+ *        recordBurst → mark capture_shot midió ~14.6 s en A13 con ~1 s de
+ *        trabajo REAL dentro (sniff + FileReader). Esta capa abre un
+ *        "pipe" en cada recordBurst de ruta con corte (`cutPipe`) y lo
+ *        cierra en el mark: cuelga pipeSniffMs/pipeDataUrlMs/pipeToMarkMs/
+ *        bgJobsAtShot del meta de capture_shot + partida de la congestión
+ *        en DOS sub-ventanas (espera: fired→corte · pipe: corte→shot) que
+ *        consume el informe diag v4.3. Con los datos, v5 diseña el fix.
  *   §B — Salida por estabilidad: miniatura de 64×64 del preview (señal
  *        BARATA, prohibido comparar a 4032 px); `stabilityFrames` deltas
  *        consecutivos por debajo del umbral → `stable`.
@@ -139,6 +148,21 @@ export interface BurstStats {
    *  ("photo") o frames del preview ("frames"). Null en las rutas que no
    *  pasaron por un corte presupuestado (foto normal, legacy, demo). */
   dispatchSource: "photo" | "frames" | null;
+  /** v4 §2.1 (v4.3) — duración de readBlobLongSide dentro del tramo opaco
+   *  (solo rutas con corte que despacharon foto; null: no corrió). */
+  pipeSniffMs: number | null;
+  /** v4 §2.1 (v4.3) — duración de blobToDataUrl (FileReader) dentro del
+   *  tramo opaco (solo rutas con corte que despacharon foto; null: no
+   *  corrió — p. ej. dispatch de frames). */
+  pipeDataUrlMs: number | null;
+  /** v4 §2.1 (v4.3) — total del tramo opaco: recordBurst → mark
+   *  capture_shot (solo rutas con corte; null: sin corte). Cuadre §2.4:
+   *  acquisitionMs ≈ waitedMs(neto de gracia) + graceWaitedMs +
+   *  pipeToMarkMs. */
+  pipeToMarkMs: number | null;
+  /** v4 §2.3 (v4.3) — jobs del editor en vuelo (autoQuad/filtros/preview)
+   *  al llegar al mark (solo rutas con corte; null: sin corte). */
+  bgJobsAtShot: number | null;
 }
 
 let lastStats: BurstStats | null = null;
@@ -156,8 +180,18 @@ export function recordBurst(
     /** v3 Fase D (v4.2) — campos aditivos; ausentes → null. */
     graceWaitedMs?: number | null;
     dispatchSource?: "photo" | "frames" | null;
+    /** v4 §2.1 (v4.3) — true SOLO en las salidas que pasaron por CORTE de
+     *  presupuesto (dispatchAfterCut): abre el tramo opaco
+     *  (recordBurst → mark capture_shot) para los sub-marks del pipe.
+     *  Ausente/false → CIERRA cualquier tramo pendiente (las rutas sin
+     *  corte no llevan campos nuevos: marks byte-a-byte con pre-v4). */
+    cutPipe?: boolean;
   }
 ): BurstStats {
+  // v4 §2.1 — el corte de ESTA salida abre (o cierra) el tramo opaco. Se
+  // toma AQUÍ el instante (junto al waitedMs que se registra) para que
+  // pipeToMarkMs cuadre con la aritmética del informe (§2.4).
+  pipe = extra?.cutPipe === true ? { openedAt: performance.now(), sniffMs: null, dataUrlMs: null } : null;
   lastStats = {
     at: Date.now(),
     exitReason,
@@ -168,6 +202,10 @@ export function recordBurst(
     lastSampleCostMs: extra?.lastSampleCostMs ?? null,
     graceWaitedMs: extra?.graceWaitedMs ?? null,
     dispatchSource: extra?.dispatchSource ?? null,
+    pipeSniffMs: null,
+    pipeDataUrlMs: null,
+    pipeToMarkMs: null,
+    bgJobsAtShot: null,
   };
   if (typeof window !== "undefined") {
     (window as unknown as Record<string, unknown>).__lastBurst = { ...lastStats };
@@ -177,6 +215,99 @@ export function recordBurst(
 
 export function getLastBurst(): BurstStats | null {
   return lastStats;
+}
+
+/* ── v4 §2.1 — tramo opaco: recordBurst → mark capture_shot ─────────────── */
+
+/** Estado del tramo opaco de la captura EN VUELO (SOLO rutas con corte:
+ *  `recordBurst(..., { cutPipe: true })` lo abre). Instrumentación pura —
+ *  cero cambios de comportamiento: midió 14.6 s en A13 (build c348dcd)
+ *  con ~1 s de trabajo REAL dentro; con estos sub-marks (sniff/dataURL/
+ *  total + jobs del editor + congestión partida) v5 diseña el fix. */
+interface BurstPipeState {
+  /** performance.now() del recordBurst que abrió el tramo (= instante del
+   *  corte, tras la gracia). Base de pipeToMarkMs. */
+  openedAt: number;
+  /** Duración de readBlobLongSide (camino foto; null: no corrió). */
+  sniffMs: number | null;
+  /** Duración de blobToDataUrl (camino foto; null: no corrió). */
+  dataUrlMs: number | null;
+}
+
+let pipe: BurstPipeState | null = null;
+
+/** v4 §2.1 — duración del sniff de cabecera (readBlobLongSide) dentro del
+ *  tramo opaco. No-op si el tramo no está abierto (ruta sin corte). */
+export function noteBurstPipeSniff(ms: number): void {
+  if (pipe === null || !Number.isFinite(ms)) return;
+  pipe.sniffMs = Math.max(0, Math.round(ms));
+}
+
+/** v4 §2.1 — duración de la conversión blob→dataURL (FileReader) dentro
+ *  del tramo opaco. No-op si el tramo no está abierto. */
+export function noteBurstPipeDataUrl(ms: number): void {
+  if (pipe === null || !Number.isFinite(ms)) return;
+  pipe.dataUrlMs = Math.max(0, Math.round(ms));
+}
+
+/** Meta del tramo opaco que viaja en el mark capture_shot (v4 §2.1/§2.3).
+ *  sniff/dataUrl son null cuando el pipe de foto no corrió (dispatch de
+ *  frames tras corte). */
+export interface BurstPipeMeta {
+  pipeSniffMs: number | null;
+  pipeDataUrlMs: number | null;
+  pipeToMarkMs: number;
+  bgJobsAtShot: number;
+}
+
+/** v4 §2.1/§2.3 — CIERRA el tramo opaco EN el mark capture_shot y devuelve
+ *  sus campos (null: no había tramo abierto — ruta sin corte, meta
+ *  byte-a-byte con pre-v4). Refleja los campos en `window.__lastBurst`
+ *  (recordBurst escribió antes de que el pipe corriera). Idempotente. */
+export function collectBurstPipeMeta(): BurstPipeMeta | null {
+  if (pipe === null) return null;
+  const meta: BurstPipeMeta = {
+    pipeSniffMs: pipe.sniffMs,
+    pipeDataUrlMs: pipe.dataUrlMs,
+    pipeToMarkMs: Math.max(0, Math.round(performance.now() - pipe.openedAt)),
+    bgJobsAtShot: backgroundJobs,
+  };
+  pipe = null;
+  if (lastStats !== null) {
+    lastStats.pipeSniffMs = meta.pipeSniffMs;
+    lastStats.pipeDataUrlMs = meta.pipeDataUrlMs;
+    lastStats.pipeToMarkMs = meta.pipeToMarkMs;
+    lastStats.bgJobsAtShot = meta.bgJobsAtShot;
+    if (typeof window !== "undefined") {
+      (window as unknown as Record<string, unknown>).__lastBurst = { ...lastStats };
+    }
+  }
+  return meta;
+}
+
+/* ── v4 §2.3 — contador de jobs en background del editor ───────────────── */
+
+/** Jobs del editor en vuelo (applyAutoQuad, aplicación de filtros bw/text,
+ *  generación de preview procesado — los mismos que la spec v4 señala como
+ *  candidato #3 del tramo opaco: trabajo solapado con la captura).
+ *  Contador de módulo con begin/end pareados en try/finally; se estampa en
+ *  el meta de capture_shot (bgJobsAtShot) y se lee vivo vía
+ *  `__burstTools.backgroundJobs()`. Instrumentación pura. */
+let backgroundJobs = 0;
+
+/** v4 §2.3 — marca el ARRANQUE de un job en background del editor. */
+export function beginBackgroundJob(): void {
+  backgroundJobs += 1;
+}
+
+/** v4 §2.3 — marca el FIN de un job en background (SIEMPRE en finally). */
+export function endBackgroundJob(): void {
+  if (backgroundJobs > 0) backgroundJobs -= 1;
+}
+
+/** v4 §2.3 — jobs en vuelo AHORA (telemetría/E2E). */
+export function getBackgroundJobs(): number {
+  return backgroundJobs;
 }
 
 /* ── v2-A13 Fase A — telemetría de la ventana de adquisición (v4.1) ─────── */
@@ -501,6 +632,11 @@ if (typeof window !== "undefined") {
     // del congelamiento del overlay QA y del ring post-fired barato).
     acquiring(): boolean {
       return isAcquisitionActive();
+    },
+    // v4 §2.3 — jobs del editor en vuelo ahora (autoQuad/filtros/preview):
+    // la señal que discrimina el candidato #3 del tramo opaco.
+    backgroundJobs(): number {
+      return getBackgroundJobs();
     },
   };
 }
