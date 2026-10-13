@@ -858,11 +858,43 @@ async function processImagePrecise(
     const img = await loadImage(src);
     if (!img.naturalWidth || !img.naturalHeight) return null;
 
+    // LOTE 2 (F2-E) — preview escalonado: cuando el llamador pide un tope de
+    // salida ESTRICTAMENTE menor que el full-res (tier fast 2048 < 4032) y la
+    // foto lo excede, reducir la ENTRADA del warp a ese tope ANTES de enviarla
+    // al worker (createImageBitmap con resize: corre fuera del hilo principal;
+    // el warp escala ~cuadrático con el output — (2048/4032)² ≈ 0.26× — y el
+    // output queda ≤ maxLongSide por construcción). El quad es FRACCIONES
+    // (0–1) de la foto: bajar la resolución de la fuente NO lo altera.
+    // ⚠️ INVARIANTE WYSIWYG: con maxLongSide === PROCESSED_MAX_LONG_SIDE (4032)
+    // o indefinido la entrada NO se toca — comportamiento byte a byte el de
+    // hoy (guardado/export a 4032 intactos; el tier fast es SOLO display del
+    // editor). El guard `cap < PROCESSED_MAX_LONG_SIDE` hace el invariante
+    // hermético incluso para fotos hipotéticas >4032.
+    const cap = opts?.maxLongSide;
+    const longIn = Math.max(img.naturalWidth, img.naturalHeight);
+    let warpSource: HTMLImageElement | ImageBitmap = img;
+    if (cap !== undefined && cap < PROCESSED_MAX_LONG_SIDE && cap < longIn) {
+      const scale = cap / longIn;
+      try {
+        warpSource = await createImageBitmap(img, {
+          resizeWidth: Math.max(1, Math.round(img.naturalWidth * scale)),
+          resizeHeight: Math.max(1, Math.round(img.naturalHeight * scale)),
+          resizeQuality: "high",
+        });
+      } catch {
+        /* plataforma sin resize en createImageBitmap → foto completa (hoy) */
+      }
+    }
+
     // 1) Warp: refinado sub-píxel (RANSAC) + shrink 3.5px + homografía
     //    INTER_CUBIC sobre la FOTO completa (la foto es la fuente de verdad).
     //    El worker cierra el bitmap de entrada y devuelve uno nuevo (puro,
     //    sin unsharp horneado — F5-RAW-2).
-    const warp = await client.warp(img, quad, opts?.manual === true);
+    const warp = await client.warp(warpSource, quad, opts?.manual === true);
+    // LOTE 2 (F2-E): si la entrada fue un bitmap fast del propio llamador,
+    // liberarlo si sigue abierto (transferido al worker → close() es no-op;
+    // error previo a la transferencia → evita fuga).
+    if (warpSource !== img) (warpSource as ImageBitmap).close();
     if (!warp || !warp.bitmap) return null;
 
     // 2) Rotación post-warp (90/180/270) en canvas de alta calidad.
