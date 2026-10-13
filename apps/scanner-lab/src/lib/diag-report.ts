@@ -31,7 +31,7 @@ import { getQaTestState, type QaStepLog } from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/burst-budget @ c515e3b";
+export const DIAG_BUILD = "perf/post-capture-f2 @ 879ff20 f2-lote1";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
@@ -196,7 +196,13 @@ export interface DiagReport {
       filterMedianMs: number | null;
       filterCount: number;
       /** v1.1 — mediana de filtros POR filterId (¿cuál es el caro?). */
-      filters: Array<{ filterId: string; count: number; medianMs: number }>;
+      filters: Array<{
+        filterId: string;
+        count: number;
+        medianMs: number;
+        engines: Array<{ engine: string; count: number }>;
+        cachedCount: number;
+      }>;
       sessionMs: number | null;
     };
     ocr: {
@@ -377,7 +383,10 @@ export async function buildDiagReport(): Promise<DiagReport> {
     .map((m) => metaNum(m, "ms"))
     .filter((v): v is number => v !== null);
   const filterCount = marksOf("filter_applied").length;
-  const filtersById = new Map<string, number[]>();
+  const filterTimesById = new Map<string, number[]>();
+  const filterEnginesById = new Map<string, Map<string, number>>();
+  const filterCachedById = new Map<string, number>();
+
   for (const m of marksOf("filter_applied")) {
     const id =
       typeof m.meta?.filterId === "string"
@@ -386,17 +395,39 @@ export async function buildDiagReport(): Promise<DiagReport> {
           ? (m.meta.filter as string)
           : "?";
     const ms = metaNum(m, "ms");
-    if (ms === null) continue;
-    const arr = filtersById.get(id) ?? [];
-    arr.push(ms);
-    filtersById.set(id, arr);
+    if (ms !== null) {
+      const arr = filterTimesById.get(id) ?? [];
+      arr.push(ms);
+      filterTimesById.set(id, arr);
+    }
+    const engine =
+      typeof m.meta?.engine === "string" && m.meta.engine
+        ? (m.meta.engine as string)
+        : undefined;
+    if (engine) {
+      const engMap = filterEnginesById.get(id) ?? new Map<string, number>();
+      engMap.set(engine, (engMap.get(engine) ?? 0) + 1);
+      filterEnginesById.set(id, engMap);
+    }
+    if (m.meta?.cached === true) {
+      filterCachedById.set(id, (filterCachedById.get(id) ?? 0) + 1);
+    }
   }
-  const filtersByFilterId = [...filtersById.entries()]
-    .map(([filterId, arr]) => ({
-      filterId,
-      count: arr.length,
-      medianMs: median(arr) ?? 0,
-    }))
+
+  const filtersByFilterId = [...filterTimesById.entries()]
+    .map(([filterId, arr]) => {
+      const engMap = filterEnginesById.get(filterId);
+      const engines = engMap
+        ? [...engMap.entries()].map(([engine, count]) => ({ engine, count }))
+        : [];
+      return {
+        filterId,
+        count: arr.length,
+        medianMs: median(arr) ?? 0,
+        engines,
+        cachedCount: filterCachedById.get(filterId) ?? 0,
+      };
+    })
     .sort((a, b) => b.medianMs - a.medianMs);
 
   // OCR: 1ª (frío, incluye CDN del motor) vs mediana del resto (tibio).
@@ -970,7 +1001,11 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`Filtros aplicados         : ${s.editor.filterCount} · mediana ${fmtMs(s.editor.filterMedianMs)}`);
   const topFilter = s.editor.filters[0];
   if (topFilter) {
-    push(`Filtro más caro           : ${topFilter.filterId} · ${fmtMs(topFilter.medianMs)} mediana (${topFilter.count})`);
+    const engTxt =
+      topFilter.engines && topFilter.engines.length > 0
+        ? ` · engine=${topFilter.engines.map((e) => (topFilter.engines.length > 1 ? `${e.engine}(${e.count})` : e.engine)).join(",")}`
+        : "";
+    push(`Filtro más caro           : ${topFilter.filterId} · ${fmtMs(topFilter.medianMs)} mediana (${topFilter.count})${engTxt}`);
   }
   push(
     `OCR                       : ${s.ocr.count} págs · 1ª ${fmtMs(s.ocr.firstColdMs)} (frío) · tibio ${fmtMs(s.ocr.medianWarmMs)} · ${s.ocr.charsTotal} chars`
