@@ -37,7 +37,8 @@
  * tarjeta = CONTENEDOR OSCURO surface-card 20px con brackets BARRAS neón
  * 3.5px glow y acta blanca rounded-14px object-contain (SERIE 1
  *  e14-sync-visor §3: fit UNIVERSAL — el acta alta se ve COMPLETA con
- *  letterboxing, como las as-is); barra de envío =
+ *  letterboxing; REV. 2: tarjeta UNIFICADA como solo <button> táctil
+ *  para los 5 estados, visor invariante por score); barra de envío =
  * cápsula 46px green-bar con check círculo neón sólido + hora en recuadro
  * green-inset (SHA-256 FUERA de esta vista — cambio deliberado del dueño);
  * extrapolación §10: barra de rechazo crit (✕ círculo sólido) + banner
@@ -265,15 +266,12 @@ export function ReviewView() {
     : acta.fotoProcesada;
   const mostrandoOriginal = fotoSinTinta && Boolean(acta.fotoOriginal);
   // §D8.4/AC4/AC14 (SPEC-e14-score-ocr Rev. 3) + SERIE 1 (sync-visor
-  // §3): el acta se muestra COMPLETA en la tarjeta SIEMPRE —
-  // object-contain UNIVERSAL. El fit contain lo estrenaron las fotos
-  // as-is de Rev. 3 y el mismo mecanismo aplica a TODO: el warp real
-  // produce un acta ALTA (aspecto de página ~0.46–0.7) y la tarjeta
-  // flex-1 tiene otro aspecto → object-cover escalaba a llenar y
-  // RECORTABA arriba/abajo (bug «la imagen se ve GRANDE y CORTADA»). Con
-  // contain aparece letterboxing vertical: la carta de papel blanca
-  // COMPLETA dentro del contenedor oscuro (MISMO look que las as-is).
-  // El ternario fotoAsis desaparece — su único uso era el fit.
+  // §3): contain UNIVERSAL (REV. 2 — visor invariante por score; el
+  // precedente as-is ya lo estrenó). El warp real produce un acta ALTA
+  // (aspecto de página ~0.46–0.7) y la tarjeta flex-1 tiene otro aspecto →
+  // object-cover escalaba a llenar y RECORTABA arriba/abajo (bug «la imagen
+  // se ve GRANDE y CORTADA»). Con contain aparece letterboxing vertical:
+  // la carta de papel blanca COMPLETA dentro del contenedor oscuro.
   const hayFoto = Boolean(fotoVisible);
   const altFoto = mostrandoOriginal
     ? "Foto original del acta (la procesada salió vacía)"
@@ -437,59 +435,36 @@ export function ReviewView() {
             pipeline agotó el timeout sin procesar) es la MISMA caja con texto
             centrado font-data. F5: la tarjeta es SOLO visual (flex-1) — sin
             toolbar dentro (barra fija abajo, D38).
-            D3 (SPEC-rediseno-enviada §3): ENVIADA estrena la tarjeta héroe del
-            mock — TOCABLE (tap → pantalla completa; el overlay ya existe y
-            funciona para cualquier estado). El resto de estados conserva la
-            tarjeta con brackets (editables), idéntica a la de siempre.
+            SERIE 1 (REV. 2 §3): TARJETA ÚNICA E INVARIANTE — UN solo <button>
+            táctil (tap → pantalla completa) para los 5 estados.
             CYBER-NEÓN §6: el acta vive DENTRO de un CONTENEDOR OSCURO
             surface-card rounded-20px p-10px con brackets BARRA neón 3.5px
             sobre las esquinas DEL CONTENEDOR; acta blanca rounded-14px
             object-contain SERIE 1 (esquinas propias, separada 10px —
             el acta COMPLETA, con letterboxing si es más alta). */}
-        {status === "ENVIADA" ? (
-          <button
-            type="button"
-            aria-label="Ver acta a pantalla completa"
-            onClick={() => (fotoVisible ? setVisorAbierto(true) : undefined)}
-            className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
-          >
-            <BracketsNeon />
-            <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {hayFoto ? (
-                <img
-                  src={fotoVisible}
-                  alt={altFoto}
-                  className="w-full h-full rounded-[14px] object-contain"
-                />
-              ) : (
-                <div className="flex items-center justify-center w-full h-full">
-                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
-                    FOTO NO DISPONIBLE
-                  </span>
-                </div>
-              )}
-            </div>
-          </button>
-        ) : (
-          <section className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0">
-            <BracketsNeon />
-            <div className="w-full h-full relative flex items-center justify-center min-h-0">
-              {hayFoto ? (
-                <img
-                  src={fotoVisible}
-                  alt={altFoto}
-                  className="w-full h-full rounded-[14px] object-contain"
-                />
-              ) : (
-                <div className="flex items-center justify-center w-full h-full">
-                  <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
-                    FOTO NO DISPONIBLE
-                  </span>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+        <button
+          type="button"
+          aria-label="Ver acta a pantalla completa"
+          onClick={hayFoto ? () => setVisorAbierto(true) : undefined}
+          className="relative rounded-[20px] bg-surface-card p-[10px] flex items-center justify-center w-full flex-1 min-h-0"
+        >
+          <BracketsNeon />
+          <div className="w-full h-full relative flex items-center justify-center min-h-0">
+            {hayFoto ? (
+              <img
+                src={fotoVisible}
+                alt={altFoto}
+                className="w-full h-full rounded-[14px] object-contain"
+              />
+            ) : (
+              <div className="flex items-center justify-center w-full h-full">
+                <span className="font-data text-[10px] tracking-[0.2em] text-ink-faint uppercase">
+                  FOTO NO DISPONIBLE
+                </span>
+              </div>
+            )}
+          </div>
+        </button>
 
         {/* §D4 (SPEC-e14-score-ocr): nota tenue del respaldo — la tarjeta
             muestra la ORIGINAL porque la procesada salió vacía (o nunca

@@ -9,7 +9,7 @@
  * cyber-neón (ok-tint · ink · neon-ink · font-data; NADA de hex del lab tipo
  * #007aff/#1c1c1e). Encapsulado como componente PURO (mismo espíritu que
  * QuadEditor: cero store del core) para el visor fullscreen de ReviewView
- * (INSTRUCCIONES-e14-sync-visor-v1 §4).
+ * (INSTRUCCIONES-e14-sync-visor REV. 2 §4 — CONTRATO del visor invariante por score V1–V6).
  *
  * Mapa de copia aplicado (lab EditorView.tsx → aquí):
  *   · Constantes ZOOM_MIN/MAX/DOUBLE_TAP + TAP_SLOP (L100–108) — LITERAL
