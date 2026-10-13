@@ -192,6 +192,13 @@ export interface DiagReport {
        *  null = apertura sin render medido). Si la 2ª cae <1.5 s, el costo
        *  de la 1ª es chunk-red/compile → solución de bundle, no pipeline). */
       firstRenders: Array<number | null>;
+      /** LOTE 2 (F2-G) — tier del primer render medido (meta.previewTier del
+       *  mark editor_first_render con trabajo real; null = marca sin tier,
+       *  builds previos al lote 2). */
+      firstRenderTier: string | null;
+      /** LOTE 2 (F2-G) — nº de upgrades fast→full completados en la sesión
+       *  (marks editor_preview_upgraded del preview escalonado). */
+      previewUpgrades: number;
       fpsAuto: number | null;
       filterMedianMs: number | null;
       filterCount: number;
@@ -360,6 +367,25 @@ export async function buildDiagReport(): Promise<DiagReport> {
     firstRenders[openIndex - 1] = delta;
   }
   if (firstRenders.length > 5) firstRenders.length = 5; // cap 5 (spec)
+
+  // LOTE 2 (F2-G) — tier del primer render: se toma del ÚLTIMO mark
+  // editor_first_render con trabajo real (cached:false — el mismo que
+  // alimenta firstRenderMs); null si ninguno trae previewTier (builds
+  // previos al lote 2 o sesiones solo-cacheadas).
+  let firstRenderTier: string | null = null;
+  for (const fr of marksOf("editor_first_render")) {
+    if (
+      fr.meta?.cached === false &&
+      typeof fr.meta?.previewTier === "string" &&
+      fr.meta.previewTier
+    ) {
+      firstRenderTier = fr.meta.previewTier;
+    }
+  }
+  // LOTE 2 (F2-G) — upgrades fast→full completados (pasada FULL del preview
+  // escalonado; descarte documentado: el cachedCount por filtro de F2-D
+  // queda descontinuado — nadie escribe meta.cached en filter_applied).
+  const previewUpgrades = marksOf("editor_preview_upgraded").length;
 
   // Cámara: ready (última sesión) + FPS early/late. v3 — esperas del
   // auto-shutter: cada capture_fired apareado con el capture_stable más
@@ -727,6 +753,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
         openMs: editorOpenMs,
         firstRenderMs,
         firstRenders,
+        firstRenderTier,
+        previewUpgrades,
         fpsAuto: metaNum(marksOf("fps_auto").pop(), "fps"),
         filterMedianMs: median(filterMs),
         filterCount,
@@ -997,6 +1025,10 @@ export function buildDiagTxt(r: DiagReport): string {
   push(
     `Editor: apertura/render   : ${s.editor.openMs !== null ? `${s.editor.openMs} ms` : DASH} / ${fmtMs(s.editor.firstRenderMs)}${renders2 !== null && renders2 !== undefined ? ` · 2ª: ${fmtMs(renders2)}` : ""}`
   );
+  // LOTE 2 (F2-G) — línea extra SOLO si hay datos del preview escalonado.
+  if (s.editor.firstRenderTier !== null || s.editor.previewUpgrades > 0) {
+    push(`Preview escalonado        : fast→full · upgrade ${s.editor.previewUpgrades}`);
+  }
   push(`FPS pan/zoom (auto)       : ${s.editor.fpsAuto ?? DASH}`);
   push(`Filtros aplicados         : ${s.editor.filterCount} · mediana ${fmtMs(s.editor.filterMedianMs)}`);
   const topFilter = s.editor.filters[0];

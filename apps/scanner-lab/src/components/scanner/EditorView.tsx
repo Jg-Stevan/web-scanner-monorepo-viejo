@@ -88,6 +88,12 @@ import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
 import { SaveSuccessOverlay } from "@/components/scanner/SaveSuccessOverlay";
 import { PresentationView, type PresentationPage } from "@/components/scanner/PresentationView";
 
+/** LOTE 2 (F2-E) — lado mayor del PRIMER pintado del editor (tier fast).
+ *  2048: el warp del worker escala ~cuadrático con el output
+ *  ((2048/4032)² ≈ 0.26×) y el downscale 4032→2048 cuesta ~1 ms en A13.
+ *  El tier full (4032) llega después en background y reemplaza este entry. */
+const PREVIEW_FAST_LONG_SIDE = 2048;
+
 /** Aproximación CSS de cada filtro para las previews en vivo (§8.4 del
  *  SPEC-MAESTRO: solo cosmética — el procesado real ocurre al confirmar). */
 const CSS_FILTERS: Record<PageFilter, string> = {
@@ -136,6 +142,11 @@ interface PreviewEntry {
   w: number;
   h: number;
   engine: "worker" | "canvas";
+  /** LOTE 2 (F2-E) — tier del entry: "fast" (≤2048, SOLO display del editor,
+   *  pintado del primer render) o "full" (4032, WYSIWYG — el mismo dato que
+   *  el guardado/export). Los consumidores que NO son display (OCR, export,
+   *  rotación que persiste) ignoran los entries fast y reprocesan a 4032. */
+  tier: "fast" | "full";
 }
 
 function clampN(v: number) {
@@ -598,9 +609,72 @@ export default function EditorView() {
         w: 0,
         h: 0,
         engine: "canvas",
+        tier: "full", // LOTE 2 (F2-E): la procesada persistida es full-res (4032)
       });
     }
     let cancelled = false;
+
+    // LOTE 2 (F2-E) — PASADA FULL (background, WYSIWYG 4032): el entry tier
+    // fast es SOLO display; esta pasada reemplaza el cache entry y el preview
+    // SI la página/filtro/rotación siguen siendo los mismos (cacheKey intacto
+    // — el cleanup de abajo marca cancelled en desmontaje o cambio de key).
+    // Cancelación (§2.3.2): desmontaje / cambio de cacheKey / vuelta a
+    // cámara — al cancelarse, el par begin/end de bg-jobs se libera
+    // INMEDIATAMENTE (releaseFullJob) → bgJobsAtShot se mantiene en 0 cuando
+    // la cámara dispare (§2.3.4): la pasada no sigue viva como job
+    // contabilizado aunque su promesa termine en el vacío.
+    let fullJobActive = false;
+    const releaseFullJob = () => {
+      if (fullJobActive) {
+        fullJobActive = false;
+        endBackgroundJob();
+      }
+    };
+    const scheduleFullPass = (): void => {
+      if (cancelled) return;
+      const live = previewCache.current.get(cacheKey);
+      if (live && live.tier !== "fast") return; // ya hay full en pie
+      // v4 §2.3 (v4.3, burst-budget) — jobs en background #2/#3 del editor
+      // (pareado begin/end con liberación inmediata al cancelar).
+      beginBackgroundJob();
+      fullJobActive = true;
+      void (async () => {
+        try {
+          // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
+          // estricto por construcción: el upgrade ES la imagen guardada.
+          const tFull = performance.now();
+          const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
+            manual: page.quadManual === true,
+            maxLongSide: PROCESSED_MAX_LONG_SIDE,
+          });
+          if (cancelled) return;
+          const fullEntry: PreviewEntry = {
+            url: res.processed,
+            w: res.precision?.width ?? 0,
+            h: res.precision?.height ?? 0,
+            engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+            tier: "full",
+          };
+          // Reemplazo SOLO si el entry vivo sigue siendo el fast de ESTE key
+          // (un reproceso manual — OCR/export/rotación — pudo sembrar un
+          // full nuevo mientras tanto).
+          if (previewCache.current.get(cacheKey)?.tier === "fast") {
+            cachePreviewEntry(cacheKey, fullEntry);
+            setPreview(fullEntry);
+            // DIAG (LOTE 2 F2-G) — upgrade fast→full completado (aditivo).
+            perfProbe.mark("editor_preview_upgraded", {
+              ms: Math.round(performance.now() - tFull),
+              filterId: page.filter,
+            });
+          }
+        } catch {
+          /* FULL best-effort: el entry fast queda en pie */
+        } finally {
+          releaseFullJob();
+        }
+      })();
+    };
+
     const cached = previewCache.current.get(cacheKey);
     if (cached) {
       setPreview(cached);
@@ -614,8 +688,13 @@ export default function EditorView() {
         firstRenderPidRef.current = page.id;
         perfProbe.mark("editor_first_render", { engine: cached.engine, cached: true });
       }
+      // LOTE 2 (F2-E) §2.3.3 — cache-hit con tier fast: pintado instantáneo
+      // (arriba) + RE-AGENDAR la pasada FULL en background (mismo mecanismo
+      // del cache-miss). Tier full → comportamiento actual (nada extra).
+      if (cached.tier === "fast") scheduleFullPass();
       return () => {
         cancelled = true;
+        releaseFullJob();
       };
     }
     // Cache-miss: limpiar el preview ANTERIOR — sin esto, durante el
@@ -632,25 +711,27 @@ export default function EditorView() {
       // capture_shot estampa como bgJobsAtShot. Instrumentación pura.
       beginBackgroundJob();
       try {
-        // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
-        // estricto por construcción: lo que ves ES la imagen guardada.
-        // DIAG (spec diag §6) — tiempo del reproceso completo (warp + filtro).
+        // LOTE 2 (F2-E) — PASADA FAST (tier fast): primer pintado del editor
+        // con warp a 2048 (el output queda ≤ PREVIEW_FAST_LONG_SIDE por
+        // construcción — ver image-processor). El principo de diseño manda:
+        // VER el acta rápido; el tier full llega después en background.
+        // DIAG (spec diag §6) — tiempo de la pasada fast (warp + filtro).
         const tFilter = performance.now();
         const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
           manual: page.quadManual === true,
-          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+          maxLongSide: PREVIEW_FAST_LONG_SIDE,
         });
         const filterMs = Math.round(performance.now() - tFilter);
         if (cancelled) return;
         // EXPERIMENTO v11: sin copia de display — la entry se crea SOLO
-        // con el DATO completo (url/w/h/engine); los <img> del editor
-        // decodifican directamente el PNG ≤4032 (red de seguridad
-        // APAGADA — el re-encode de v5 5.1/v10-A no corre).
+        // con el DATO completo (url/w/h/engine/tier); los <img> del editor
+        // decodifican directamente el PNG ≤2048 del tier fast.
         const entry: PreviewEntry = {
           url: res.processed,
           w: res.precision?.width ?? 0,
           h: res.precision?.height ?? 0,
           engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+          tier: "fast",
         };
         cachePreviewEntry(cacheKey, entry);
         setPreview(entry);
@@ -667,21 +748,36 @@ export default function EditorView() {
         });
         if (firstRenderPidRef.current !== page.id) {
           firstRenderPidRef.current = page.id;
-          perfProbe.mark("editor_first_render", { engine: entry.engine, cached: false, ms: filterMs });
+          // LOTE 2 (F2-E) §2.3.1 — mark igual que hoy (mismo orden de
+          // campos) + previewTier del tier que pintó.
+          perfProbe.mark("editor_first_render", {
+            engine: entry.engine,
+            cached: false,
+            ms: filterMs,
+            previewTier: "fast",
+          });
         }
       } catch {
-        if (!cancelled) setPreview({ url: page.original, w: 0, h: 0, engine: "canvas" });
+        if (!cancelled)
+          setPreview({ url: page.original, w: 0, h: 0, engine: "canvas", tier: "full" });
       } finally {
         // v4 §2.3 — SIEMPRE libera el contador (jobs pareados), incluso si
         // el efecto se canceló a mitad del reproceso.
         endBackgroundJob();
         if (!cancelled) setPreviewLoading(false);
       }
+      // LOTE 2 (F2-E) §2.3.1 — PASADA FULL inmediatamente después de la
+      // fast (background, NO bloquea): SOLO si la fast aterrizó como entry
+      // fast de este key (si falló, el fallback original queda en pie como
+      // hoy — sin reproceso extra).
+      if (!cancelled && previewCache.current.get(cacheKey)?.tier === "fast") {
+        scheduleFullPass();
+      }
     })();
     return () => {
       cancelled = true;
+      releaseFullJob();
     };
-     
   }, [mode, cacheKey, page?.original, cachePreviewEntry]);
 
   // EXPERIMENTO v11 — telemetría QA: fuente única en el editor. El <img>
@@ -1284,7 +1380,8 @@ export default function EditorView() {
       const cached = previewCache.current.get(key);
       if (cached) return cached;
       if (p.processed && p.processedKey === key) {
-        return { url: p.processed, w: 0, h: 0, engine: "canvas" };
+        // LOTE 2 (F2-E): la procesada persistida es full-res (4032) → tier full.
+        return { url: p.processed, w: 0, h: 0, engine: "canvas", tier: "full" };
       }
       return null;
     },
@@ -1331,6 +1428,10 @@ export default function EditorView() {
           w: base.h || rot.w,
           h: base.w || rot.h,
           engine: base.engine,
+          // LOTE 2 (F2-E): la rotada HEREDA el tier de su base — rotar un
+          // entry fast no lo convierte en full; el efecto re-agenda la
+          // pasada FULL para el nuevo key (converge a 4032 igual que hoy).
+          tier: base.tier,
         });
         // Una sola actualización: con calidad completa, el efecto de preview
         // siembra la cache y pinta al instante (processedKey coincide) y el
@@ -1386,7 +1487,28 @@ export default function EditorView() {
     perfProbe.mark("export_start", { type: "png", pages: 1 });
     const tExport = performance.now();
     try {
-      const blob = await dataUrlToBlob(entry.url);
+      // LOTE 2 (F2-E) — WYSIWYG del export (§2.4 intocable): si el entry
+      // vivo es tier fast (≤2048, solo display), el export reprocesa a
+      // 4032 (mismo camino que el guardado) y siembra la cache con el
+      // entry full; con tier full el dato es el de siempre.
+      let exportUrl = entry.url;
+      let exportLong = Math.max(entry.w, entry.h);
+      if (entry.tier === "fast") {
+        const res = await processImage(p.original, p.quad, p.filter, p.rotation, {
+          manual: p.quadManual === true,
+          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+        });
+        exportUrl = res.processed;
+        exportLong = Math.max(res.precision?.width ?? 0, res.precision?.height ?? 0);
+        cachePreviewEntry(capturePageKey(p), {
+          url: res.processed,
+          w: res.precision?.width ?? 0,
+          h: res.precision?.height ?? 0,
+          engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+          tier: "full",
+        });
+      }
+      const blob = await dataUrlToBlob(exportUrl);
       const ext = blob.type === "image/jpeg" ? "jpg" : "png";
       const name = sanitizeFileName(
         `${headerTitle}-página-${activeIdx + 1}.${ext}`
@@ -1398,9 +1520,9 @@ export default function EditorView() {
         bytes: blob.size,
         pages: 1,
         pxLong:
-          Math.max(entry.w, entry.h) > 0
-            ? Math.max(entry.w, entry.h)
-            : readImageLongSide(`e:${p.id}:${cacheKey}`, entry.url) ?? null,
+          exportLong > 0
+            ? exportLong
+            : readImageLongSide(`e:${p.id}:${cacheKey}`, exportUrl) ?? null,
       });
       toast.success(`Imagen guardada: ${name}`);
     } catch {
@@ -1675,12 +1797,36 @@ export default function EditorView() {
       return;
     }
     // Preview actual (estado fresco) → procesada guardada si sigue vigente →
-    // original como último recurso.
-    const image =
-      preview?.url ??
-      (page.processed && page.processedKey === cacheKey ? page.processed : undefined) ??
-      page.original;
+    // original como último recurso. LOTE 2 (F2-E): los entries tier fast
+    // (≤2048, solo display) NO valen de entrada de OCR (§2.4 intocable) —
+    // se reprocesa a 4032 al vuelo (mismo camino que runOcrAll) y se
+    // siembra la cache con el entry full.
+    let image =
+      preview && preview.tier !== "fast"
+        ? preview.url
+        : (page.processed && page.processedKey === cacheKey ? page.processed : undefined);
+    // LOTE 2 (F2-E): el flag va ARRIBA para cubrir también el reproceso
+    // (single-flight: el QA y los toques repetidos no duplican la pasada).
     setOcrRunning(true);
+    if (!image && preview?.tier === "fast") {
+      try {
+        const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
+          manual: page.quadManual === true,
+          maxLongSide: PROCESSED_MAX_LONG_SIDE,
+        });
+        image = res.processed;
+        cachePreviewEntry(cacheKey, {
+          url: res.processed,
+          w: res.precision?.width ?? 0,
+          h: res.precision?.height ?? 0,
+          engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+          tier: "full",
+        });
+      } catch {
+        /* sin reproceso → cae a las fuentes de siempre (persistida/original) */
+      }
+    }
+    if (!image) image = page.original;
     // DIAG (spec diag §5) — duración del OCR de la página actual (la 1ª de
     // la sesión incluye la descarga del motor ~3 MB → frío vs tibio).
     perfProbe.mark("ocr_start", { site: "current" });
@@ -1734,7 +1880,14 @@ export default function EditorView() {
         const freshKey = capturePageKey(p);
         let image = p.processed && p.processedKey === freshKey ? p.processed : undefined;
         if (!image) {
-          image = previewCache.current.get(freshKey)?.url;
+          // LOTE 2 (F2-E): los entries tier fast (≤2048, solo display) NO
+          // valen de entrada de OCR — como si no existieran (hoy la cache
+          // solo guarda 4032); el reproceso de abajo mantiene el OCR a
+          // full-res byte a byte igual que antes del lote.
+          const cachedPreview = previewCache.current.get(freshKey);
+          if (cachedPreview && cachedPreview.tier !== "fast") {
+            image = cachedPreview.url;
+          }
         }
         if (!image) {
           // Procesa al vuelo (sesión de captura: aún no hay procesada).
@@ -1749,6 +1902,7 @@ export default function EditorView() {
             w: 0,
             h: 0,
             engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+            tier: "full", // LOTE 2 (F2-E): reproceso OCR = full-res (§2.3.5)
           });
         }
         const tOcr = performance.now();
@@ -1845,6 +1999,13 @@ export default function EditorView() {
     if (!ocrEnabled || !page || ocrRunning || previewLoading || autoOcrBusy) return;
     if (page.ocrDone === true || page.processedKey !== undefined) return;
     if (autoOcrTried.current.has(page.id)) return;
+    // LOTE 2 (F2-E): el auto-OCR espera al entry tier FULL — con el preview
+    // escalonado, el primer pintado es fast (≤2048, solo display) y la
+    // pasada FULL sigue en vuelo; correr OCR sobre la fast degradaría el
+    // reconocimiento (§2.4 intocable) y competiría con el upgrade. Cuando
+    // el full aterrice, preview?.url cambia y el efecto re-ejecuta (mismo
+    // disparo que hoy: preview 4032 pintado).
+    if (preview?.tier === "fast") return;
     const image =
       preview?.url ??
       (page.processed && page.processedKey === cacheKey ? page.processed : undefined);

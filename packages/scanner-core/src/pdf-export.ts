@@ -144,17 +144,30 @@ export function sanitizeFileName(title: string): string {
   return clean.length > 0 ? clean : "documento";
 }
 
-/** Datos crudos (PNG tal cual o JPEG re-encodeado) + tamaño de página mm. */
+/** Datos crudos (PNG tal cual o JPEG re-encodeado) + tamaño de página mm.
+ *  LOTE 2 (F2-F): `firstAttempt` acota el fast path JPEG (q0.95 full-size)
+ *  al PRIMER intento — en los reintentos (attemptIdx ≥ 1) las páginas PNG
+ *  caen a la escalera `toJpegAt(src, attempt.longSide, attempt.quality)`,
+ *  que SÍ reduce bytes (antes TODOS los intentos regeneraban el MISMO JPEG
+ *  full-size y los reintentos eran inútiles). En calidad «máxima»
+ *  (allowJpegFast=false) el PNG puro se conserva igual que hoy, con o sin
+ *  reintentos. */
 async function pageForAttempt(
   src: string,
   filter: ScanDocument["pages"][number]["filter"],
   attempt: ExportAttempt,
-  allowJpegFast = true
+  allowJpegFast = true,
+  firstAttempt = true
 ): Promise<{ dataUrl: string; w: number; h: number; isPng: boolean }> {
   const isPng = PNG_FILTERS.has(filter) && src.startsWith("data:image/png");
   if (isPng) {
-    if (allowJpegFast) {
+    if (firstAttempt && allowJpegFast) {
       const r = await toJpegAt(src, 0, 0.95);
+      return { dataUrl: r.dataUrl, w: r.width, h: r.height, isPng: false };
+    }
+    if (allowJpegFast) {
+      // F2-F — reintento: escalera normal del intento (reduce bytes).
+      const r = await toJpegAt(src, attempt.longSide, attempt.quality);
       return { dataUrl: r.dataUrl, w: r.width, h: r.height, isPng: false };
     }
     let w = 0;
@@ -397,7 +410,14 @@ export async function buildDocPdf(
     pdf = null;
     for (let i = 0; i < totalPages; i += 1) {
       const p = doc.pages[i]!;
-      const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt, allowJpegFast);
+      // F2-F: el fast path JPEG aplica SOLO al primer intento.
+      const { dataUrl, w, h, isPng } = await pageForAttempt(
+        p.processed,
+        p.filter,
+        attempt,
+        allowJpegFast,
+        attemptIdx === 0
+      );
       const { pageW, pageH, orientation } = adaptivePageSize(w, h);
       if (first) {
         pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
@@ -541,7 +561,14 @@ export async function buildLibraryPdf(
       onProgress?.({ docIndex: d + 1, docCount: docs.length, title: doc.title });
       for (let i = 0; i < doc.pages.length; i += 1) {
         const p = doc.pages[i]!;
-        const { dataUrl, w, h, isPng } = await pageForAttempt(p.processed, p.filter, attempt, allowJpegFast);
+        // F2-F: el fast path JPEG aplica SOLO al primer intento.
+        const { dataUrl, w, h, isPng } = await pageForAttempt(
+          p.processed,
+          p.filter,
+          attempt,
+          allowJpegFast,
+          attemptIdx === 0
+        );
         const { pageW, pageH, orientation } = adaptivePageSize(w, h);
         if (first) {
           pdf = new jsPDF({ orientation, unit: "mm", format: [pageW, pageH], compress: true });
