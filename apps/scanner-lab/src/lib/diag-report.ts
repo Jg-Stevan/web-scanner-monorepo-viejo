@@ -27,17 +27,24 @@ import {
   type DiagDeviceSnapshot,
   type DiagBenchResults,
 } from "./device-profile";
-import { getQaTestState, type QaStepLog } from "./qa-standard-test";
+import {
+  getQaTestState,
+  QA_MODE_LABEL,
+  type QaMode,
+  type QaStepLog,
+} from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/lote2-preview @ 2f879dc lote2";
+export const DIAG_BUILD = "perf/lote4-gracia-enhance @ 20054b2 lote4";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
 export interface DiagQaSection {
   standard: true;
-  script: "qa-standard-v1.1";
+  script: "qa-standard-v1.3";
+  /** v1.3 — modo del guión que corrió (rápido 2 pasos / completo 12). */
+  mode: QaMode;
   steps: Array<{
     id: string;
     label: string;
@@ -45,6 +52,9 @@ export interface DiagQaSection {
     ok: boolean;
     mode?: "auto" | "manual";
     waitMs?: number | null;
+    /** v1.2 — decode/tier del primer render (solo editor-1/editor-2). */
+    decodeMs?: number | null;
+    tier?: string | null;
   }>;
   aborted?: boolean;
 }
@@ -199,6 +209,10 @@ export interface DiagReport {
       /** LOTE 2 (F2-G) — nº de upgrades fast→full completados en la sesión
        *  (marks editor_preview_upgraded del preview escalonado). */
       previewUpgrades: number;
+      /** LOTE 3 (F3-B) — decodeMs del primer render (meta.decodeMs del
+       *  último editor_first_render con cached:false que lo traiga numérico;
+       *  null si ninguno — builds previos al lote 3 o fallback canvas). */
+      firstRenderDecodeMs: number | null;
       fpsAuto: number | null;
       filterMedianMs: number | null;
       filterCount: number;
@@ -380,6 +394,16 @@ export async function buildDiagReport(): Promise<DiagReport> {
       fr.meta.previewTier
     ) {
       firstRenderTier = fr.meta.previewTier;
+    }
+  }
+  // LOTE 3 (F3-B) — decode del primer render: del ÚLTIMO mark
+  // editor_first_render con trabajo real (cached:false) que traiga
+  // meta.decodeMs numérico (misma lógica que firstRenderTier); null si
+  // ninguno (builds previos al lote 3 o fallback canvas local).
+  let firstRenderDecodeMs: number | null = null;
+  for (const fr of marksOf("editor_first_render")) {
+    if (fr.meta?.cached === false && typeof fr.meta?.decodeMs === "number") {
+      firstRenderDecodeMs = fr.meta.decodeMs;
     }
   }
   // LOTE 2 (F2-G) — upgrades fast→full completados (pasada FULL del preview
@@ -705,7 +729,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const qa: DiagQaSection | undefined = qaRan
     ? {
         standard: true,
-        script: "qa-standard-v1.1",
+        script: "qa-standard-v1.3",
+        mode: qaState.mode,
         steps: qaState.log.map((l: QaStepLog) => ({
           id: l.id,
           label: l.label,
@@ -713,6 +738,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
           ok: l.ok,
           ...(l.mode !== undefined ? { mode: l.mode } : {}),
           ...(l.waitMs !== undefined ? { waitMs: l.waitMs } : {}),
+          ...(l.decodeMs !== undefined ? { decodeMs: l.decodeMs } : {}),
+          ...(l.tier !== undefined ? { tier: l.tier } : {}),
         })),
         ...(qaState.aborted ? { aborted: true } : {}),
       }
@@ -754,6 +781,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
         firstRenderMs,
         firstRenders,
         firstRenderTier,
+        firstRenderDecodeMs,
         previewUpgrades,
         fpsAuto: metaNum(marksOf("fps_auto").pop(), "fps"),
         filterMedianMs: median(filterMs),
@@ -823,10 +851,31 @@ export function buildDiagTxt(r: DiagReport): string {
   push("Formato  : diag-report v5");
   if (r.qa) {
     push();
-    push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
+    // v1.3 — cabecera mode-aware (rápido 1 captura / completo 12 pasos).
+    push(
+      `TEST QA v1.3 · ${QA_MODE_LABEL[r.qa.mode] ?? QA_MODE_LABEL.full}` +
+        (r.qa.aborted ? " (ABORTADO — informe parcial)" : "")
+    );
     push("Protocolo: ahorro batería OFF · dispositivo");
     push("frío · captura automática nativa · mismo");
     push("documento con texto");
+    // v1.2 — tabla de resultados: SOLO pasos medidos (los abortados, con
+    // ms: null, no pintan fila). Etiqueta alineada a la columna de 26
+    // chars del resto del informe; decode/tier solo cuando el mark los
+    // trajo (editor-1/editor-2).
+    for (const st of r.qa.steps) {
+      if (!st.ok || st.ms === null) continue;
+      let rest = fmtMs(st.ms);
+      if (st.mode) rest += ` · ${st.mode}`;
+      if (st.waitMs !== null && st.waitMs !== undefined) {
+        rest += ` (espera ${fmtMs(st.waitMs)})`;
+      }
+      if (st.decodeMs !== null && st.decodeMs !== undefined) {
+        rest += ` · decode ${Math.round(st.decodeMs)} ms`;
+      }
+      if (st.tier) rest += ` · tier ${st.tier}`;
+      push(`${st.label.padEnd(26, " ")}: ${rest}`);
+    }
   }
   push();
   push("-- DISPOSITIVO -------------------------------");
@@ -1028,6 +1077,11 @@ export function buildDiagTxt(r: DiagReport): string {
   // LOTE 2 (F2-G) — línea extra SOLO si hay datos del preview escalonado.
   if (s.editor.firstRenderTier !== null || s.editor.previewUpgrades > 0) {
     push(`Preview escalonado        : fast→full · upgrade ${s.editor.previewUpgrades}`);
+  }
+  // LOTE 3 (F3-B) — línea SOLO si hay dato (decode del primer render;
+  // etiqueta alineada a la misma columna de 26 chars del bloque editor).
+  if (s.editor.firstRenderDecodeMs !== null) {
+    push(`Decode primer render      : ${Math.round(s.editor.firstRenderDecodeMs)} ms`);
   }
   push(`FPS pan/zoom (auto)       : ${s.editor.fpsAuto ?? DASH}`);
   push(`Filtros aplicados         : ${s.editor.filterCount} · mediana ${fmtMs(s.editor.filterMedianMs)}`);

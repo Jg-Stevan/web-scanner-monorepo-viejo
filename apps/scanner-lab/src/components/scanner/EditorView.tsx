@@ -94,6 +94,14 @@ import { PresentationView, type PresentationPage } from "@/components/scanner/Pr
  *  El tier full (4032) llega después en background y reemplaza este entry. */
 const PREVIEW_FAST_LONG_SIDE = 2048;
 
+// LOTE 4 (F4-A) — GRACIA del full pass: la pasada FULL 4032 monopoliza el
+// worker ~8 s (diag 2238: foto 18.6 s, filtros 11.5 s, FPS 20→5 — la cola
+// pisando al visor). El uso real del escáner rápido es «mirar y volver a
+// disparar»: la pasada solo se agenda tras la gracia; si el editor se
+// desmonta antes, NUNCA arranca. Tunable con datos del diag (solo este
+// número, sin tocar nada más).
+const FULL_PASS_GRACE_MS = 2500;
+
 /** Aproximación CSS de cada filtro para las previews en vivo (§8.4 del
  *  SPEC-MAESTRO: solo cosmética — el procesado real ocurre al confirmar). */
 const CSS_FILTERS: Record<PageFilter, string> = {
@@ -624,6 +632,7 @@ export default function EditorView() {
     // la cámara dispare (§2.3.4): la pasada no sigue viva como job
     // contabilizado aunque su promesa termine en el vacío.
     let fullJobActive = false;
+    let fullPassTimer: number | null = null;
     const releaseFullJob = () => {
       if (fullJobActive) {
         fullJobActive = false;
@@ -634,45 +643,55 @@ export default function EditorView() {
       if (cancelled) return;
       const live = previewCache.current.get(cacheKey);
       if (live && live.tier !== "fast") return; // ya hay full en pie
-      // v4 §2.3 (v4.3, burst-budget) — jobs en background #2/#3 del editor
-      // (pareado begin/end con liberación inmediata al cancelar).
-      beginBackgroundJob();
-      fullJobActive = true;
-      void (async () => {
-        try {
-          // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
-          // estricto por construcción: el upgrade ES la imagen guardada.
-          const tFull = performance.now();
-          const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
-            manual: page.quadManual === true,
-            maxLongSide: PROCESSED_MAX_LONG_SIDE,
-          });
-          if (cancelled) return;
-          const fullEntry: PreviewEntry = {
-            url: res.processed,
-            w: res.precision?.width ?? 0,
-            h: res.precision?.height ?? 0,
-            engine: res.precision?.engine === "worker" ? "worker" : "canvas",
-            tier: "full",
-          };
-          // Reemplazo SOLO si el entry vivo sigue siendo el fast de ESTE key
-          // (un reproceso manual — OCR/export/rotación — pudo sembrar un
-          // full nuevo mientras tanto).
-          if (previewCache.current.get(cacheKey)?.tier === "fast") {
-            cachePreviewEntry(cacheKey, fullEntry);
-            setPreview(fullEntry);
-            // DIAG (LOTE 2 F2-G) — upgrade fast→full completado (aditivo).
-            perfProbe.mark("editor_preview_upgraded", {
-              ms: Math.round(performance.now() - tFull),
-              filterId: page.filter,
+      if (fullPassTimer !== null) return; // F4-A: gracia ya en curso
+      // LOTE 4 (F4-A) — GRACIA: la pasada FULL se agenda tras
+      // FULL_PASS_GRACE_MS. El cleanup del efecto (desmontaje / cambio de
+      // key / mode toggle) cancela el timer → el escáner rápido nunca
+      // monopoliza el worker.
+      fullPassTimer = window.setTimeout(() => {
+        fullPassTimer = null;
+        if (cancelled) return;
+        perfProbe.mark("editor_fullpass_grace_fired", { ms: FULL_PASS_GRACE_MS });
+        // v4 §2.3 (v4.3, burst-budget) — jobs en background #2/#3 del editor
+        // (pareado begin/end con liberación inmediata al cancelar).
+        beginBackgroundJob();
+        fullJobActive = true;
+        void (async () => {
+          try {
+            // FIX v3 (2.1): MISMA constante que el guardado (store) → WYSIWYG
+            // estricto por construcción: el upgrade ES la imagen guardada.
+            const tFull = performance.now();
+            const res = await processImage(page.original, page.quad, page.filter, page.rotation, {
+              manual: page.quadManual === true,
+              maxLongSide: PROCESSED_MAX_LONG_SIDE,
             });
+            if (cancelled) return;
+            const fullEntry: PreviewEntry = {
+              url: res.processed,
+              w: res.precision?.width ?? 0,
+              h: res.precision?.height ?? 0,
+              engine: res.precision?.engine === "worker" ? "worker" : "canvas",
+              tier: "full",
+            };
+            // Reemplazo SOLO si el entry vivo sigue siendo el fast de ESTE key
+            // (un reproceso manual — OCR/export/rotación — pudo sembrar un
+            // full nuevo mientras tanto).
+            if (previewCache.current.get(cacheKey)?.tier === "fast") {
+              cachePreviewEntry(cacheKey, fullEntry);
+              setPreview(fullEntry);
+              // DIAG (LOTE 2 F2-G) — upgrade fast→full completado (aditivo).
+              perfProbe.mark("editor_preview_upgraded", {
+                ms: Math.round(performance.now() - tFull),
+                filterId: page.filter,
+              });
+            }
+          } catch {
+            /* FULL best-effort: el entry fast queda en pie */
+          } finally {
+            releaseFullJob();
           }
-        } catch {
-          /* FULL best-effort: el entry fast queda en pie */
-        } finally {
-          releaseFullJob();
-        }
-      })();
+        })();
+      }, FULL_PASS_GRACE_MS);
     };
 
     const cached = previewCache.current.get(cacheKey);
@@ -694,6 +713,14 @@ export default function EditorView() {
       if (cached.tier === "fast") scheduleFullPass();
       return () => {
         cancelled = true;
+        // LOTE 4 (F4-A) — gracia pendiente: cancelar el timer. Si la pasada no
+        // empezó, NUNCA empieza (worker libre para el visor; bgJobsAtShot se
+        // mantiene en 0). Evidencia del diag: este mark.
+        if (fullPassTimer !== null) {
+          window.clearTimeout(fullPassTimer);
+          fullPassTimer = null;
+          perfProbe.mark("editor_fullpass_grace_cancel");
+        }
         releaseFullJob();
       };
     }
@@ -750,11 +777,15 @@ export default function EditorView() {
           firstRenderPidRef.current = page.id;
           // LOTE 2 (F2-E) §2.3.1 — mark igual que hoy (mismo orden de
           // campos) + previewTier del tier que pintó.
+          // LOTE 3 (F3-B) — decodeMs de la adquisición de la fuente del
+          // warp (blob-first del tier fast O fallback; null si el pipeline
+          // que respondió no lo midió — fallback canvas local).
           perfProbe.mark("editor_first_render", {
             engine: entry.engine,
             cached: false,
             ms: filterMs,
             previewTier: "fast",
+            decodeMs: typeof res.decodeMs === "number" ? res.decodeMs : null,
           });
         }
       } catch {
@@ -776,6 +807,14 @@ export default function EditorView() {
     })();
     return () => {
       cancelled = true;
+      // LOTE 4 (F4-A) — gracia pendiente: cancelar el timer. Si la pasada no
+      // empezó, NUNCA empieza (worker libre para el visor; bgJobsAtShot se
+      // mantiene en 0). Evidencia del diag: este mark.
+      if (fullPassTimer !== null) {
+        window.clearTimeout(fullPassTimer);
+        fullPassTimer = null;
+        perfProbe.mark("editor_fullpass_grace_cancel");
+      }
       releaseFullJob();
     };
   }, [mode, cacheKey, page?.original, cachePreviewEntry]);

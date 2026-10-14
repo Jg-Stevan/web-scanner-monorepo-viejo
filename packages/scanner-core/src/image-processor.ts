@@ -17,6 +17,9 @@
 import type { PageFilter, PagePrecision, PageQuality, Point, Quad } from "./types";
 import { normalizePageFilter } from "./types";
 import { enhanceToRgba, unsharpRgba, type EnhanceMode as SharedEnhanceMode } from "./image-modes";
+// LOTE 3 (F3-A) — blob-first decode del tier fast: dataUrlToBlob es sync y
+// page-store NO importa image-processor (sin ciclo, verificado).
+import { dataUrlToBlob } from "./page-store";
 import {
   getScannerWorker,
   type EnhanceMode,
@@ -30,6 +33,10 @@ export interface ProcessResult {
   thumbnail: string; // data URL pequeña
   /** Estadísticas del pipeline REAL (worker OpenCV) o fallback canvas. */
   precision?: PagePrecision;
+  /** LOTE 3 (F3-A) — ms de la adquisición de la fuente del warp
+   *  (blob-first del tier fast O decode completo del camino de hoy;
+   *  ausente en el fallback canvas local). */
+  decodeMs?: number;
 }
 
 /** Opciones del pipeline preciso (aditivas, con defaults seguros). */
@@ -94,6 +101,59 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error("No se pudo cargar la imagen"));
     img.src = src;
   });
+}
+
+/** LOTE 3 (F3-A) — dimensiones de display de un JPEG sin decodificar:
+ *  SOF (w/h) + EXIF orientation (APP1/IFD0 tag 0x0112; 5-8 → swap).
+ *  Devuelve null si no es JPEG o el header es ilegible → fallback.
+ *  Contrato: dims de display correctas o null (nunca dims con aspecto
+ *  errado — si el EXIF se anuncia pero no se puede leer completo → null). */
+async function jpegDimensionsFromBlob(blob: Blob): Promise<{ w: number; h: number } | null> {
+  try {
+    const head = new Uint8Array(await blob.slice(0, 262144).arrayBuffer());
+    if (head[0] !== 0xff || head[1] !== 0xd8) return null;
+    let orientation = 1;
+    let i = 2;
+    while (i + 9 < head.length) {
+      if (head[i] !== 0xff) { i += 1; continue; }
+      const marker = head[i + 1];
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) { i += 2; continue; }
+      const len = (head[i + 2] << 8) | head[i + 3];
+      if (marker === 0xe1 && len >= 8) { // APP1 → EXIF orientation
+        const isExif = head[i + 4] === 0x45 && head[i + 5] === 0x78 && head[i + 6] === 0x69 && head[i + 7] === 0x66;
+        if (isExif) {
+          // Header TIFF completo (tiff..tiff+7) + sanity del segmento entero:
+          // si el APP1 anunciado no cabe en la ventana leída → ilegible.
+          if (i + 18 > head.length || i + 2 + len > head.length) return null;
+          const tiff = i + 10;
+          const be = head[tiff] === 0x4d && head[tiff + 1] === 0x4d;
+          const u16 = (o: number) => (be ? (head[o] << 8) | head[o + 1] : head[o] | (head[o + 1] << 8));
+          // Offset IFD0 (u32) respetando endianness (nota (*) de la spec);
+          // >>> 0 neutraliza el signo del <<24.
+          const ifd0 = be
+            ? (((head[tiff + 4] << 24) | (head[tiff + 5] << 16) | (head[tiff + 6] << 8) | head[tiff + 7]) >>> 0)
+            : (((head[tiff + 7] << 24) | (head[tiff + 6] << 16) | (head[tiff + 5] << 8) | head[tiff + 4]) >>> 0);
+          const ifd = tiff + ifd0;
+          for (let n = u16(ifd), e = 0; e < n && ifd + 2 + e * 12 + 8 <= head.length; e += 1) {
+            const entry = ifd + 2 + e * 12;
+            if (u16(entry) === 0x0112) { orientation = u16(entry + 8); break; }
+          }
+        }
+      }
+      const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (isSof) {
+        const h = (head[i + 5] << 8) | head[i + 6];
+        const w = (head[i + 7] << 8) | head[i + 8];
+        if (w <= 0 || h <= 0) return null;
+        const swap = orientation >= 5 && orientation <= 8;
+        return { w: swap ? h : w, h: swap ? w : h };
+      }
+      i += 2 + len;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Tope del lado mayor para IMÁGENES IMPORTADAS (galería/cámara nativa).
@@ -342,6 +402,29 @@ async function thumbnailFromBlob(blob: Blob): Promise<string> {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bm, 0, 0, tW, tH);
     bm.close();
+    return canvas.toDataURL("image/jpeg", 0.8);
+  } catch {
+    return "";
+  }
+}
+
+/** LOTE 4 (F4-B) — miniatura 160px desde el processed (data URL) para el
+ *  camino rotation === 0 del fallback de thumbnail (el bitmap del warp fue
+ *  transferido al worker y ya no está en el hilo principal). Re-decode
+ *  COMPLETO solo si thumbnailFromBlob falló (raro). "" si todo falla,
+ *  igual que thumbnailFromBlob. */
+async function thumbnailFromDataURL(url: string): Promise<string> {
+  try {
+    const img = await loadImage(url);
+    const tW = 160;
+    const tH = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * tW));
+    const canvas = document.createElement("canvas");
+    canvas.width = tW;
+    canvas.height = tH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, tW, tH);
     return canvas.toDataURL("image/jpeg", 0.8);
   } catch {
     return "";
@@ -855,36 +938,90 @@ async function processImagePrecise(
   const ok = await client.waitReady();
   if (!ok) return null;
   try {
-    const img = await loadImage(src);
-    if (!img.naturalWidth || !img.naturalHeight) return null;
-
-    // LOTE 2 (F2-E) — preview escalonado: cuando el llamador pide un tope de
-    // salida ESTRICTAMENTE menor que el full-res (tier fast 2048 < 4032) y la
-    // foto lo excede, reducir la ENTRADA del warp a ese tope ANTES de enviarla
-    // al worker (createImageBitmap con resize: corre fuera del hilo principal;
-    // el warp escala ~cuadrático con el output — (2048/4032)² ≈ 0.26× — y el
-    // output queda ≤ maxLongSide por construcción). El quad es FRACCIONES
-    // (0–1) de la foto: bajar la resolución de la fuente NO lo altera.
-    // ⚠️ INVARIANTE WYSIWYG: con maxLongSide === PROCESSED_MAX_LONG_SIDE (4032)
-    // o indefinido la entrada NO se toca — comportamiento byte a byte el de
-    // hoy (guardado/export a 4032 intactos; el tier fast es SOLO display del
-    // editor). El guard `cap < PROCESSED_MAX_LONG_SIDE` hace el invariante
-    // hermético incluso para fotos hipotéticas >4032.
+    // LOTE 3 (F3-A) — blob-first decode del tier fast: cuando hay tope de
+    // salida ESTRICTAMENTE menor que el full-res, intentar decodificar
+    // DIRECTO desde el Blob al tamaño de salida (el decodificador nativo
+    // escala DURANTE el decode — JPEG DCT ≈ 1/2 para 4032→2048 — sin
+    // materializar los 12 MP que hoy paga loadImage ANTES del downscale; ese
+    // decode completo es el piso #1 del firstRender, diag SM-A135M 1602).
+    // Dims de display se leen de la cabecera SIN decodificar
+    // (jpegDimensionsFromBlob); la orientación EXIF 5-8 la resuelve el
+    // parser (w/h swap) y el decode la aplica (imageOrientation
+    // "from-image"). HERMÉTICO: cualquier paso que falle (no-JPEG, header
+    // corrupto, plataforma sin resize/orientación — el sanity de dims
+    // exactas lo detecta) → fallback al camino de hoy, byte a byte igual:
+    // el comportamiento nunca degrada, solo acelera cuando está disponible.
+    // ⚠️ INVARIANTE WYSIWYG intacto: con cap === PROCESSED_MAX_LONG_SIDE o
+    // undefined este bloque NO corre y el quad sigue siendo FRACCIONES (0-1)
+    // — bajar la fuente NO lo altera.
     const cap = opts?.maxLongSide;
-    const longIn = Math.max(img.naturalWidth, img.naturalHeight);
-    let warpSource: HTMLImageElement | ImageBitmap = img;
-    if (cap !== undefined && cap < PROCESSED_MAX_LONG_SIDE && cap < longIn) {
-      const scale = cap / longIn;
+    // F3-A — medición honesta de la adquisición de la fuente (blob-first O
+    // fallback), expuesta como ProcessResult.decodeMs (diag F3-B).
+    const tDecode = performance.now();
+    let warpSource: HTMLImageElement | ImageBitmap | null = null;
+    let img: HTMLImageElement | null = null;
+    if (cap !== undefined && cap < PROCESSED_MAX_LONG_SIDE) {
       try {
-        warpSource = await createImageBitmap(img, {
-          resizeWidth: Math.max(1, Math.round(img.naturalWidth * scale)),
-          resizeHeight: Math.max(1, Math.round(img.naturalHeight * scale)),
-          resizeQuality: "high",
-        });
+        const blob = dataUrlToBlob(src);
+        const dims = await jpegDimensionsFromBlob(blob);
+        // Mismo umbral que el camino de hoy: solo si la foto EXCEDE el tope
+        // (el parser entrega las mismas dims de display que naturalWidth/
+        // naturalHeight — swap EXIF incluido).
+        if (dims && cap < Math.max(dims.w, dims.h)) {
+          const scale = cap / Math.max(dims.w, dims.h);
+          const rw = Math.max(1, Math.round(dims.w * scale));
+          const rh = Math.max(1, Math.round(dims.h * scale));
+          const bitmap = await createImageBitmap(blob, {
+            resizeWidth: rw,
+            resizeHeight: rh,
+            resizeQuality: "high",
+            imageOrientation: "from-image",
+          });
+          // Sanity hermético: la plataforma DEBE entregar exactamente el
+          // tamaño pedido (resize respetado). Si no → cerrar y usar el
+          // camino de hoy (nunca un aspecto degradado).
+          if (bitmap.width === rw && bitmap.height === rh) {
+            warpSource = bitmap;
+          } else {
+            bitmap.close();
+          }
+        }
       } catch {
-        /* plataforma sin resize en createImageBitmap → foto completa (hoy) */
+        /* no-JPEG / header corrupto / plataforma sin resize+orientación →
+           fallback al camino de hoy */
       }
     }
+    if (!warpSource) {
+      // LOTE 2 (F2-E) — preview escalonado: cuando el llamador pide un tope de
+      // salida ESTRICTAMENTE menor que el full-res (tier fast 2048 < 4032) y la
+      // foto lo excede, reducir la ENTRADA del warp a ese tope ANTES de enviarla
+      // al worker (createImageBitmap con resize: corre fuera del hilo principal;
+      // el warp escala ~cuadrático con el output — (2048/4032)² ≈ 0.26× — y el
+      // output queda ≤ maxLongSide por construcción). El quad es FRACCIONES
+      // (0–1) de la foto: bajar la resolución de la fuente NO lo altera.
+      // ⚠️ INVARIANTE WYSIWYG: con maxLongSide === PROCESSED_MAX_LONG_SIDE (4032)
+      // o indefinido la entrada NO se toca — comportamiento byte a byte el de
+      // hoy (guardado/export a 4032 intactos; el tier fast es SOLO display del
+      // editor). El guard `cap < PROCESSED_MAX_LONG_SIDE` hace el invariante
+      // hermético incluso para fotos hipotéticas >4032.
+      img = await loadImage(src);
+      if (!img.naturalWidth || !img.naturalHeight) return null;
+      const longIn = Math.max(img.naturalWidth, img.naturalHeight);
+      warpSource = img;
+      if (cap !== undefined && cap < PROCESSED_MAX_LONG_SIDE && cap < longIn) {
+        const scale = cap / longIn;
+        try {
+          warpSource = await createImageBitmap(img, {
+            resizeWidth: Math.max(1, Math.round(img.naturalWidth * scale)),
+            resizeHeight: Math.max(1, Math.round(img.naturalHeight * scale)),
+            resizeQuality: "high",
+          });
+        } catch {
+          /* plataforma sin resize en createImageBitmap → foto completa (hoy) */
+        }
+      }
+    }
+    const decodeMs = performance.now() - tDecode;
 
     // 1) Warp: refinado sub-píxel (RANSAC) + shrink 3.5px + homografía
     //    INTER_CUBIC sobre la FOTO completa (la foto es la fuente de verdad).
@@ -898,14 +1035,24 @@ async function processImagePrecise(
     if (!warp || !warp.bitmap) return null;
 
     // 2) Rotación post-warp (90/180/270) en canvas de alta calidad.
-    const rotated = bitmapToRotatedCanvas(warp.bitmap, rotation);
-    warp.bitmap.close();
+    // LOTE 4 (F4-B) — rotation === 0 (el 100 % de las capturas): el bitmap del
+    // warp va DIRECTO al enhance (transferido al worker — client.enhance ya
+    // acepta ImageBitmap y en ese camino NO re-decodifica). Hoy: copia canvas
+    // 1:1 (48.8 MB en full 4032) + drawImage completo + createImageBitmap
+    // interno del cliente (OTRA copia completa) ≈ 97 MB de pico y 2 copias
+    // para llegar al MISMO píxel de entrada. Con rotation ≠ 0 el canvas es
+    // imprescindible (transforma píxeles) → camino de hoy byte a byte.
+    const rotated = rotation !== 0 ? bitmapToRotatedCanvas(warp.bitmap, rotation) : null;
+    if (rotated) warp.bitmap.close();
+    // rotation === 0: NO cerrar aquí — la transferencia al worker neuteriza el
+    // bitmap (detached; close posterior sería no-op). Si enhance fallara ANTES
+    // de transferir, el close() del guard del fallback (§4.2-d) libera.
 
     // 3) Enhance: modo real del producto (modelo de sombras + constantes
     //    exactas). maxLongSide protege la memoria de data URLs en iOS.
     const mode = filterToEnhanceMode(filter);
     const maxLongSide = opts?.maxLongSide ?? PROCESSED_MAX_LONG_SIDE;
-    const enh = await client.enhance(rotated, mode, { maxLongSide });
+    const enh = await client.enhance(rotated ?? warp.bitmap, mode, { maxLongSide });
 
     if (enh && enh.blob.size > 0) {
       let blob = enh.blob;
@@ -933,17 +1080,34 @@ async function processImagePrecise(
         height: enh.h,
         elapsedMs: enh.elapsedMs,
       };
-      if (thumbnail) return { processed, thumbnail, precision };
-      // Sin thumbnail desde el blob → lo genero del canvas rotado
+      if (thumbnail) return { processed, thumbnail, precision, decodeMs };
+      // Sin thumbnail desde el blob → del canvas rotado (rotation ≠ 0) o
+      // re-decodificando el processed (rotation === 0 — F4-B; solo este camino
+      // raro). Mismo resultado, coste extra solo si thumbnailFromBlob falló.
       return {
         processed,
-        thumbnail: thumbnailFromCanvas(rotated),
+        thumbnail: rotated
+          ? thumbnailFromCanvas(rotated)
+          : await thumbnailFromDataURL(processed),
         precision,
+        decodeMs,
       };
     }
 
     // 4) Enhance no disponible → warp real + filtro canvas local (misma
     //    matemática de image-modes). Los 3 filtros salen PNG (R-10).
+    // LOTE 4 (F4-B) — rotation === 0: el bitmap se TRANSFIRIÓ al worker
+    // (detached): los píxeles no están en el hilo principal para este fallback.
+    // close() es no-op si detached y libera si enhance falló antes de
+    // transferir (isReady=false) → cero fugas. Devolver null → processImage
+    // cae a processImageCanvas (pipeline completo desde la fuente, output
+    // equivalente). Ventana de riesgo: worker muerto / enhance fallido ENTRE
+    // el reply del warp y el enhance (sub-segundo; nunca observado en diag) —
+    // el coste es un reproceso completo, el output NUNCA es incorrecto.
+    if (!rotated) {
+      warp.bitmap.close();
+      return null;
+    }
     const filtered = applyFilterToCanvas(rotated, filter);
     if (filter === "original" && opts?.unsharpOriginal === true) {
       applyUnsharpToCanvas(filtered);
@@ -959,6 +1123,7 @@ async function processImagePrecise(
         width: filtered.width,
         height: filtered.height,
       },
+      decodeMs,
     };
   } catch {
     return null;
