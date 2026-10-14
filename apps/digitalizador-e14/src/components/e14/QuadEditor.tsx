@@ -4,8 +4,8 @@
  * QUAD EDITOR (§7.5, D19 rev.2) — COPIA del subsistema CROP del lab
  * (apps/scanner-lab/src/components/scanner/EditorView.tsx, ~2.554 líneas):
  * NO se re-inventa; se copia el subsistema de recorte PROBADO en táctil real
- * y se re-veste con la estética Precision Monitor (ok-tint / surface tokens /
- * font-data). Fuera de la copia (fuera de alcance del modelo de 1 acta):
+ * y se re-veste con la estética STITCH (brand-green / brand surfaces /
+ * font-mono). Fuera de la copia (fuera de alcance del modelo de 1 acta):
  * zoom 1×–6×, sheet OCR, sheet de filtros (drawer), modo DOC multi-página,
  * carrusel de miniaturas.
  *
@@ -16,8 +16,8 @@
  *   · pointerToNormalized · updateLoupe · onHandleDown · onContainerPointerMove
  *     · onContainerPointerUp (~L950–1050) — LITERAL (React puro).
  *   · JSX asas 4 esquinas + 4 medios (~L2005–2040) — estructura COPIADA,
- *     re-vestida: #007AFF → tokens ok-tint; hit-area 44×44 como el origen.
- *   · Lupa 3× (~L2087–2130) — COPIADA, re-vestida (crosshair → warn).
+ *     re-vestida: #007AFF → brand-green; hit-area 44×44 como el origen.
+ *   · Lupa 3× (~L2087–2130) — COPIADA, re-vestida (crosshair → ámbar).
  *   · Tween del quad (L39/L873–887, animador del lab) → REEMPLAZADO: el
  *     aterrizaje del quad corre por rAF propio del lab (easeOutCubic,
  *     TWEEN_MS=280) y las animaciones de contenedor/pulso pasan a CSS
@@ -124,7 +124,7 @@ export function QuadEditor({
     fx: number;
     fy: number;
   } | null>(null);
-  /** Handle activo (para el readout font-data del header). */
+  /** Handle activo (para el readout font-mono del header). */
   const [handleActivo, setHandleActivo] = useState<
     { kind: "corner" | "mid"; index: number } | null
   >(null);
@@ -388,7 +388,7 @@ export function QuadEditor({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [aplicando, onCancelar]);
 
-  // ── Readout del handle activo (font-data, Precision Monitor) ──────────────
+  // ── Readout del handle activo (font-mono, Stitch) ──────────────
   const puntoActivo = useMemo(() => {
     if (!handleActivo) return null;
     if (handleActivo.kind === "corner") return displayQuad[handleActivo.index];
@@ -404,22 +404,22 @@ export function QuadEditor({
       className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col animate-editor-enter"
     >
       {/* Header propio del modo CROP (lab L1666–1691, re-vestido) */}
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 pt-safe pb-2">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-brand-border px-3 pt-safe pb-2">
         <button
           type="button"
           aria-label="Cancelar el ajuste de bordes"
           onClick={aplicando ? undefined : onCancelar}
           disabled={aplicando}
-          className="rounded-lg px-3 py-1.5 font-data text-[11px] font-bold tracking-widest text-ink-dim bg-surface-2 border border-outline-dim/40 transition-all active:scale-95 disabled:opacity-40"
+          className="rounded-xl px-3 py-1.5 font-mono text-[11px] font-bold tracking-widest text-gray-300 bg-brand-surface border border-brand-border transition-all active:scale-95 disabled:opacity-40"
         >
           CANCELAR
         </button>
-        <span className="font-data text-[11px] font-bold tracking-[0.2em] text-ink uppercase">
+        <span className="font-mono text-[11px] font-bold tracking-[0.2em] text-white uppercase">
           Ajustar bordes
         </span>
         <span
-          className={`font-data text-[10px] tracking-wider tabular-nums min-w-[92px] text-right ${
-            mensajeReadout ? "text-crit" : "text-ok-tint"
+          className={`font-mono text-[10px] tracking-wider tabular-nums min-w-[92px] text-right ${
+            mensajeReadout ? "text-red-500" : "text-brand-green"
           }`}
           aria-live={mensajeReadout ? "assertive" : "off"}
         >
@@ -442,16 +442,22 @@ export function QuadEditor({
         >
           {!fit || !natural ? (
             <div className="flex flex-col items-center gap-3" aria-label="Cargando imagen">
-              <span className="block h-7 w-7 rounded-full border-[3px] border-line border-t-ok-tint animate-spin" />
-              <span className="font-data text-[10px] tracking-widest text-ink-faint uppercase">
+              <span className="block h-7 w-7 rounded-full border-[3px] border-brand-border border-t-brand-green animate-spin" />
+              <span className="font-mono text-[10px] tracking-widest text-gray-500 uppercase">
                 Decodificando foto…
               </span>
             </div>
           ) : (
             <div
-              className="relative shrink-0 rounded-sm shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
+              className="relative shrink-0 rounded-lg shadow-[0_18px_60px_rgba(0,0,0,0.65)]"
               style={{ width: fit.w, height: fit.h }}
             >
+              {/* Retículas de esquina AR del visor (globals scanner-corner-*,
+                  18×18/3.5px — verde por defecto, SPEC §1/§5). */}
+              <div className="scanner-corner-tl z-20" aria-hidden />
+              <div className="scanner-corner-tr z-20" aria-hidden />
+              <div className="scanner-corner-bl z-20" aria-hidden />
+              <div className="scanner-corner-br z-20" aria-hidden />
               {/* Contenedor interior: aspecto natural + rotación (CSS — reemplazo
                   del motion.div rotado del lab). El overlay y los handles viven
                   aquí dentro, por lo que rotan solidariamente con la imagen. */}
@@ -472,7 +478,7 @@ export function QuadEditor({
                 />
 
                 {/* Marco de perspectiva (coordenadas normalizadas 0-1) —
-                    ok-tint en vez de #007aff */}
+                    brand-green en vez de #007aff */}
                 <svg
                   className="pointer-events-none absolute inset-0 h-full w-full"
                   viewBox="0 0 100 100"
@@ -481,8 +487,8 @@ export function QuadEditor({
                 >
                   <polygon
                     points={polygonPoints}
-                    fill="rgba(63,229,108,0.05)"
-                    stroke="var(--color-ok-tint)"
+                    fill="rgba(0,230,118,0.05)"
+                    stroke="var(--color-brand-green)"
                     strokeWidth={2.5}
                     strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke"
@@ -506,7 +512,7 @@ export function QuadEditor({
                         top: `${((p.y + q.y) / 2) * 100}%`,
                       }}
                     >
-                      <span className="pointer-events-none block h-3 w-3 rounded-full border-[1.5px] border-ok-tint bg-white shadow-[0_1px_4px_rgba(0,0,0,0.4)]" />
+                      <span className="pointer-events-none block h-3 w-3 rounded-full border-[1.5px] border-brand-green bg-white shadow-[0_1px_4px_rgba(0,0,0,0.4)]" />
                     </button>
                   );
                 })}
@@ -525,10 +531,10 @@ export function QuadEditor({
                       top: `${p.y * 100}%`,
                     }}
                   >
-                    <span className="pointer-events-none relative block h-4 w-4 rounded-full border-2 border-ok-tint bg-white shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
+                    <span className="pointer-events-none relative block h-4 w-4 rounded-full border-2 border-brand-green bg-white shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
                       <span
                         aria-hidden="true"
-                        className="absolute inset-0 rounded-full border-2 border-ok-tint animate-handle-pulse"
+                        className="absolute inset-0 rounded-full border-2 border-brand-green animate-handle-pulse"
                       />
                     </span>
                   </button>
@@ -567,9 +573,9 @@ export function QuadEditor({
                     top: LOUPE_RADIUS - loupe.fy * lh,
                   }}
                 />
-                {/* Crosshair: marca el punto de corte real (F4) — ámbar del tema */}
-                <span className="absolute left-1/2 top-0 h-full w-[1.5px] -translate-x-1/2 bg-warn/95" />
-                <span className="absolute left-0 top-1/2 h-[1.5px] w-full -translate-y-1/2 bg-warn/95" />
+                {/* Crosshair: marca el punto de corte real (F4) — ámbar del sistema */}
+                <span className="absolute left-1/2 top-0 h-full w-[1.5px] -translate-x-1/2 bg-amber-400/95" />
+                <span className="absolute left-0 top-1/2 h-[1.5px] w-full -translate-y-1/2 bg-amber-400/95" />
               </div>
             );
           })() : null}
@@ -578,8 +584,8 @@ export function QuadEditor({
 
       {/* Footer de confirmación — F4 (§F4.6): fila FIJA de ROTAR 90° +
           DETECCIÓN AUTOMÁTICA sobre el hint, mismo estilo del footer
-          (border-outline-dim, font-data, alto táctil 44px). */}
-      <footer className="shrink-0 border-t border-line bg-surface-1/90 backdrop-blur-md px-4 pt-2.5 pb-safe flex flex-col gap-1.5">
+          (border-brand-borderdim, font-mono, alto táctil 44px). */}
+      <footer className="shrink-0 border-t border-brand-borderdim bg-[#0a0e0c]/90 backdrop-blur-md px-4 pt-2.5 pb-safe flex flex-col gap-1.5">
         <div className="flex gap-2">
           {/* F4 (§F4.2): rotación LOCAL — el quad NO se remapea (vive en
               fracciones de la imagen sin rotar; overlay rota solidario). */}
@@ -588,30 +594,30 @@ export function QuadEditor({
             aria-label="Rotar la imagen 90 grados"
             onClick={aplicando ? undefined : () => setRotLocal((r) => (r + 90) % 360)}
             disabled={aplicando}
-            className="flex-1 min-w-0 h-11 rounded-xl bg-surface-4/90 hover:bg-surface-5 border border-outline-dim/40 font-data text-[10px] font-bold tracking-widest uppercase text-ink flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40"
+            className="flex-1 min-w-0 h-11 rounded-xl bg-brand-surface hover:bg-brand-surfacelight border border-brand-border font-mono text-[10px] font-bold tracking-widest uppercase text-gray-300 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40"
           >
-            <RotateIcon className="w-4 h-4 text-ok-tint shrink-0" />
+            <RotateIcon className="w-4 h-4 text-gray-300 shrink-0" />
             <span className="truncate">ROTAR 90°</span>
           </button>
           {/* Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx
               L2123-2141 (botón pill «Detección automática» — spinner dentro
-              mientras detecta, patrón L2132-2135). */}
+              mientras detecta, patrón L2132-2135). CTA verde sólido (§5). */}
           <button
             type="button"
             aria-label="Detectar automáticamente los bordes del acta"
             onClick={aplicando || detectando ? undefined : () => void detectar()}
             disabled={aplicando || detectando}
-            className="flex-1 min-w-0 h-11 rounded-xl bg-surface-4/90 hover:bg-surface-5 border border-outline-dim/40 font-data text-[10px] font-bold tracking-widest uppercase text-ink flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40"
+            className="flex-1 min-w-0 h-11 rounded-xl bg-brand-green hover:bg-emerald-400 text-black font-mono text-[10px] font-bold tracking-widest uppercase flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40 shadow-[0_4px_20px_rgba(0,230,118,0.35)]"
           >
             {detectando ? (
-              <span className="h-4 w-4 shrink-0 rounded-full border-2 border-outline-dim border-t-ok-tint animate-spin" />
+              <span className="h-4 w-4 shrink-0 rounded-full border-2 border-black/30 border-t-black animate-spin" />
             ) : (
-              <SparklesIcon className="w-4 h-4 text-ok-tint shrink-0" />
+              <SparklesIcon className="w-4 h-4 text-black shrink-0" />
             )}
             <span className="truncate">DETECCIÓN AUTOMÁTICA</span>
           </button>
         </div>
-        <span className="font-data text-[9px] tracking-[0.18em] text-ink-faint uppercase text-center">
+        <span className="font-mono text-[9px] tracking-[0.18em] text-gray-500 uppercase text-center">
           Arrastra las asas · la lupa amplía 3× el punto de corte
         </span>
         <button
@@ -619,11 +625,11 @@ export function QuadEditor({
           aria-label="Aplicar el recorte"
           onClick={aplicando ? undefined : () => onAplicar(displayRef.current, rotLocal)}
           disabled={aplicando}
-          className="w-full h-12 py-3 px-5 bg-ok-tint hover:bg-ok active:bg-ok text-ok-ink font-extrabold text-sm uppercase tracking-wider rounded-xl flex items-center justify-center gap-2.5 shadow-[0_0_12px_rgba(63,229,108,0.45)] transition-all transform active:scale-[0.98] disabled:opacity-70 disabled:cursor-wait"
+          className="w-full h-12 py-3 px-5 bg-brand-green hover:bg-emerald-400 text-black font-extrabold text-sm uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2.5 shadow-[0_4px_20px_rgba(0,230,118,0.35)] transition-all transform active:scale-[0.98] disabled:opacity-70 disabled:cursor-wait"
         >
           {aplicando ? (
             <>
-              <span className="block h-4 w-4 rounded-full border-2 border-ok-ink/30 border-t-ok-ink animate-spin" />
+              <span className="block h-4 w-4 rounded-full border-2 border-black/30 border-t-black animate-spin" />
               <span>PROCESANDO…</span>
             </>
           ) : (

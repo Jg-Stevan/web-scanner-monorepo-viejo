@@ -1,137 +1,134 @@
 @import "tailwindcss";
 
 /* ============================================================
-   PRECISION MONITOR — tokens del tema (DESIGN.md / SPEC §5)
-   CYBER-NEÓN (SPEC-e14-cyber-neon Rev. 1 §2): paleta medida por
-   muestreo de píxeles del mock del dueño 260×588 — redefine los
-   tokens existentes y añade los nuevos; TODA la app hereda (es
-   lo que «oscurece» el fondo global). Los tonos de estado warn
-   #ffd600 / crit #ff5252 NO cambian.
+   STITCH REDESIGN (SPEC-e14-redesign-stitch Rev. 1 §1) —
+   tokens canónicos consolidados de las 6 pantallas del ZIP
+   (download/stitch-e14-redesign/stitch_exportaci_n_parcial_stitch/).
+   ÚNICA paleta permitida: el tema anterior (Precision Monitor /
+   cyber-neón) queda ELIMINADO por completo (regla de oro del
+   dueño: «ven necesito que me elimines cualquier diseño que
+   tengamos y solo dejemos estos… estás combinando diseños y no
+   me gusta eso»).
    ============================================================ */
 @theme inline {
-  /* Superficies (oscuras azuladas del mock) */
-  --color-bg: #060a0d;
-  --color-surface-1: #11181e;
-  --color-surface-2: #16222e;
-  --color-surface-3: #1a242e;
-  --color-surface-card: #0b1116;
-  --color-nav-bg: #0e1319;
-  --color-surface-4: #252b2b;
-  --color-surface-5: #303636;
-  --color-hover: #1a2323;
-  /* Texto */
-  --color-ink: #ffffff;
-  --color-ink-dim: #8a94a3;
-  --color-ink-faint: #869583;
-  /* Líneas */
-  --color-line: #242e2e;
-  --color-outline: #869583;
-  --color-outline-dim: #3c4a3c;
-  /* Estados — verde neón (renombre del rol ok) + tonos vigentes */
-  --color-ok: #00c853;
-  --color-ok-tint: #0bf282;
-  --color-ok-ink: #003912;
-  --color-warn: #ffd600;
-  --color-warn-ink: #3a3000;
-  --color-crit: #ff5252;
-  --color-crit-tint: #ff8d87;
-  --color-crit-ink: #690005;
-  --color-crit-deep: #93000a;
-  /* Neón (SPEC §2) */
-  --color-neon-strong: #03df73;
-  --color-neon-ink: #000000;
-  --color-green-bar: #11251c;
-  --color-green-bar-border: #27473c;
-  --color-green-inset: #0f261c;
-  --color-ring-dim: #01512a;
-  /* HUD de cámara (SPEC-e14-cyber-neon-captura §2) */
-  --color-visor-bg: #030504;
-  --color-amber-hud: #e8c84a;
-  --color-hud-blue: #24357a;
-  /* Tipos */
-  --font-sans: var(--font-hanken);
+  /* Superficies (de mayor a menor profundidad) */
+  --color-brand-black: #070a0d;        /* raíz de pantallas de revisión (bg-body) */
+  --color-brand-viewfinder: #050706;   /* raíz del visor de cámara (escaneo) */
+  --color-brand-surface: #0f151b;      /* tarjetas / píldoras / botones secundarios */
+  --color-brand-surfacelight: #18222c; /* chips inactivos / banner de ubicación / hovers */
+  --color-brand-panel: #0a0e0c;        /* dock inferior del escaneo */
+  --color-brand-chip: #121915;         /* contenedor de chips del dock de escaneo */
+  --color-brand-border: #23303d;       /* bordes de revisión */
+  --color-brand-borderdim: #1b2620;    /* bordes del dock de escaneo */
+  /* Semántica de desenlace */
+  --color-brand-green: #00e676;        /* óptima / enviada / activo */
+  --color-brand-greendark: #08331e;    /* fondo de píldora verde sólida / nube online */
+  --color-brand-greenmuted: #003b20;
+  /* Tipos — Inter (todo) + JetBrains Mono (scores/chips/códigos/horas/banner) */
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-jbmono);
-  /* Forma */
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 4px;
-  --radius-xl: 8px;
 }
 
 /* ============================================================
-   Glows del efecto neón (SPEC-e14-cyber-neon §2 — 3 recetas por
-   tono; glow-md es un drop-shadow para brackets y checks)
+   Esquinas AR del visor del acta (ZIP literal — rechazada_1
+   <style>: 18×18, bordes 3.5px). El color por defecto es verde
+   (óptima); rojo/ámbar se aplican con style="border-color: …"
+   exactamente como hace el mock advertencia_1.
    ============================================================ */
-@utility glow-sm {
-  box-shadow:
-    0 0 10px rgba(11, 242, 130, 0.3),
-    0 0 2px rgba(11, 242, 130, 0.55);
+.scanner-corner-tl {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 18px;
+  height: 18px;
+  border-top: 3.5px solid #00e676;
+  border-left: 3.5px solid #00e676;
 }
-@utility glow-sm-crit {
-  box-shadow:
-    0 0 10px rgba(255, 82, 82, 0.3),
-    0 0 2px rgba(255, 82, 82, 0.55);
+.scanner-corner-tr {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 18px;
+  height: 18px;
+  border-top: 3.5px solid #00e676;
+  border-right: 3.5px solid #00e676;
 }
-@utility glow-sm-warn {
-  box-shadow:
-    0 0 10px rgba(255, 214, 0, 0.3),
-    0 0 2px rgba(255, 214, 0, 0.55);
+.scanner-corner-bl {
+  position: absolute;
+  bottom: -2px;
+  left: -2px;
+  width: 18px;
+  height: 18px;
+  border-bottom: 3.5px solid #00e676;
+  border-left: 3.5px solid #00e676;
 }
-@utility glow-md {
-  filter: drop-shadow(0 0 5px rgba(11, 242, 130, 0.55));
-}
-@utility glow-md-crit {
-  filter: drop-shadow(0 0 5px rgba(255, 82, 82, 0.55));
-}
-@utility glow-md-warn {
-  filter: drop-shadow(0 0 5px rgba(255, 214, 0, 0.55));
-}
-@utility glow-cta {
-  box-shadow:
-    0 12px 32px rgba(3, 223, 115, 0.38),
-    0 3px 10px rgba(3, 223, 115, 0.5);
-}
-@utility glow-cta-crit {
-  box-shadow:
-    0 12px 32px rgba(255, 82, 82, 0.38),
-    0 3px 10px rgba(255, 82, 82, 0.5);
-}
-@utility glow-cta-warn {
-  box-shadow:
-    0 12px 32px rgba(255, 214, 0, 0.38),
-    0 3px 10px rgba(255, 214, 0, 0.5);
+.scanner-corner-br {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 18px;
+  height: 18px;
+  border-bottom: 3.5px solid #00e676;
+  border-right: 3.5px solid #00e676;
 }
 
 /* ============================================================
-   Utilidades del design system (definir UNA vez — SPEC §5)
+   Animaciones del ZIP (se portan — SPEC §1)
    ============================================================ */
-@utility font-data {
-  font-family: var(--font-jbmono);
+
+/* Línea láser del visor de escaneo (escaneo code.html) */
+@keyframes scan-laser {
+  0% {
+    top: 2%;
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.95;
+  }
+  100% {
+    top: 98%;
+    opacity: 0.15;
+  }
+}
+@utility animate-scan {
+  animation: scan-laser 2.8s ease-in-out infinite alternate;
 }
 
-@utility label-caps {
-  font-family: var(--font-hanken);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 16px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* Pulso del aro del obturador (escaneo code.html) */
+@keyframes pulse-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.4);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 8px rgba(0, 230, 118, 0);
+  }
+}
+@utility shutter-glow {
+  animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-@utility stats-number {
-  font-family: var(--font-jbmono);
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 32px;
+/* Ripple táctil suave (rechazada_1 code.html) */
+.tap-action:active {
+  transform: scale(0.97);
+  transition: transform 0.08s ease-in-out;
 }
 
-@utility headline-lg {
-  font-family: var(--font-hanken);
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 32px;
-  letter-spacing: -0.02em;
+/* Scrollbars ocultas para chips horizontales (rechazada_1) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ============================================================
+   Utilidades del sistema (Stitch — reemplazan a las del tema
+   anterior; los nombres viejos DESAPARECEN, AC9)
+   ============================================================ */
 
 /* Safe areas (PWA / iOS notch) */
 @utility pt-safe {
@@ -141,15 +138,15 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Scrollbar fina para listas largas (SPEC §7.7) */
+/* Scrollbar fina para listas largas */
 @utility thin-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-surface-5) transparent;
+  scrollbar-color: var(--color-brand-border) transparent;
   &::-webkit-scrollbar {
     width: 4px;
   }
   &::-webkit-scrollbar-thumb {
-    background: var(--color-surface-5);
+    background: var(--color-brand-border);
     border-radius: 2px;
   }
   &::-webkit-scrollbar-track {
@@ -165,8 +162,8 @@ body {
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  background-color: var(--color-bg);
-  color: var(--color-ink);
+  background-color: var(--color-brand-black);
+  color: #f3f4f6;
 }
 
 body {
@@ -176,42 +173,14 @@ body {
 }
 
 ::selection {
-  background: var(--color-ok-tint);
-  color: var(--color-ok-ink);
+  background: var(--color-brand-green);
+  color: #000;
 }
 
 /* ============================================================
-   Animaciones y efectos (de los code.html del zip)
+   Animaciones neutras del shell (transiciones — sin color del
+   tema anterior)
    ============================================================ */
-
-/* Latido sutil de indicadores en vivo */
-@keyframes pulse-subtle {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.65;
-    transform: scale(1.08);
-  }
-}
-@utility animate-pulse-sync {
-  animation: pulse-subtle 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-/* Línea de escaneo del ANALIZANDO */
-@keyframes scan-sweep {
-  0% {
-    transform: translateY(-56px);
-  }
-  100% {
-    transform: translateY(56px);
-  }
-}
-@utility animate-scan-sweep {
-  animation: scan-sweep 1.4s ease-in-out infinite alternate;
-}
 
 /* Transición entre vistas del shell (150 ms) */
 @keyframes view-enter {
@@ -228,71 +197,21 @@ body {
   animation: view-enter 150ms ease-out;
 }
 
-/* Entrada de notificaciones flotantes */
-@keyframes banner-in {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-@utility animate-banner-in {
-  animation: banner-in 220ms ease-out;
-}
-
-/* Patrón de código de barras del acta (code.html) */
-@utility barcode-lines {
-  background: repeating-linear-gradient(
-    90deg,
-    #111,
-    #111 2px,
-    transparent 2px,
-    transparent 4px,
-    #111 4px,
-    #111 7px,
-    transparent 7px,
-    transparent 9px
-  );
-}
-
-/* Textura scanline industrial (code.html actas/resumen) */
-@utility bg-scanline {
-  background-image: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(255, 255, 255, 0.01) 2px,
-    rgba(255, 255, 255, 0.01) 4px
-  );
-}
-
-/* Destello blanco de captura (L3 — flashKey del lab CameraView.tsx L569,
-   ~120 ms según SPEC-fase-logica §7 rev.3) */
+/* Destello blanco de captura (mock 1: overlay 320 ms) */
 @keyframes capture-flash {
   0% {
-    opacity: 0;
-  }
-  30% {
-    opacity: 1;
+    opacity: 0.9;
   }
   100% {
     opacity: 0;
   }
 }
 @utility animate-capture-flash {
-  animation: capture-flash 120ms ease-out forwards;
+  animation: capture-flash 320ms ease-out forwards;
 }
 
-/* ============================================================
-   L5 — editor de recorte (§7.5): animaciones del lab EditorView
-   re-vestidas en CSS puro (lib de animación PROHIBIDA en e14)
-   ============================================================ */
-
-/* Entrada del overlay CROP — reemplazo del motion.div del lab
-   (initial opacity 0/scale .97 → animate 1, ~0.32 s) en ~280 ms */
+/* Entrada del overlay CROP / visores modales (QuadEditor,
+   ZoomableVisor — neutral, ~280 ms) */
 @keyframes editor-enter {
   from {
     opacity: 0;
@@ -307,8 +226,7 @@ body {
   animation: editor-enter 280ms cubic-bezier(0.65, 0, 0.35, 1);
 }
 
-/* Pulso del asa de esquina — reemplazo del motion.span del lab
-   (scale 1→1.7 · opacity .55→0 · 1.3 s infinite easeOut) */
+/* Pulso del asa de esquina del editor de recorte */
 @keyframes handle-pulse {
   0% {
     transform: scale(1);
@@ -321,4 +239,20 @@ body {
 }
 @utility animate-handle-pulse {
   animation: handle-pulse 1.3s ease-out infinite;
+}
+
+/* Latido sutil de indicadores en vivo (dots de píldoras) */
+@keyframes pulse-subtle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.08);
+  }
+}
+@utility animate-pulse-sync {
+  animation: pulse-subtle 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }

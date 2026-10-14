@@ -37,10 +37,10 @@ import { CheckIcon, MapPinIcon, RefreshIcon } from "./icons";
 import { PrimaryBtn } from "./primitives";
 
 const CLASE_CAMPO =
-  "w-full h-11 min-h-11 rounded-lg bg-surface-4 border border-outline-dim px-3 text-sm font-semibold text-ink " +
-  "appearance-none cursor-pointer focus:outline-none focus:border-ok-tint/60 transition-colors";
+  "w-full h-11 min-h-11 rounded-xl bg-brand-black border border-brand-border px-3 text-sm font-semibold text-white " +
+  "appearance-none cursor-pointer focus:outline-none focus:border-brand-green/60 transition-colors";
 
-const CLASE_LABEL = "label-caps !text-[10px] text-ink-dim mb-1 block";
+const CLASE_LABEL = "font-mono text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1 block";
 
 function FilaCampo({
   label,
@@ -81,12 +81,12 @@ function Segmento<T extends string | number>({
             disabled={off}
             aria-pressed={activo}
             onClick={() => onCambiar(o.valor)}
-            className={`h-11 min-h-11 rounded-lg border text-xs font-bold uppercase tracking-wide transition-all active:scale-[0.97] ${
+            className={`h-11 min-h-11 rounded-xl border text-xs font-bold uppercase tracking-wide transition-all active:scale-[0.97] ${
               activo
-                ? "border-ok-tint/60 bg-ok-tint/10 text-ok-tint"
+                ? "border-[#00E676]/40 bg-[#00E676]/10 text-brand-green"
                 : off
-                  ? "border-outline-dim bg-surface-4/50 text-ink-faint cursor-not-allowed"
-                  : "border-outline-dim bg-surface-4 text-ink-dim"
+                  ? "border-brand-border bg-brand-surface/50 text-gray-500 cursor-not-allowed"
+                  : "border-brand-border bg-brand-surface text-gray-300"
             }`}
           >
             {o.label}
@@ -215,16 +215,16 @@ export function PanelClasificacion() {
   return (
     <section
       aria-label="Corrección de ubicación del acta"
-      className="shrink-0 w-full max-w-md mx-auto border-t border-line bg-surface-2/60 px-4 pt-2.5 pb-1"
+      className="shrink-0 w-full max-w-md mx-auto bg-brand-surface border border-brand-border rounded-2xl px-4 pt-2.5 pb-2"
     >
       {/* Cabecera del panel */}
       <div className="flex items-center gap-2 pb-2">
-        <MapPinIcon className="w-4 h-4 text-warn shrink-0" />
+        <MapPinIcon className="w-4 h-4 text-amber-400 shrink-0" />
         <div className="flex flex-col min-w-0">
           <span className="text-[11px] font-bold tracking-wide uppercase text-white font-mono">
             CORREGIR UBICACIÓN
           </span>
-          <span className="text-[10px] text-ink-dim font-mono">
+          <span className="text-[10px] text-gray-400 font-mono">
             {sinBase
               ? "SIN BASE DIVIPOL — modo texto libre"
               : sugerencia
@@ -235,7 +235,7 @@ export function PanelClasificacion() {
       </div>
 
       {/* Campos — §5: max-h con scroll si crece (max-h-96 overflow-y-auto). */}
-      <div className="max-h-96 overflow-y-auto pr-0.5 flex flex-col gap-2.5 pb-2">
+      <div className="max-h-96 overflow-y-auto thin-scroll pr-0.5 flex flex-col gap-2.5 pb-2">
         {sinBase ? (
           <>
             <FilaCampo label="Departamento / Consulado">
@@ -377,7 +377,7 @@ export function PanelClasificacion() {
             onChange={(e) => setMesa(e.target.value)}
             min={1}
             max={sinBase ? undefined : mesasMax || undefined}
-            className={`${CLASE_CAMPO} ${mesa && mesasMax && (mesaNum < 1 || mesaNum > mesasMax) ? "border-crit/60" : ""}`}
+            className={`${CLASE_CAMPO} ${mesa && mesasMax && (mesaNum < 1 || mesaNum > mesasMax) ? "border-red-500/60" : ""}`}
             placeholder="12"
             inputMode="numeric"
             aria-label="Número de mesa"

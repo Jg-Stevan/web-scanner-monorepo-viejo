@@ -1,13 +1,16 @@
 /**
  * Estado global (zustand): vista activa, acta en revisión, mesas, progreso,
- * historial, conexión y notificaciones flotantes. Toda la data nace del
+ * historial y conexión. Toda la data nace del
  * bridge (D1) — las vistas nunca tocan el bridge directamente.
+ * STITCH REDESIGN (SPEC-e14-redesign-stitch §4/D2): el sistema de
+ * notificaciones flotantes queda ELIMINADO (estado + acción + call-sites).
+ * El feedback vive en la UI persistente de estado (píldoras, nube, bloque
+ * ENVIADO, franja del visor, feedback en botón).
  */
 import { create } from "zustand";
 import { getBridge } from "./get-bridge";
 import { rotateProcessedDataUrl } from "./image-utils";
 import { ocrTextIsValid } from "@jg-stevan/scanner-core/ocr";
-import { FILTER_PRESETS } from "@jg-stevan/scanner-core/types";
 import type { PageFilter } from "@jg-stevan/scanner-core/types";
 import type { PaginaObjetivo } from "./bridge";
 import type { Acta, FuenteCaptura, HistorialRow, Mesa, ProgresoAnalisis, TipoPagina } from "./types";
@@ -47,13 +50,6 @@ export interface OpcionesSimEscaneo {
   scoreSimulado: number;
 }
 
-export interface Notificacion {
-  id: number;
-  tone: "ok" | "warn" | "crit";
-  titulo: string;
-  descripcion?: string;
-}
-
 interface E14Store {
   vista: Vista;
   online: boolean;
@@ -84,15 +80,12 @@ interface E14Store {
   colaOffline: number;
   solicitudesRescaneo: number;
   historial: HistorialRow[];
-  notificaciones: Notificacion[];
 
   navegar: (vista: Vista) => void;
   setFuente: (fuente: FuenteCaptura) => void;
   setArchivoPendiente: (archivo: File | null) => void;
   /** Registra el <video> vivo de la cámara (null al detener el stream). */
   setFramePendiente: (frame: HTMLVideoElement | null) => void;
-  /** Toast flotante genérico (L2: aviso CÁMARA→L3 del chip de fuente; L3 lo reusa para permisos). */
-  notificar: (tone: Notificacion["tone"], titulo: string, descripcion?: string) => void;
   alternarConexion: () => void;
   /** §7 (SPEC-rediseno-revision): sin `intento` explícito, una captura
    *  CONTINÚA el ciclo de repetición si el acta previa sigue sin resolver
@@ -153,7 +146,6 @@ interface E14Store {
    * SIMULACIÓN también rota real).
    */
   rotarFoto: () => Promise<void>;
-  descartarNotificacion: (id: number) => void;
 }
 
 /** Siguiente página a escanear: EN_PROCESO > PENDIENTE > RESCANEO (por mesa). */
@@ -238,20 +230,12 @@ function hashMock(): string {
   return `${hex}…`;
 }
 
-let idNotificacion = 0;
-
 /** Guard anti doble-rotación (espejo del rotatingRef del lab L1054 — la
  *  rotación rápida es async y un doble tap giraría 180°). */
 let rotandoFotoEnVuelo = false;
 
 export const useE14Store = create<E14Store>((set, get) => {
   const bridge = getBridge();
-
-  const notificar = (tone: Notificacion["tone"], titulo: string, descripcion?: string) => {
-    idNotificacion += 1;
-    const noti: Notificacion = { id: idNotificacion, tone, titulo, descripcion };
-    set({ notificaciones: [...get().notificaciones.slice(-2), noti] });
-  };
 
   const registrarEnvio = (tituloPagina: string) => {
     const { online, historial, completadas, mesas, paginaObjetivo, actaActual, archivadas } = get();
@@ -338,7 +322,6 @@ export const useE14Store = create<E14Store>((set, get) => {
     colaOffline: COLA_OFFLINE_INICIAL,
     solicitudesRescaneo: SOLICITUDES_RESCANEO_INICIAL,
     historial: historialInicial(),
-    notificaciones: [],
 
     navegar: (vista) => set({ vista }),
 
@@ -348,13 +331,10 @@ export const useE14Store = create<E14Store>((set, get) => {
 
     setFramePendiente: (frame) => set({ framePendiente: frame }),
 
-    notificar,
-
     alternarConexion: () => {
       const { online, colaOffline, actaActual } = get();
       if (online) {
         set({ online: false });
-        notificar("warn", "MODO OFFLINE", "Los envíos se acumularán en cola local.");
       } else {
         set({ online: true });
         if (colaOffline > 0) {
@@ -365,9 +345,6 @@ export const useE14Store = create<E14Store>((set, get) => {
                 ? { ...actaActual, hashSha256: hashMock() }
                 : actaActual,
           });
-          notificar("ok", "COLA SINCRONIZADA", `${colaOffline} envíos transmitidos al servidor.`);
-        } else {
-          notificar("ok", "CONEXIÓN RESTABLECIDA");
         }
       }
     },
@@ -395,17 +372,17 @@ export const useE14Store = create<E14Store>((set, get) => {
           ? previa.intento + 1
           : 1);
       // L2: en fuente ARCHIVO el disparo necesita imagen (REPETIR FOTO vuelve
-      // al picker en vez de reventar el pipeline sin archivo).
+      // al picker en vez de reventar el pipeline sin archivo). El aviso vive
+      // ahora en la franja del visor de ScanView (pre-check de la vista).
       if (fuenteEfectiva === "ARCHIVO" && !archivoPendiente) {
-        notificar("warn", "ELIGE UNA IMAGEN", "La fuente IMPORTAR analiza la imagen que elijas.");
         set({ vista: "escanear" });
         return;
       }
       // L3: la fuente CÁMARA necesita una captura (foto ZSL/nativa ya en el
       // store) o el video vivo para el grab del frame. REPETIR FOTO vuelve al
       // visor (la cámara se reinicia al reactivar la vista) — espejo de D23.
+      // (aviso en la franja del visor de ScanView, §4 del redesign-stitch)
       if (fuenteEfectiva === "CAMARA" && !archivoPendiente && !framePendiente) {
-        notificar("warn", "CAPTURA UNA FOTO", "La fuente CÁMARA analiza la foto que toma el obturador.");
         set({ vista: "escanear" });
         return;
       }
@@ -439,8 +416,9 @@ export const useE14Store = create<E14Store>((set, get) => {
         });
         // D7 (SPEC-rediseno-revision §7.5): contingencia automática al
         // AGOTAR intentos — el sistema escala solo (C4), sin botón manual:
-        // fila de historial + toast. Con intento < max NO hay historial ni
-        // toast (aún es «repetir-primero»).
+        // fila de historial. Con intento < max NO hay historial (aún es
+        // «repetir-primero"). El aviso persistente vive en la píldora de
+        // estado REVISIÓN HUMANA de la REVISIÓN (redesign-stitch §4.3).
         if (acta.status === "EN_REVISION_HUMANA" && intento >= acta.maxIntentos) {
           const fila: HistorialRow = {
             id: `h-${Date.now()}`,
@@ -449,15 +427,9 @@ export const useE14Store = create<E14Store>((set, get) => {
             hora: bridge.horaHistorial(),
           };
           set({ historial: [fila, ...get().historial] });
-          notificar(
-            "warn",
-            "ENVIADA A CONTINGENCIA",
-            "Tras el máximo de repeticiones, un auditor validará esta acta.",
-          );
         }
       } catch {
         // Manejo de error del pipeline (§7 store): nunca quedar en analizando.
-        notificar("crit", "ERROR DE PROCESADO", "No se pudo analizar la imagen.");
         set({ vista: "escanear", progresoAnalisis: null, analisisResuelto: false });
       }
     },
@@ -465,10 +437,12 @@ export const useE14Store = create<E14Store>((set, get) => {
     analisisCompletado: () => {
       const { actaActual } = get();
       if (!actaActual) return;
-      // D4: ÓPTIMA (≥8) se envía automáticamente al capturar.
+      // D4: ÓPTIMA (≥8) se envía automáticamente al capturar. Offline → el
+      // estado persistente vive en la NUBE del TopBar (roja) + la cola de
+      // RESUMEN (redesign-stitch §4.3).
       if (actaActual.status === "OPTIMA") {
         const hora = bridge.horaEnvio();
-        const { online } = registrarEnvio(tituloPaginaActual());
+        registrarEnvio(tituloPaginaActual());
         set({
           actaActual: {
             ...get().actaActual!,
@@ -477,9 +451,6 @@ export const useE14Store = create<E14Store>((set, get) => {
           },
           vista: "revision",
         });
-        if (!online) {
-          notificar("warn", "EN COLA (OFFLINE)", "El envío se transmitirá al reconectar.");
-        }
         return;
       }
       if (actaActual.status === "RECHAZADA") {
@@ -493,25 +464,10 @@ export const useE14Store = create<E14Store>((set, get) => {
           solicitudesRescaneo: get().solicitudesRescaneo + 1,
           historial: [fila, ...get().historial],
         });
-        // §F-6 (SPEC-camara-funcional): toast rechazo-aware — INCOMPLETA
-        // explica QUÉ hacer (aléjate y repite); el resto conserva el score.
-        // §D3 (SPEC-e14-score-ocr): variante BAJO — sin señal de contenido
-        // del acta, el desenlace del dueño es «score bajo → repetir foto».
-        const esIncompleta = actaActual.rechazo?.tipo === "INCOMPLETA";
-        const esBajo = actaActual.rechazo?.tipo === "BAJO";
-        notificar(
-          "crit",
-          esBajo
-            ? "SCORE BAJO"
-            : esIncompleta
-              ? "ACTA INCOMPLETA"
-              : "ACTA NO RECONOCIDA",
-          esBajo
-            ? "No se reconoce información del acta. Repita la foto."
-            : esIncompleta
-              ? "Falta parte del acta en el encuadre. Aléjate un poco y repite la foto."
-              : `Score ${actaActual.score.toFixed(1)}/10 — obligatorio repetir foto.`,
-        );
+        // §F-6 (SPEC-camara-funcional) → redesign-stitch §4.3: el motivo del
+        // rechazo ya vive PERSISTENTE en la REVISIÓN (píldora de estado +
+        // banner + píldora flotante de la tarjeta con el motivo REAL:
+        // INCOMPLETA/BAJO/GENÉRICO — D1/PR #33). Sin toast.
       }
       set({ vista: "revision" });
     },
@@ -532,12 +488,7 @@ export const useE14Store = create<E14Store>((set, get) => {
         actaActual: { ...get().actaActual!, status: "ENVIADA" },
         vista: "revision",
       });
-      const { online } = get();
-      if (online) {
-        notificar("ok", "ENVIADO CORRECTAMENTE", "Acta transmitida y verificada.");
-      } else {
-        notificar("warn", "EN COLA (OFFLINE)", "El envío se transmitirá al reconectar.");
-      }
+      // Envío OK / cola offline → NUBE del TopBar + bloque ENVIADO (§4.3).
     },
 
     repetirFoto: () => {
@@ -575,7 +526,6 @@ export const useE14Store = create<E14Store>((set, get) => {
         actaActual: { ...acta, status: "EN_REVISION_HUMANA", intento: acta.maxIntentos },
         historial: [fila, ...get().historial],
       });
-      notificar("warn", "ENVIADA A CONTINGENCIA", "Un auditor validará esta acta.");
     },
 
     guardarUbicacion: (clasificacion) => {
@@ -587,7 +537,7 @@ export const useE14Store = create<E14Store>((set, get) => {
         nivel: "AUTO",
         confianzas: { departamento: 1, municipio: 1, puesto: 1, tipo: 1 },
       };
-      const { nuevas, duplicado } = archivarHueco(archivadas, final);
+      const { nuevas } = archivarHueco(archivadas, final);
       // §1.4 (SPEC-titulo-ubicacion): la corrección del panel también pasa el
       // título/ubicación al acta (AUTO-manual → el helper aplica).
       const titUbi = tituloYUbicacionDe(final);
@@ -602,22 +552,11 @@ export const useE14Store = create<E14Store>((set, get) => {
         },
         archivadas: nuevas,
       });
-      const titulo =
-        final.puesto && final.mesa !== null
-          ? `${final.puesto.nombre} · MESA ${final.mesa}`
-          : "UBICACIÓN";
-      if (duplicado) {
-        // Análisis §G.4.1: duplicado del mismo hueco → reemplaza y AVISA.
-        notificar("warn", "HUECO REEMPLAZADO", `${titulo} — la foto anterior queda sustituida.`);
-      } else {
-        notificar("ok", "UBICACIÓN GUARDADA", `${titulo} — lista para envío.`);
-      }
     },
 
     aplicarRecorte: async (quad, rotacionNueva) => {
       const { actaActual } = get();
       if (!actaActual?.fotoOriginal) {
-        notificar("warn", "SIN FOTO ORIGINAL", "Solo las actas escaneadas se pueden recortar.");
         return;
       }
       if (get().recortando) return;
@@ -633,13 +572,10 @@ export const useE14Store = create<E14Store>((set, get) => {
           rotacionNueva,
         );
         set({ actaActual: acta, progresoAnalisis: null });
-        if (acta.status === "OPTIMA" || acta.status === "ADVERTENCIA") {
-          notificar("ok", "ACTA RECUPERADA", "LISTA PARA ENVÍO MANUAL");
-        } else {
-          notificar("warn", "SIGUE RECHAZADA", `SCORE ${acta.score.toFixed(1)}/10 — prueba otro recorte o repite la foto.`);
-        }
+        // El desenlace (RECUPERADA/SIGUE RECHAZADA) vive PERSISTENTE en la
+        // píldora de estado de la REVISIÓN (§4.3).
       } catch {
-        notificar("crit", "ERROR DE RECORTADO", "No se pudo re-procesar el acta.");
+        set({ progresoAnalisis: null });
       } finally {
         set({ recortando: false });
       }
@@ -665,7 +601,7 @@ export const useE14Store = create<E14Store>((set, get) => {
           },
         });
       } catch {
-        notificar("crit", "ERROR DE ROTACIÓN", "No se pudo girar la foto.");
+        // La rotación fallida no cambia estado — el acta conserva su foto.
       } finally {
         rotandoFotoEnVuelo = false;
       }
@@ -674,7 +610,6 @@ export const useE14Store = create<E14Store>((set, get) => {
     cambiarFiltro: async (filtro) => {
       const { actaActual } = get();
       if (!actaActual?.fotoOriginal) {
-        notificar("warn", "SIN FOTO ORIGINAL", "Solo las actas escaneadas se pueden filtrar.");
         return;
       }
       if (get().revelando) return;
@@ -684,12 +619,10 @@ export const useE14Store = create<E14Store>((set, get) => {
         // que setFilterOnPage del core); el acta conserva identidad por spread.
         const acta = await bridge.revelar(actaActual, filtro);
         set({ actaActual: acta });
-        // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L1214-1218
-        // (handleFilter — toast de éxito + cierre del sheet; el sheet lo cierra ReviewView).
-        const label = FILTER_PRESETS.find((f) => f.id === filtro)?.label ?? filtro;
-        notificar("ok", "FILTRO APLICADO", `Filtro aplicado: ${label}`);
+        // El feedback persistente es la PROPIA foto re-velada + el chip del
+        // filtro activo en el sheet (§4.3 del redesign-stitch — sin toast).
       } catch {
-        notificar("crit", "ERROR DE FILTRADO", "No se pudo re-procesar el acta.");
+        set({ actaActual: actaActual });
       } finally {
         set({ revelando: false });
       }
@@ -700,31 +633,19 @@ export const useE14Store = create<E14Store>((set, get) => {
       // Guard (spec §F2.1): sin foto procesada no hay nada que reconocer.
       // (El estado "corriendo" — ocrRunning del lab L347 — vive en ReviewView.)
       if (!actaActual?.fotoProcesada) {
-        notificar("warn", "SIN FOTO", "Solo las actas escaneadas tienen texto reconocible.");
         return;
       }
       try {
         const texto = await bridge.reconocerTexto(actaActual);
         // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L1380-1387
-        // (ocrTextIsValid → guardar + toast de éxito / toast de «sin texto»).
+        // (ocrTextIsValid → guardar; «sin texto» se muestra persistente en el
+        // propio sheet: contadores a 0 + nota OCR_NO_TEXT del lab).
         if (ocrTextIsValid(texto)) {
           set({ actaActual: { ...actaActual, ocrTexto: texto } });
-          notificar("ok", "TEXTO RECONOCIDO", `${texto.length} caracteres · ya puedes copiarlo`);
-        } else {
-          notificar("warn", "SIN TEXTO LEGIBLE", "La página no parece tener texto legible");
         }
-      } catch (err) {
-        // Fuente: apps/scanner-lab/src/components/scanner/EditorView.tsx L1389-1391
-        // (títulos en mayúsculas = estilo e14, descripción verbatim del lab).
-        notificar(
-          "crit",
-          "NO SE PUDO RECONOCER EL TEXTO",
-          err instanceof Error ? err.message : undefined,
-        );
+      } catch {
+        // Error de reconocimiento: los contadores del sheet quedan como están.
       }
     },
-
-    descartarNotificacion: (id) =>
-      set({ notificaciones: get().notificaciones.filter((n) => n.id !== id) }),
   };
 });
