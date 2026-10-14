@@ -1539,19 +1539,13 @@ export function ScanView() {
           ref={visorRef}
           className="relative flex-1 bg-brand-viewfinder flex items-center justify-center overflow-hidden"
         >
-          {/* Capas decorativas del mock 1 (encima del video, pointer-events-none) */}
-          <div
-            className="absolute inset-0 w-full h-full opacity-35 bg-[radial-gradient(ellipse_at_center,var(--tw-gradient-stops))] from-zinc-800 via-[#101512] to-[#040605] mix-blend-screen scale-105 pointer-events-none z-[5]"
-            aria-hidden
-          />
-          <div
-            className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/90 pointer-events-none z-10"
-            aria-hidden
-          />
-          <div
-            className="absolute inset-0 bg-[linear-gradient(rgba(18,25,21,0)_50%,rgba(0,0,0,0.45)_50%)] bg-[length:100%_4px] opacity-40 pointer-events-none z-[11]"
-            aria-hidden
-          />
+          {/* FIX del dueño (14-oct): la vista previa va LIMPIA — sin capas
+              decorativas sobre el video. Las tres del mock 1 (haze radial
+              mix-blend-screen + gradiente negro 80/40/90 + scanlines)
+              oscurecían y "filtraban" la imagen real de la cámara, que es
+              justo lo que el operador necesita ver nítido para encuadrar.
+              Se conservan el LÁSER de escaneo y la retícula opcional
+              (afordancias de UI; no alteran la imagen). */}
           {/* Retícula visual (§3.1.1: botón de cuadrícula de la píldora IA) */}
           {gridOn && (
             <div
