@@ -161,16 +161,17 @@ const FOTO_LADDER: Array<{ imageWidth: number; imageHeight: number }> = [
   { imageWidth: 2048, imageHeight: 1536 },
   { imageWidth: 1280, imageHeight: 960 },
 ];
-// LOTE 5 (F5-B) — preview OCR-grade en ambas plataformas. Evidencia cam-lab
-// SM-A135M 2026-10-14: el stream a 1920×1440 corre a 26.7 fps con nitidez
-// OCR-grade (Laplaciano crop ≈ 457; umbral OCR = 100). Antes Android pedía
-// 960×540 (0.5 MP) para fluidez y la captura de respaldo (ring ZSL/snapshot)
-// nacía a 0.5 MP; ahora nace OCR-grade (igual que el régimen que iOS ya
-// corría). «ideal» nunca rechaza (regla E3 intacta). El loop de detección
-// sigue remuestreando a 400 px y el ring ya escala sus copias a ≤1280 px
-// (FIX v4 4.5) → sin cambios aguas abajo.
-const IDEAL_PREVIEW_WIDTH = 1920;
-const IDEAL_PREVIEW_HEIGHT = 1440;
+// LOTE 5.1 — REVERT de F5-B: el preview 1920×1440 en Android ahoga el hilo
+// principal en gama baja. Evidencia diag v6 SM-A135M 2026-10-14 15:55: fps
+// de cámara 2, long tasks 216/133.4 s, captura→guardada 21.5 s, 0 muestras
+// del sampler. El cam-lab medía los fps del STREAM crudo (26.7 @ 1440×1920),
+// no el presupuesto por-frame del loop (detección 400 px + histograma 96 px
+// + ring ZSL + snapshots). El preview ligero 960×540 vuelve a ser el
+// régimen de Android; la foto real llega por la escalera F5-A (~1 s).
+// iOS conserva 1920×1440 (allí el disparo manual es input nativo y el
+// régimen alto ya es probado).
+const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
+const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
 /** LOTE 5 (F5-C) — detección de poca luz. Si los fps del loop caen por
  *  debajo del umbral durante el tiempo de acumulación, se avisa al
  *  usuario (máx LOW_LIGHT_MAX_WARNS por sesión de cámara). Recuperación:
@@ -178,9 +179,15 @@ const IDEAL_PREVIEW_HEIGHT = 1440;
  *  Evidencia cam-lab SM-A135M 2026-10-14: 29 fps con luz → 10 fps en
  *  oscura (caída por exposición, hardware — no hay código que arreglar).
  *  Sin timers nuevos ni suscripciones nuevas: solo el onFrame del loop. */
-const LOW_LIGHT_FPS_THRESHOLD = 12;
-const LOW_LIGHT_RECOVERY_FPS = 20;
-const LOW_LIGHT_ACCUM_MS = 4000;
+// LOTE 5.1 — telemetría t.fps es fps de PROCESADO (throttle ~15 máx; en
+//  A13 con buena luz ronda 8 — lote 4). Con umbral 12 el aviso sonaría
+//  SIEMPRE en el A13 incluso con buena luz (falso positivo garantizado).
+//  Con 5: luz buena ~8 (no avisa), oscura 2–4 (acumula y avisa). Recuperación
+//  10: vuelve a armarse apenas la luz mejora. LOW_LIGHT_RECOVERY_MS y
+//  LOW_LIGHT_MAX_WARNS sin cambios.
+const LOW_LIGHT_FPS_THRESHOLD = 5;
+const LOW_LIGHT_RECOVERY_FPS = 10;
+const LOW_LIGHT_ACCUM_MS = 6000;
 const LOW_LIGHT_RECOVERY_MS = 2000;
 const LOW_LIGHT_MAX_WARNS = 2;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
@@ -781,7 +788,7 @@ export default function CameraView() {
   const upgradeStreamResolution = useCallback(
     (track: MediaStreamTrack | null | undefined): void => {
       if (!track) return;
-      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview ya es 1920×1440 (F5-B)
+      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview ligero 960×540 (LOTE 5.1)
       if (!autoRef.current) return;
       if (typeof track.applyConstraints !== "function") return;
       if (track.readyState !== "live") return;

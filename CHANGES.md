@@ -769,3 +769,25 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 
 **Verificado:** `bun install` sin cambios · `bun run lint` (eslint) = 0 · `bun run app:check` (tsc) = 0 · `git diff perf/lote4-gracia-enhance...perf/lote5-foton --stat` = EXACTAMENTE 4 archivos (CameraView.tsx + diag-report.ts + INSTRUCCIONES doc + CHANGES.md). Pendiente del dueño: QA física SM-A135M en ESTE ORDEN (1) velocidad luz buena (foto ~3-5 s, no minuto y medio); (2) ⚠️ chequeo del encuadre (acta completa vs recortada — EL riesgo); (3) poca luz (aviso «Poca luz» max 2 por sesión, no aparece con luz normal); (4) diag v6 (exportar y ver `takePhotoMs` ~1000, `photoSettingsReq: "2048x1536"`, `photoOutLongSide: 1920`, `streamW/H` 1920×1440).
 
+---
+
+## LOTE 5.1 — revert-preview (2026-10-14)
+
+**Rama:** `perf/lote5-1-revert-preview` · **Base:** `perf/lote5-foton` @ `2bbe635`.
+
+**Evidencia que motiva esto:** QA física del lote 5 en SM-A135M (diag v6 `scannerlab-diag-SM-A135M-20261014-1555.txt`): fps de cámara **2** · long tasks **216 / 133.4 s** · captura→guardada **21.5 s** · muro 5.9 s con **0 muestras** del sampler · ninguna foto ganó el muro (`photoSettingsReq: —`) · editor 1ª apertura 9.68 s. Causa: F5-B (preview 1920×1440 en Android) ahogó el hilo principal. El cam-lab midió los fps del STREAM crudo (26.7), no el presupuesto por-frame del loop de detección + ring + snapshot (7× los píxeles por frame en Mali-G68).
+
+### Cambios (whitelist cerrada: 3 archivos)
+
+**F5.1-A — Revert del preview de Android (`CameraView.tsx`):** `IDEAL_PREVIEW_WIDTH/HEIGHT` vuelve al reparto por plataforma: `CAN_TAKEPHOTO ? 960 : 1920` / `CAN_TAKEPHOTO ? 540 : 1440`. iOS conserva 1920×1440. Comentario F5-B reemplazado por registro LOTE 5.1. Todo lo demás de F5-A/F5-C/F5-D intacto: `FOTO_LADDER`, `timedAttempt`, `retryQueue`, refs, meta de marks, diag v6.
+
+**F5.1-B — Reajuste del umbral de poca luz (`CameraView.tsx`):** `LOW_LIGHT_FPS_THRESHOLD` 12 → **5** · `LOW_LIGHT_RECOVERY_FPS` 20 → **10** · `LOW_LIGHT_ACCUM_MS` 4000 → **6000**. La telemetría `t.fps` es fps de PROCESADO (throttle ~15 máx; en A13 con buena luz ronda 8 — lote 4). Con umbral 12 el aviso sonaba SIEMPRE en el A13 (falso positivo garantizado). Con 5: luz buena ~8 (no avisa), oscura 2–4 (acumula y avisa). `LOW_LIGHT_RECOVERY_MS` (2000) y `LOW_LIGHT_MAX_WARNS` (2) sin cambios.
+
+**F5.1-C — DIAG_BUILD honesto (`diag-report.ts`, 1 línea):** `"perf/lote4-gracia-enhance @ 20054b2 lote4"` → `"perf/lote5-foton lote5.1"`. Los informes del lote 5 decían «lote4» y confundieron el análisis del QA.
+
+**Comentario inline del upgradeStreamResolution** actualizado: «preview ya es 1920×1440 (F5-B)» → «preview ligero 960×540 (LOTE 5.1)».
+
+**NO-objetivos respetados:** whitelist cerrada de 3 archivos · `packages/**`, `package.json`, `bun.lock` intocados · `FOTO_LADDER`, escalera, gracia, huérfana, diag v6: 0 cambios · `IDEAL_PREVIEW_FPS` (30), `AUTO_CAPTURE_IDEAL_*`, `LOW_LIGHT_RECOVERY_MS`, `LOW_LIGHT_MAX_WARNS` intactos · sin dependencias nuevas · sin imports nuevos · sin marks nuevos.
+
+**Verificado:** `bun run lint` (eslint) = 0 · `bun run app:check` (tsc) = 0 · `git diff perf/lote5-foton...perf/lote5-1-revert-preview --stat` = EXACTAMENTE 3 archivos (CameraView.tsx + diag-report.ts + CHANGES.md). Pendiente del dueño: QA física SM-A135M — (1) fps ~8–15 con luz buena (fluidez recuperada); (2) captura con luz: `photoSettingsReq: "2048x1536"`, `takePhotoMs ~1000`, `photoOutLongSide: 1920`, captura→guardada ≤ ~5 s; (3) sin aviso «Poca luz» con luz normal; con oscuridad real, sí (máx 2).
+
