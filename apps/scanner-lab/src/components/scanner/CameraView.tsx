@@ -781,7 +781,7 @@ export default function CameraView() {
   const upgradeStreamResolution = useCallback(
     (track: MediaStreamTrack | null | undefined): void => {
       if (!track) return;
-      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview 540p intencional
+      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview ya es 1920×1440 (F5-B)
       if (!autoRef.current) return;
       if (typeof track.applyConstraints !== "function") return;
       if (track.readyState !== "live") return;
