@@ -149,29 +149,18 @@ export function ReviewView() {
     acta.clasificacion != null && acta.clasificacion.nivel !== "MANUAL";
   const paginaIdentificada = acta.clasificacion != null;
   // ── Banner de ubicación (mock §3.2.2): dot del color del estado + texto
-  // uppercase real; en ÓPTIMA/ENVIADA con clasificación resuelta pinta la
-  // RUTA con «>» (mock 6: ITALIA > ZONA 10 > PUESTO 02 > MESA 001 > …).
+  // uppercase real. Fix del dueño (14-oct) #1: el banner es el NOMBRE DEL
+  // PUESTO (acta.titulo) — nunca la ruta con «>».
   const dotUbicacion = hayClasificacion
     ? "bg-brand-green"
     : status === "EN_REVISION_HUMANA"
       ? "bg-amber-400"
       : "bg-red-500";
   const textoBanner = (() => {
-    if (
-      (status === "ENVIADA" || status === "OPTIMA") &&
-      clasifAuto?.puesto &&
-      clasifAuto.mesa !== null &&
-      clasifAuto.tipo
-    ) {
-      const partes = [
-        clasifAuto.departamento?.nombre,
-        clasifAuto.municipio?.nombre,
-        clasifAuto.puesto.nombre,
-        `MESA ${String(clasifAuto.mesa).padStart(3, "0")}`,
-        clasifAuto.tipo === "TRANSMISION" ? "TRANSMISIÓN" : "DELEGADOS",
-      ].filter(Boolean);
-      if (partes.length >= 3) return partes.join(" > ");
-    }
+    // Fix del dueño (14-oct) #1: banner = nombre del puesto (p. ej.
+    // «FRANKFURT - CONSULADO»), NUNCA la ruta construida a mano
+    // (departamento > municipio > puesto > MESA > …). Sin clasificación
+    // → estados de fallback de siempre.
     if (hayClasificacion) return acta.titulo;
     return status === "EN_REVISION_HUMANA"
       ? "CLASIFICACIÓN PENDIENTE"
@@ -230,8 +219,9 @@ export function ReviewView() {
         : undefined; // verde (default del CSS del ZIP)
 
   // ── PÍLDORA FLOTANTE de la tarjeta (mock §3.2.4/§3.3): el MOTIVO REAL
-  // (rechazo D1/PR #33 · parcial de Rev. 2 · razón de advertencia). En
-  // ÓPTIMA/ENVIADA no hay píldora (tarjeta limpia, mock 6).
+  // (rechazo D1/PR #33 · parcial de Rev. 2 · razón de advertencia).
+  // Fix del dueño (14-oct) #2: ÓPTIMA/ENVIADA también llevan píldora —
+  // la tarjeta del óptimo tiene el mismo tratamiento que medio/bajo.
   const pillFlotante = (() => {
     if (status === "RECHAZADA") {
       if (acta.rechazo?.tipo === "INCOMPLETA")
@@ -254,6 +244,8 @@ export function ReviewView() {
       }
       return null;
     }
+    // Fix del dueño (14-oct) #2: píldora verde para ÓPTIMA/ENVIADA.
+    if (status === "OPTIMA" || status === "ENVIADA") return { texto: `✓ ${acta.score.toFixed(1)}/10 ÓPTIMA`, tono: "ok" as const };
     return null;
   })();
 
@@ -390,9 +382,12 @@ export function ReviewView() {
               <span
                 data-testid="barra-rechazo"
                 className={`absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 font-mono font-extrabold text-[9px] px-2.5 py-1 rounded uppercase tracking-wider whitespace-nowrap max-w-[92%] truncate shadow ${
+                  // Fix del dueño (14-oct) #3: tono ok → verde (bg-brand-green).
                   pillFlotante.tono === "crit"
                     ? "bg-[#E52222] text-white"
-                    : "bg-[#F59E0B] text-black"
+                    : pillFlotante.tono === "ok"
+                      ? "bg-brand-green text-black"
+                      : "bg-[#F59E0B] text-black"
                 }`}
               >
                 {pillFlotante.texto}
@@ -438,11 +433,16 @@ export function ReviewView() {
           >
             {pillFlotante && (
               <span
+                // Fix del dueño (14-oct) #4: data-testid honesto (solo la
+                // RECHAZADA es barra-rechazo; el resto es banner-revision).
                 data-testid={status === "RECHAZADA" ? "barra-rechazo" : "banner-revision"}
                 className={`absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 font-mono font-extrabold text-[9px] px-2.5 py-1 rounded uppercase tracking-wider whitespace-nowrap max-w-[92%] truncate shadow ${
+                  // Fix del dueño (14-oct) #3: tono ok → verde (bg-brand-green).
                   pillFlotante.tono === "crit"
                     ? "bg-[#E52222] text-white"
-                    : "bg-[#F59E0B] text-black"
+                    : pillFlotante.tono === "ok"
+                      ? "bg-brand-green text-black"
+                      : "bg-[#F59E0B] text-black"
                 }`}
               >
                 {pillFlotante.texto}
@@ -837,17 +837,22 @@ export function ReviewCtas() {
   }
 
   if (status === "OPTIMA") {
-    // L5 D20: ÓPTIMA SOLO llega aquí tras un rescate por recorte → CTAs de
-    // ENVÍO MANUAL. Re-vestidos: ok = verde sólido, outline = surface.
+    // Fix del dueño (14-oct) #5: ÓPTIMA = diseño ENVIADA, CTA ÚNICO verde
+    // «SEGUIR ESCANEANDO» (envía y navega). Fuera el par «ENVIAR A
+    // TRANSMISIÓN» + «REPETIR» — solo 3 diseños: óptimo/medio/bajo.
     return (
-      <div className="flex flex-row items-center gap-2 w-full">
-        <PrimaryBtn variant="ok" onClick={enviarActa}>
-          <span>ENVIAR A TRANSMISIÓN</span>
-        </PrimaryBtn>
-        <PrimaryBtn variant="outline" onClick={repetirFoto}>
-          <span>REPETIR</span>
-        </PrimaryBtn>
-      </div>
+      <button
+        type="button"
+        onClick={() => {
+          enviarActa();
+          navegar("escanear");
+        }}
+        className="w-full bg-brand-green hover:bg-emerald-400 text-black font-extrabold text-sm py-3.5 px-6 rounded-2xl shadow-[0_4px_20px_rgba(0,230,118,0.35)] flex items-center justify-center gap-2 tap-action transition-all select-none"
+      >
+        <span className="tracking-wide uppercase font-mono font-bold">
+          SEGUIR ESCANEANDO
+        </span>
+      </button>
     );
   }
 
