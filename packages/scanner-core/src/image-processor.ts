@@ -408,6 +408,29 @@ async function thumbnailFromBlob(blob: Blob): Promise<string> {
   }
 }
 
+/** LOTE 4 (F4-B) — miniatura 160px desde el processed (data URL) para el
+ *  camino rotation === 0 del fallback de thumbnail (el bitmap del warp fue
+ *  transferido al worker y ya no está en el hilo principal). Re-decode
+ *  COMPLETO solo si thumbnailFromBlob falló (raro). "" si todo falla,
+ *  igual que thumbnailFromBlob. */
+async function thumbnailFromDataURL(url: string): Promise<string> {
+  try {
+    const img = await loadImage(url);
+    const tW = 160;
+    const tH = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * tW));
+    const canvas = document.createElement("canvas");
+    canvas.width = tW;
+    canvas.height = tH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, tW, tH);
+    return canvas.toDataURL("image/jpeg", 0.8);
+  } catch {
+    return "";
+  }
+}
+
 // ─── Unsharp client-side (constantes EXACTAS del usuario §6) ────────────────
 
 /** UNSHARP_AMOUNT/RADIUS del core del usuario: 0.5 / 1.5 (kernel derivado 7). */
@@ -1012,14 +1035,24 @@ async function processImagePrecise(
     if (!warp || !warp.bitmap) return null;
 
     // 2) Rotación post-warp (90/180/270) en canvas de alta calidad.
-    const rotated = bitmapToRotatedCanvas(warp.bitmap, rotation);
-    warp.bitmap.close();
+    // LOTE 4 (F4-B) — rotation === 0 (el 100 % de las capturas): el bitmap del
+    // warp va DIRECTO al enhance (transferido al worker — client.enhance ya
+    // acepta ImageBitmap y en ese camino NO re-decodifica). Hoy: copia canvas
+    // 1:1 (48.8 MB en full 4032) + drawImage completo + createImageBitmap
+    // interno del cliente (OTRA copia completa) ≈ 97 MB de pico y 2 copias
+    // para llegar al MISMO píxel de entrada. Con rotation ≠ 0 el canvas es
+    // imprescindible (transforma píxeles) → camino de hoy byte a byte.
+    const rotated = rotation !== 0 ? bitmapToRotatedCanvas(warp.bitmap, rotation) : null;
+    if (rotated) warp.bitmap.close();
+    // rotation === 0: NO cerrar aquí — la transferencia al worker neuteriza el
+    // bitmap (detached; close posterior sería no-op). Si enhance fallara ANTES
+    // de transferir, el close() del guard del fallback (§4.2-d) libera.
 
     // 3) Enhance: modo real del producto (modelo de sombras + constantes
     //    exactas). maxLongSide protege la memoria de data URLs en iOS.
     const mode = filterToEnhanceMode(filter);
     const maxLongSide = opts?.maxLongSide ?? PROCESSED_MAX_LONG_SIDE;
-    const enh = await client.enhance(rotated, mode, { maxLongSide });
+    const enh = await client.enhance(rotated ?? warp.bitmap, mode, { maxLongSide });
 
     if (enh && enh.blob.size > 0) {
       let blob = enh.blob;
@@ -1048,10 +1081,14 @@ async function processImagePrecise(
         elapsedMs: enh.elapsedMs,
       };
       if (thumbnail) return { processed, thumbnail, precision, decodeMs };
-      // Sin thumbnail desde el blob → lo genero del canvas rotado
+      // Sin thumbnail desde el blob → del canvas rotado (rotation ≠ 0) o
+      // re-decodificando el processed (rotation === 0 — F4-B; solo este camino
+      // raro). Mismo resultado, coste extra solo si thumbnailFromBlob falló.
       return {
         processed,
-        thumbnail: thumbnailFromCanvas(rotated),
+        thumbnail: rotated
+          ? thumbnailFromCanvas(rotated)
+          : await thumbnailFromDataURL(processed),
         precision,
         decodeMs,
       };
@@ -1059,6 +1096,18 @@ async function processImagePrecise(
 
     // 4) Enhance no disponible → warp real + filtro canvas local (misma
     //    matemática de image-modes). Los 3 filtros salen PNG (R-10).
+    // LOTE 4 (F4-B) — rotation === 0: el bitmap se TRANSFIRIÓ al worker
+    // (detached): los píxeles no están en el hilo principal para este fallback.
+    // close() es no-op si detached y libera si enhance falló antes de
+    // transferir (isReady=false) → cero fugas. Devolver null → processImage
+    // cae a processImageCanvas (pipeline completo desde la fuente, output
+    // equivalente). Ventana de riesgo: worker muerto / enhance fallido ENTRE
+    // el reply del warp y el enhance (sub-segundo; nunca observado en diag) —
+    // el coste es un reproceso completo, el output NUNCA es incorrecto.
+    if (!rotated) {
+      warp.bitmap.close();
+      return null;
+    }
     const filtered = applyFilterToCanvas(rotated, filter);
     if (filter === "original" && opts?.unsharpOriginal === true) {
       applyUnsharpToCanvas(filtered);
