@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * QA — Overlay del Test estándar v1.1 (spec diag-test-estandar-qa).
+ * QA — Overlay del Test estándar v1.3 (modos rápido/completo).
  *
  * Panel PERMANENTE y legible en claro/oscuro (vidrio oscuro sobre cualquier
  * vista) con: checklist por paso (pendiente / en curso / ✓ con ms), tiempo
@@ -26,9 +26,12 @@ import {
   subscribeAcquisition,
 } from "@/lib/burst-budget";
 import {
-  QA_STEPS,
+  qaModeStepDefs,
   qaStandardTest,
+  qaStepShortLabel,
   useQaTestStore,
+  type QaStepDef,
+  type QaStepLog,
 } from "@/lib/qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
@@ -36,6 +39,17 @@ function fmtSec(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** Resultado de un paso (v1.3): ms + modo/espera de capturas y decode/tier
+ *  de los pasos editor (v1.2 — solo cuando el mark los trajo). */
+function fmtStepResult(l: QaStepLog): string {
+  let s = fmtSec(l.ms);
+  if (l.mode) s += ` · ${l.mode}`;
+  if (l.waitMs != null) s += ` (espera ${fmtSec(l.waitMs)})`;
+  if (l.decodeMs != null) s += ` · decode ${Math.round(l.decodeMs)} ms`;
+  if (l.tier) s += ` · tier ${l.tier}`;
+  return s;
 }
 
 export default function QAOverlay() {
@@ -52,6 +66,9 @@ export default function QAOverlay() {
   const startedAt = useQaTestStore((s) => s.startedAt);
   const shareResult = useQaTestStore((s) => s.shareResult);
   const runId = useQaTestStore((s) => s.runId);
+  const mode = useQaTestStore((s) => s.mode);
+  // v1.3 — checklist y contadores SIEMPRE del modo activo (rápido: 2 filas).
+  const modeSteps: QaStepDef[] = qaModeStepDefs(mode);
 
   // Reloj del tiempo acumulado (solo mientras corre — re-render por segundo).
   // v2-A13 Fase B (§4.2) — CONGELADO durante la adquisición (fired→shot):
@@ -103,6 +120,7 @@ export default function QAOverlay() {
 
   // ── Paso 0: cámara armada → botón destacado «Iniciar test» ──
   if (armed && !running && !finished) {
+    const isQuick = mode === "quick";
     return (
       <div className="pointer-events-none absolute inset-x-0 bottom-[118px] z-30 flex flex-col items-center gap-2 px-6">
         <button
@@ -112,11 +130,12 @@ export default function QAOverlay() {
           className="pointer-events-auto flex min-h-[52px] items-center justify-center gap-2 rounded-full bg-[#007aff] px-7 text-[16px] font-semibold text-white shadow-[0_8px_28px_rgba(0,122,255,0.55)] transition-transform active:scale-[0.97]"
         >
           <CircleDashed className="h-5 w-5" strokeWidth={2.4} aria-hidden="true" />
-          Iniciar test (3 páginas)
+          {isQuick ? "Iniciar test (1 captura)" : "Iniciar test (3 páginas)"}
         </button>
         <p className="max-w-[300px] rounded-2xl bg-black/70 px-3.5 py-2 text-center text-[12px] leading-snug text-white/85 backdrop-blur-sm">
-          Encuadra una página con texto legible y pulsa. El resto corre solo
-          (capturas automáticas → editor → filtros → OCR → PDF).
+          {isQuick
+            ? "Encuadra una página con texto legible y pulsa. El resto corre solo (captura → editor)."
+            : "Encuadra una página con texto legible y pulsa. El resto corre solo (capturas automáticas → editor → filtros → OCR → PDF)."}
         </p>
       </div>
     );
@@ -143,8 +162,8 @@ export default function QAOverlay() {
             </h2>
             <p className="text-[12.5px] leading-snug text-white/60">
               {aborted
-                ? `Informe parcial: ${okCount} de ${QA_STEPS.length} pasos. Sigue compartible.`
-                : `${QA_STEPS.length} pasos · guiño qa-standard-v1.1 en el informe.`}
+                ? `Informe parcial: ${okCount} de ${modeSteps.length} pasos. Sigue compartible.`
+                : `${modeSteps.length} pasos · guiño qa-standard-v1.3 en el informe.`}
             </p>
           </div>
 
@@ -164,11 +183,7 @@ export default function QAOverlay() {
                     <span className="truncate text-white/85">{l.label}</span>
                   </span>
                   <span className="shrink-0 tabular-nums text-white/55">
-                    {l.ok
-                      ? `${fmtSec(l.ms)}${l.mode ? ` · ${l.mode}` : ""}${
-                          l.waitMs != null ? ` (espera ${fmtSec(l.waitMs)})` : ""
-                        }`
-                      : "—"}
+                    {l.ok ? fmtStepResult(l) : "—"}
                   </span>
                 </li>
               ))}
@@ -206,7 +221,7 @@ export default function QAOverlay() {
   }
 
   // ── Corriendo: checklist superior + banner + abortar ──
-  const stepIdx = QA_STEPS.findIndex((s) => s.id === step);
+  const stepIdx = modeSteps.findIndex((s) => s.id === step);
   return (
     <div className="pointer-events-none absolute inset-0 z-[80] flex flex-col">
       {/* Banner del paso (cámara: sostén/reencuadra · fallback manual) */}
@@ -233,7 +248,7 @@ export default function QAOverlay() {
       <div className="pointer-events-auto absolute inset-x-3 top-3 z-[82] rounded-2xl bg-black/80 p-3 text-white shadow-xl ring-1 ring-white/10 backdrop-blur-md">
         <div className="flex items-center justify-between gap-2 pb-2">
           <span className="text-[12.5px] font-semibold tracking-wide text-white/90">
-            TEST ESTÁNDAR v1.1
+            {`TEST QA v1.3 · ${mode === "quick" ? "rápido" : "completo"}`}
             <span className="ml-2 font-normal tabular-nums text-white/55">
               {fmtSec(elapsedMs)}
             </span>
@@ -251,7 +266,7 @@ export default function QAOverlay() {
 
         <div className="max-h-36 overflow-y-auto pr-0.5 [scrollbar-width:thin]">
           <ol className="flex flex-col gap-[3px]">
-            {QA_STEPS.map((s, i) => {
+            {modeSteps.map((s, i) => {
               const done = log.find((l) => l.id === s.id);
               const active = i === stepIdx;
               return (
@@ -271,14 +286,12 @@ export default function QAOverlay() {
                       <CircleDashed className="h-3.5 w-3.5 shrink-0 text-white/30" aria-hidden="true" />
                     )}
                     <span className={cn("truncate", active ? "text-white" : "text-white/60")}>
-                      {s.label}
+                      {qaStepShortLabel(s.id, mode)}
                     </span>
                   </span>
                   <span className="shrink-0 tabular-nums text-white/55">
                     {done?.ok
-                      ? `${fmtSec(done.ms)}${done.mode ? ` · ${done.mode}` : ""}${
-                          done.waitMs != null ? ` (espera ${fmtSec(done.waitMs)})` : ""
-                        }`
+                      ? fmtStepResult(done)
                       : active && slow
                         ? "sigue trabajando…"
                         : ""}

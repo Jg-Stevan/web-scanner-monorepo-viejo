@@ -27,7 +27,12 @@ import {
   type DiagDeviceSnapshot,
   type DiagBenchResults,
 } from "./device-profile";
-import { getQaTestState, type QaStepLog } from "./qa-standard-test";
+import {
+  getQaTestState,
+  QA_MODE_LABEL,
+  type QaMode,
+  type QaStepLog,
+} from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
@@ -37,7 +42,9 @@ export const DIAG_BUILD = "perf/lote3-blob-first @ 900b929 lote3";
  *  cuando el guión corrió (o se abortó a mitad). */
 export interface DiagQaSection {
   standard: true;
-  script: "qa-standard-v1.2";
+  script: "qa-standard-v1.3";
+  /** v1.3 — modo del guión que corrió (rápido 2 pasos / completo 12). */
+  mode: QaMode;
   steps: Array<{
     id: string;
     label: string;
@@ -722,7 +729,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const qa: DiagQaSection | undefined = qaRan
     ? {
         standard: true,
-        script: "qa-standard-v1.2",
+        script: "qa-standard-v1.3",
+        mode: qaState.mode,
         steps: qaState.log.map((l: QaStepLog) => ({
           id: l.id,
           label: l.label,
@@ -843,7 +851,11 @@ export function buildDiagTxt(r: DiagReport): string {
   push("Formato  : diag-report v5");
   if (r.qa) {
     push();
-    push("TEST ESTÁNDAR v1.2" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
+    // v1.3 — cabecera mode-aware (rápido 1 captura / completo 12 pasos).
+    push(
+      `TEST QA v1.3 · ${QA_MODE_LABEL[r.qa.mode] ?? QA_MODE_LABEL.full}` +
+        (r.qa.aborted ? " (ABORTADO — informe parcial)" : "")
+    );
     push("Protocolo: ahorro batería OFF · dispositivo");
     push("frío · captura automática nativa · mismo");
     push("documento con texto");

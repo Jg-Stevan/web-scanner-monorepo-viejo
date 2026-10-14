@@ -30,7 +30,11 @@ import {
 } from "@jg-stevan/scanner-core/pwa";
 import { cn } from "@/lib/utils";
 import { diagTools } from "@/lib/diag-report";
-import { qaStandardTest, useQaTestStore } from "@/lib/qa-standard-test";
+import {
+  qaStandardTest,
+  useQaTestStore,
+  type QaMode,
+} from "@/lib/qa-standard-test";
 import {
   getDeviceSnapshot,
   getBenchCache,
@@ -982,16 +986,20 @@ function DiagSection() {
   );
 }
 
-/** QA (spec diag-test-estandar-qa) — Tarjeta «Test estándar QA»: arma el
- *  guión (navega a la cámara con el auto-shutter en su estado por defecto)
- *  y, tras un test, borra sus datos. El guión mide lo que un usuario viviría
- *  — incluida la demora del shutter automático en gama baja. */
+/** QA (spec diag-test-estandar-qa + v1.3 modo-rapido) — Tarjeta «Test
+ *  estándar QA»: selector de modo (v1.3: «Rápido (1 captura)» DEFAULT /
+ *  «Completo (12 pasos)»), arma el guión (navega a la cámara con el
+ *  auto-shutter en su estado por defecto) y, tras un test, borra sus datos.
+ *  El guión mide lo que un usuario viviría — incluida la demora del shutter
+ *  automático en gama baja. */
 function QaTestCard() {
   const armed = useQaTestStore((s) => s.armed);
   const running = useQaTestStore((s) => s.running);
   const finished = useQaTestStore((s) => s.finished);
   const aborted = useQaTestStore((s) => s.aborted);
   const docIds = useQaTestStore((s) => s.docIds);
+  // v1.3 — modo del guión que armará «Preparar test» (rápido = default).
+  const [qaMode, setQaMode] = useState<QaMode>("quick");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const onDelete = () => {
@@ -1025,16 +1033,58 @@ function QaTestCard() {
         )}
       </div>
       <p className="text-[12px] leading-snug text-[#8e8e93]">
-        Guión automatizado con captura automática: 3 páginas + editor + filtros
-        + OCR + PDF. ~1 min en gama alta; en gama baja el shutter automático
-        puede tardar — eso también se mide.
+        {qaMode === "quick"
+          ? "Simula un uso real: escanea UNA página y mira cómo quedó (captura → editor). Es el modo por defecto."
+          : "Guión automatizado con captura automática: 3 páginas + editor + filtros + OCR + PDF. ~1 min en gama alta; en gama baja el shutter automático puede tardar — eso también se mide."}
       </p>
+      {/* v1.3 — selector de modo (rápido DEFAULT). Dos opciones fijas de la
+       * spec; sin modo custom. Deshabilitado mientras el test corre. */}
+      <div
+        role="radiogroup"
+        aria-label="Modo del test QA"
+        className="flex gap-2"
+      >
+        <button
+          type="button"
+          role="radio"
+          aria-checked={qaMode === "quick"}
+          data-qa-mode-quick
+          onClick={() => setQaMode("quick")}
+          disabled={running}
+          className={cn(
+            "flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-3 py-2 text-[13px] font-semibold transition-transform active:scale-[0.98]",
+            qaMode === "quick"
+              ? "bg-[#007aff]/12 text-[#007aff] ring-1 ring-inset ring-[#007aff]/40"
+              : "border border-[#e5e5ea] text-[#3c3c43] dark:border-[#3a3a3c] dark:text-white/85",
+            running && "opacity-60"
+          )}
+        >
+          Rápido (1 captura)
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={qaMode === "full"}
+          data-qa-mode-full
+          onClick={() => setQaMode("full")}
+          disabled={running}
+          className={cn(
+            "flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-3 py-2 text-[13px] font-semibold transition-transform active:scale-[0.98]",
+            qaMode === "full"
+              ? "bg-[#007aff]/12 text-[#007aff] ring-1 ring-inset ring-[#007aff]/40"
+              : "border border-[#e5e5ea] text-[#3c3c43] dark:border-[#3a3a3c] dark:text-white/85",
+            running && "opacity-60"
+          )}
+        >
+          Completo (12 pasos)
+        </button>
+      </div>
       <div className="flex flex-col gap-2 pt-0.5">
         <button
           type="button"
           aria-label="Preparar test estándar QA"
           data-qa-prepare
-          onClick={() => qaStandardTest.arm()}
+          onClick={() => qaStandardTest.arm(qaMode)}
           disabled={running}
           className={cn(
             "flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#007aff] px-4 py-2.5 text-[15px] font-semibold text-white transition-transform active:scale-[0.98]",
