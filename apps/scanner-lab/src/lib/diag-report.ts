@@ -27,7 +27,12 @@ import {
   type DiagDeviceSnapshot,
   type DiagBenchResults,
 } from "./device-profile";
-import { getQaTestState, type QaStepLog } from "./qa-standard-test";
+import {
+  getQaTestState,
+  QA_MODE_LABEL,
+  type QaMode,
+  type QaStepLog,
+} from "./qa-standard-test";
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
@@ -37,7 +42,9 @@ export const DIAG_BUILD = "perf/lote3-blob-first @ 900b929 lote3";
  *  cuando el guión corrió (o se abortó a mitad). */
 export interface DiagQaSection {
   standard: true;
-  script: "qa-standard-v1.1";
+  script: "qa-standard-v1.3";
+  /** v1.3 — modo del guión que corrió (rápido 2 pasos / completo 12). */
+  mode: QaMode;
   steps: Array<{
     id: string;
     label: string;
@@ -45,6 +52,9 @@ export interface DiagQaSection {
     ok: boolean;
     mode?: "auto" | "manual";
     waitMs?: number | null;
+    /** v1.2 — decode/tier del primer render (solo editor-1/editor-2). */
+    decodeMs?: number | null;
+    tier?: string | null;
   }>;
   aborted?: boolean;
 }
@@ -719,7 +729,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
   const qa: DiagQaSection | undefined = qaRan
     ? {
         standard: true,
-        script: "qa-standard-v1.1",
+        script: "qa-standard-v1.3",
+        mode: qaState.mode,
         steps: qaState.log.map((l: QaStepLog) => ({
           id: l.id,
           label: l.label,
@@ -727,6 +738,8 @@ export async function buildDiagReport(): Promise<DiagReport> {
           ok: l.ok,
           ...(l.mode !== undefined ? { mode: l.mode } : {}),
           ...(l.waitMs !== undefined ? { waitMs: l.waitMs } : {}),
+          ...(l.decodeMs !== undefined ? { decodeMs: l.decodeMs } : {}),
+          ...(l.tier !== undefined ? { tier: l.tier } : {}),
         })),
         ...(qaState.aborted ? { aborted: true } : {}),
       }
@@ -838,10 +851,31 @@ export function buildDiagTxt(r: DiagReport): string {
   push("Formato  : diag-report v5");
   if (r.qa) {
     push();
-    push("TEST ESTÁNDAR v1.1" + (r.qa.aborted ? " (ABORTADO — informe parcial)" : ""));
+    // v1.3 — cabecera mode-aware (rápido 1 captura / completo 12 pasos).
+    push(
+      `TEST QA v1.3 · ${QA_MODE_LABEL[r.qa.mode] ?? QA_MODE_LABEL.full}` +
+        (r.qa.aborted ? " (ABORTADO — informe parcial)" : "")
+    );
     push("Protocolo: ahorro batería OFF · dispositivo");
     push("frío · captura automática nativa · mismo");
     push("documento con texto");
+    // v1.2 — tabla de resultados: SOLO pasos medidos (los abortados, con
+    // ms: null, no pintan fila). Etiqueta alineada a la columna de 26
+    // chars del resto del informe; decode/tier solo cuando el mark los
+    // trajo (editor-1/editor-2).
+    for (const st of r.qa.steps) {
+      if (!st.ok || st.ms === null) continue;
+      let rest = fmtMs(st.ms);
+      if (st.mode) rest += ` · ${st.mode}`;
+      if (st.waitMs !== null && st.waitMs !== undefined) {
+        rest += ` (espera ${fmtMs(st.waitMs)})`;
+      }
+      if (st.decodeMs !== null && st.decodeMs !== undefined) {
+        rest += ` · decode ${Math.round(st.decodeMs)} ms`;
+      }
+      if (st.tier) rest += ` · tier ${st.tier}`;
+      push(`${st.label.padEnd(26, " ")}: ${rest}`);
+    }
   }
   push();
   push("-- DISPOSITIVO -------------------------------");

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * QA — Test estándar v1.1 (spec INSTRUCCIONES-diag-test-estandar-qa.md).
+ * QA — Test estándar v1.3 (modos rápido/completo — instruccion-qa-v13-modo-rapido).
  *
  * Guión AUTOMATIZADO DE USO (no de pipeline): reproduce exactamente lo que
  * haría un usuario real — con el auto-shutter nativo ENCENDIDO y SIN tocar
@@ -19,7 +19,8 @@
  *  · OCR congelado (ocr.ts 0 diff) · e14 0 diff · sin dependencias nuevas.
  *  · No persiste entre sesiones: recarga = desarmado.
  *
- * Máquina de estados: armar → pasos 1-12 → informe/abortar. La detección
+ * Máquina de estados: armar → pasos del modo activo (v1.3: rápido 2 /
+ * completo 12) → informe/abortar. La detección
  * de fin de cada paso es un ESCANEO idempotente del anillo de marcas en
  * cada tick (sin cursor incremental → inmune a lotes de marcas que llegan
  * juntas). Se comunica con las vistas vía el store reactivo de abajo
@@ -43,7 +44,9 @@ export interface QaStepDef {
   slow?: boolean;
 }
 
-/** El guión qa-standard-v1.1 (12 pasos + informe). */
+/** El guión qa-standard-v1.3: los 12 pasos del MODO COMPLETO (fuente de
+ *  comparabilidad entre builds). El modo rápido usa un subconjunto — ver
+ *  QA_MODE_STEPS. */
 export const QA_STEPS: QaStepDef[] = [
   {
     id: "capture-1",
@@ -71,6 +74,54 @@ export const QA_STEPS: QaStepDef[] = [
   { id: "report", label: "Informe + compartir", slow: true },
 ];
 
+/* ------------------------------------------------------------------ */
+/* Modos del guión (v1.3 — instruccion-qa-v13-modo-rapido)               */
+/* ------------------------------------------------------------------ */
+
+/** v1.3 — Modo del test: "quick" = lo que hace un usuario real: escanea UNA
+ *  página y mira cómo quedó (capture-1 → editor-1 → fin). "full" = los 12
+ *  pasos de siempre. "quick" es el DEFAULT en la UI; el completo DEBE seguir
+ *  comportándose igual que hoy (comparabilidad entre builds). */
+export type QaMode = "quick" | "full";
+
+/** QUÉ pasos espera cada modo (la máquina ya escanea marcas genéricamente:
+ *  solo cambia esta lista — umbrales y detección INTACTOS, cero umbrales
+ *  nuevos). */
+export const QA_MODE_STEPS: Record<QaMode, string[]> = {
+  quick: ["capture-1", "editor-1"],
+  full: QA_STEPS.map((s) => s.id),
+};
+
+/** Etiqueta del modo para cabeceras de informe (v1.3). */
+export const QA_MODE_LABEL: Record<QaMode, string> = {
+  quick: "modo rápido (1 captura)",
+  full: "modo completo (12 pasos)",
+};
+
+/** Defs del modo activo (en el orden del guión). */
+function modeStepDefs(mode: QaMode): QaStepDef[] {
+  const ids = QA_MODE_STEPS[mode] ?? QA_MODE_STEPS.full;
+  const defs: QaStepDef[] = [];
+  for (const id of ids) {
+    const d = stepDef(id);
+    if (d) defs.push(d);
+  }
+  return defs;
+}
+
+/** Defs del modo activo para las vistas (overlay/checklist). */
+export function qaModeStepDefs(mode: QaMode): QaStepDef[] {
+  return modeStepDefs(mode);
+}
+
+/** v1.3 — etiqueta de un paso según el modo. En rápido, capture-1 se
+ *  muestra «Captura» (sin "/3": no hay 2ª ni 3ª); editor-1 mantiene su
+ *  etiqueta. En completo, etiquetas intactas. */
+export function qaStepShortLabel(id: string, mode: QaMode): string {
+  if (mode === "quick" && id === "capture-1") return "Captura";
+  return stepDef(id)?.label ?? id;
+}
+
 export interface QaStepLog {
   id: string;
   label: string;
@@ -80,6 +131,12 @@ export interface QaStepLog {
   mode?: "auto" | "manual";
   /** Capturas: espera estable→disparo (capture_fired − capture_stable). */
   waitMs?: number | null;
+  /** Editor-1/editor-2 (v1.2): decode del mark editor_first_render
+   *  (meta.decodeMs; null si el mark no lo trajo — p. ej. cache hit). */
+  decodeMs?: number | null;
+  /** Editor-1/editor-2 (v1.2): tier con el que pintó el primer render
+   *  (meta.previewTier; null si el mark no lo trajo). */
+  tier?: string | null;
 }
 
 export interface QaTestState {
@@ -91,6 +148,8 @@ export interface QaTestState {
   /** Id del paso actual (null mientras la captura aterriza). */
   step: string | null;
   stepIndex: number;
+  /** v1.3 — modo del guión en curso (default "quick"). */
+  mode: QaMode;
   stepStartedAt: number | null;
   log: QaStepLog[];
   /** Banner del paso actual (cámara: sostén/reencuadra; fallback 60 s). */
@@ -116,6 +175,7 @@ const INITIAL: QaTestState = {
   aborted: false,
   step: null,
   stepIndex: -1,
+  mode: "quick",
   stepStartedAt: null,
   log: [],
   hint: null,
@@ -232,12 +292,22 @@ function stepStart(id: string, fromTs?: number): void {
   landingFiredTs = null;
   set({
     step: id,
-    stepIndex: QA_STEPS.findIndex((s) => s.id === id),
+    stepIndex: modeStepDefs(state.mode).findIndex((s) => s.id === id),
     stepStartedAt: fromTs ?? now(),
     hint: def.hint ?? null,
     manualPrompt: false,
     slow: false,
   });
+}
+
+/** v1.2 — decode/tier del mark editor_first_render (editor-1/editor-2):
+ *  se copian del meta del mark; ausentes → null (honesto, nunca 0). */
+function editorRenderExtras(m: PerfProbeMark): Partial<QaStepLog> {
+  const meta = m.meta ?? {};
+  return {
+    decodeMs: typeof meta.decodeMs === "number" ? meta.decodeMs : null,
+    tier: typeof meta.previewTier === "string" ? meta.previewTier : null,
+  };
 }
 
 function stepDone(def: QaStepDef, ms: number | null, extra?: Partial<QaStepLog>): void {
@@ -246,7 +316,7 @@ function stepDone(def: QaStepDef, ms: number | null, extra?: Partial<QaStepLog>)
       ...state.log,
       {
         id: def.id,
-        label: def.label,
+        label: qaStepShortLabel(def.id, state.mode),
         ms: ms === null ? null : Math.max(0, Math.round(ms)),
         ok: true,
         ...extra,
@@ -255,14 +325,16 @@ function stepDone(def: QaStepDef, ms: number | null, extra?: Partial<QaStepLog>)
   });
 }
 
-/** Paso siguiente del guión. */
+/** Paso siguiente del guión (del MODO ACTIVO — v1.3: termina al completar
+ *  el último paso del modo; en rápido eso es editor-1). */
 function advance(fromTs?: number): void {
+  const steps = modeStepDefs(state.mode);
   const nextIdx = state.stepIndex + 1;
-  if (nextIdx >= QA_STEPS.length) {
+  if (nextIdx >= steps.length) {
     finish(false);
     return;
   }
-  const def = QA_STEPS[nextIdx]!;
+  const def = steps[nextIdx]!;
   if (def.id === "editor-2") {
     // 2ª apertura: CIERRA el editor (misma acción que el botón «atrás» en
     // sesión de captura), espera 600 ms y REABRE por la ruta del botón
@@ -367,7 +439,7 @@ function onTick(): void {
     if (saved || timedOut) {
       const pageSavedTs = saved ? saved.ts : now();
       const nextIdx = state.stepIndex + 1;
-      const nextDef = QA_STEPS[nextIdx];
+      const nextDef = modeStepDefs(state.mode)[nextIdx];
       if (nextDef && (nextDef.id === "capture-2" || nextDef.id === "capture-3")) {
         // Volver a la cámara = la acción exacta de «Seguir escaneando».
         landingFiredTs = null;
@@ -419,7 +491,7 @@ function onTick(): void {
       // Render del aterrizaje de la captura 3 (desde su page_saved).
       const fr = findMark("editor_first_render", startedAt);
       if (fr) {
-        stepDone(def, fr.ts - startedAt);
+        stepDone(def, fr.ts - startedAt, editorRenderExtras(fr));
         advance(fr.ts);
       }
       break;
@@ -428,7 +500,7 @@ function onTick(): void {
       const since = editor2ReopenTs ?? startedAt;
       const fr = findMark("editor_first_render", since);
       if (fr) {
-        stepDone(def, fr.ts - since);
+        stepDone(def, fr.ts - since, editorRenderExtras(fr));
         advance(fr.ts);
       }
       break;
@@ -519,8 +591,9 @@ function onTick(): void {
 
 export const qaStandardTest = {
   /** Ajustes › Diagnóstico › «Preparar test»: arma el guión y navega a la
-   *  cámara. El auto-shutter queda en su estado por defecto (activado). */
-  arm(): void {
+   *  cámara. El auto-shutter queda en su estado por defecto (activado).
+   *  v1.3 — recibe el modo (default "quick": 1 captura → editor). */
+  arm(mode: QaMode = "quick"): void {
     if (state.running) return;
     stopPoller();
     set({
@@ -528,11 +601,12 @@ export const qaStandardTest = {
       armed: true,
       runId: state.runId + 1,
       docIds: state.docIds, // los datos del test anterior se conservan hasta «Borrar»
+      mode,
     });
     useScannerStore.getState().setView("camera");
   },
 
-  /** Cámara armada › «Iniciar test (3 páginas)» — paso 0 manual del dueño. */
+  /** Cámara armada › «Iniciar test» — paso 0 manual del dueño. */
   start(): void {
     if (!state.armed || state.running) return;
     set({
@@ -560,7 +634,10 @@ export const qaStandardTest = {
     const def = state.step ? stepDef(state.step) : null;
     if (def) {
       set({
-        log: [...state.log, { id: def.id, label: def.label, ms: null, ok: false }],
+        log: [
+          ...state.log,
+          { id: def.id, label: qaStepShortLabel(def.id, state.mode), ms: null, ok: false },
+        ],
       });
     }
     finish(true);
