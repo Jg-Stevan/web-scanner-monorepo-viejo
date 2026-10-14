@@ -80,6 +80,12 @@ export interface QaStepLog {
   mode?: "auto" | "manual";
   /** Capturas: espera estable→disparo (capture_fired − capture_stable). */
   waitMs?: number | null;
+  /** Editor-1/editor-2 (v1.2): decode del mark editor_first_render
+   *  (meta.decodeMs; null si el mark no lo trajo — p. ej. cache hit). */
+  decodeMs?: number | null;
+  /** Editor-1/editor-2 (v1.2): tier con el que pintó el primer render
+   *  (meta.previewTier; null si el mark no lo trajo). */
+  tier?: string | null;
 }
 
 export interface QaTestState {
@@ -238,6 +244,16 @@ function stepStart(id: string, fromTs?: number): void {
     manualPrompt: false,
     slow: false,
   });
+}
+
+/** v1.2 — decode/tier del mark editor_first_render (editor-1/editor-2):
+ *  se copian del meta del mark; ausentes → null (honesto, nunca 0). */
+function editorRenderExtras(m: PerfProbeMark): Partial<QaStepLog> {
+  const meta = m.meta ?? {};
+  return {
+    decodeMs: typeof meta.decodeMs === "number" ? meta.decodeMs : null,
+    tier: typeof meta.previewTier === "string" ? meta.previewTier : null,
+  };
 }
 
 function stepDone(def: QaStepDef, ms: number | null, extra?: Partial<QaStepLog>): void {
@@ -419,7 +435,7 @@ function onTick(): void {
       // Render del aterrizaje de la captura 3 (desde su page_saved).
       const fr = findMark("editor_first_render", startedAt);
       if (fr) {
-        stepDone(def, fr.ts - startedAt);
+        stepDone(def, fr.ts - startedAt, editorRenderExtras(fr));
         advance(fr.ts);
       }
       break;
@@ -428,7 +444,7 @@ function onTick(): void {
       const since = editor2ReopenTs ?? startedAt;
       const fr = findMark("editor_first_render", since);
       if (fr) {
-        stepDone(def, fr.ts - since);
+        stepDone(def, fr.ts - since, editorRenderExtras(fr));
         advance(fr.ts);
       }
       break;
