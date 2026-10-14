@@ -791,3 +791,31 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 
 **Verificado:** `bun run lint` (eslint) = 0 · `bun run app:check` (tsc) = 0 · `git diff perf/lote5-foton...perf/lote5-1-revert-preview --stat` = EXACTAMENTE 3 archivos (CameraView.tsx + diag-report.ts + CHANGES.md). Pendiente del dueño: QA física SM-A135M — (1) fps ~8–15 con luz buena (fluidez recuperada); (2) captura con luz: `photoSettingsReq: "2048x1536"`, `takePhotoMs ~1000`, `photoOutLongSide: 1920`, captura→guardada ≤ ~5 s; (3) sin aviso «Poca luz» con luz normal; con oscuridad real, sí (máx 2).
 
+
+## LOTE 5.3 — foto-rápida + vista-limpia (2026-10-14)
+
+**Rama:** `perf/lote5-3-foto-rapida-vista-limpia` · **Base:** `perf/lote5-1-revert-preview` @ `1d06a60` (lote 5.1 auditado). Reemplaza al kit 5.2 (fusionado en este lote por pedido del dueño: UN solo lote con las dos cosas).
+
+**Evidencia que motiva esto (DOS partes):**
+1. **Foto ~18 s:** diag v6 del dueño 2026-10-14 16:57/17:03 (build lote5.1): fps 8/6 (fluido ✓) pero `photoSettingsReq: "4032x3024"` · `photoOutLongSide: 4080` · gap disparo→foto **17.6 s** · captura→guardada mediana **18 s** · tramo opaco 15 s. Causa: la escalera F5-A SOLO corría con `buildCappedPhotoSettings() === undefined` (overCap=FALSE); en esa sesión el profiler midió el sensor en 4080 > tope 4032 → overCap=TRUE → dispara el capped {4032,3024} y en el A13 el ISP hace la foto completa igual (~15 s) — la escalera jamás intervino. La gracia del lote 4 rescata las páginas (por eso «funciona»), pero lento. Evidencia cam-lab: takePhoto 2048×1536 ≈ **1.0 s** (devuelve 1920×1920) vs desnudo ≈ **15 s**.
+2. **Visor despejado (feedback del dueño):** «quita las notificaciones en la cámara en vivo, la vista debe de estar despejada para que el usuario vea la pantalla de la cámara». Sobre el visor había 4 pills + 1 meter + 3 toasts en uso normal; dos de los toasts disparaban en CADA captura del A13.
+
+### Cambios (whitelist cerrada: 3 archivos)
+
+**F5.3-A — Escalera SIEMPRE en Android (`CameraView.tsx` `takePhotoBlob`):** primer intento = `FOTO_LADDER[0]` (2048×1536) SIEMPRE, haya o no profiler/overCap; cola de reintentos única = `[FOTO_LADDER[1], undefined]` (sin camino del profiler). `buildCappedPhotoSettings` sin call-sites (import eliminado — era su único uso). `const profile` se conserva (alimenta la Capa 2 con `safeCapPx`, red de seguridad post-decode INTACTA). Comentario obsoleto «Dispara a resolución completa del hardware…» reemplazado. iOS intacto tras el guard `CAN_TAKEPHOTO`.
+
+**F5.3-B/C/D/E — Visor despejado (`CameraView.tsx`, solo JSX + lecturas):** fuera pill «Buscando documento…» (FIX v5 5.4), toast «Mantén inmóvil el dispositivo…», meter de calidad (Gauge), chip «Lote · N documentos guardados» (CheckCircle2 + selector `batchSavedCount` — el contador SIGUE en el store, solo deja de leerse aquí). `scorePct` (variable de presentación derivada de `live.score`, único consumidor el meter) eliminado junto al meter — la auto-captura usa `live.score > SHUTTER_SCORE` directo vía `overlayStable` (INTACTA). `live.searching`/`setLive` (instante del disparo, FIX v5 5.2), `autoCapture`, `overlayStable` y toda la lógica INTACTOS.
+
+**F5.3-F — Toasts del fallback post-timeout (`CameraView.tsx`):** bloque `if (status === "live") {…}` (2 `toast.warning`) eliminado — cero lógica. El chequeo `shot?.timedOut` + `recoverStream()` y todo el DUAL PIPELINE (`takeZslFallback`, `recordBurst`, `frame_cap`) quedan INTACTOS.
+
+**F5.3-G — Retirada COMPLETA de F5-C «poca luz» (`CameraView.tsx`, 4 zonas):** constantes (5, con sus valores lote 5.1) + comentarios LOTE 5/5.1, refs (5), reset al abrir cámara (5 líneas + comentario) y bloque de acumulación en `onFrame` (comentario + if completo + `lowLightLastAtRef`). `const now = performance.now()` SE QUEDA — lo usa el throttle de UI (`now - lastTelemetryAt.current`). Resto de `onFrame` (feedRingFromVideo, throttle, LiveUi, setLive) INTACTO.
+
+**F5.3-H — Toast «Flash encendido» (`CameraView.tsx`):** llamada eliminada del toggle de antorcha (la lógica y el estado visible en el icono del botón quedan INTACTOS).
+
+**F5.3-I — DIAG_BUILD honesto (`diag-report.ts`, 1 línea):** `"perf/lote5-foton lote5.1"` → `"perf/lote5-foton lote5.3"`.
+
+**CONSERVADOS (lista de control):** pill «Modo espera — toca para reactivar» (solo standby) · card de permiso denegado («Activar cámara»/«Ocultar») · overlay de procesado a pantalla completa («Capturando, un momento…») · corners/dots de detección · pista demo (solo synthetic/simulated) · TODOS los toasts de ERROR (No se pudo capturar ×3, Se perdió la cámara, Reiniciando cámara, Sigue sin permiso, HEIC, archivo no imagen, no se pudo procesar) · `FOTO_LADDER` · `timedAttempt`/`lastPhotoAttemptRef` (el ganador será un peldaño → diag `photoSettingsReq: "2048x1536"`) · guardas de presupuesto (`raceMs`, `≤ 50`) · carrera 5 s · `burstDeadline` · lista negra `takePhotoBrokenRef` (marcar al timeout, rehabilitar al éxito) · observador de foto huérfana (`onRawPhoto`) · Capa 2 post-decode (`readBlobLongSide`/`clampBlobToSafeCap`) · `photo_grace` · `recordBurst` · `captureSmart` · diag v6 y marks (0 cambios, 0 marks nuevos).
+
+**NO-objetivos respetados:** whitelist cerrada de 3 archivos (`CameraView.tsx`, `diag-report.ts` SOLO la línea `DIAG_BUILD`, `CHANGES.md`) · `packages/**` (incluido `sensor-profiler.ts`), store, `package.json`, `bun.lock` intocados · sin dependencias nuevas · sin imports NUEVOS (solo eliminaciones: `buildCappedPhotoSettings`, `Gauge`, `CheckCircle2`) · sin marks nuevos ni meta cambiada.
+
+**Verificado:** `bun run lint` (eslint) = 0 · `bun run app:check` (tsc) = 0 · `git diff 1d06a60...HEAD --stat` = EXACTAMENTE 3 archivos. Pendiente del dueño (QA física SM-A135M, en este orden): (1) **visor limpio** — nada sobre la imagen salvo esquinas de detección; disparo auto sin carteles previos; flash y oscuridad sin toasts; (2) **foto rápida** — `photoSettingsReq: "2048x1536"` · `takePhotoMs ~1000–1200` · `photoOutLongSide: 1920` · captura→guardada ≤ ~5 s · gap disparo→foto ≤ ~3 s · `gracia foto: 0 rescatadas`; (3) ⚠️ **ENCUADRE (el chequeo crítico)** — la foto nace 1920×1920 cuadrada: verificar el acta COMPLETA (arriba y abajo); si sale RECORTADA → NO merge y plan B (solo peldaño 1280×960, que respeta el encuadre del stream); (4) diag v6 build «lote5.3».

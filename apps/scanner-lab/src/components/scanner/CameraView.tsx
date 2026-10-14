@@ -20,13 +20,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Camera,
-  CheckCircle2,
   ChevronRight,
   FileDown,
   FileText,
   Flashlight,
   FlashlightOff,
-  Gauge,
   ImagePlus,
   Layers,
   LayoutGrid,
@@ -62,7 +60,6 @@ import {
 } from "@jg-stevan/scanner-core/frame-loop";
 import { SHUTTER_SCORE, type ShutterHealth } from "@jg-stevan/scanner-core/quality";
 import {
-  buildCappedPhotoSettings,
   clampBlobToSafeCap,
   getSensorSafeCap,
   profileSensor,
@@ -172,24 +169,6 @@ const FOTO_LADDER: Array<{ imageWidth: number; imageHeight: number }> = [
 // régimen alto ya es probado).
 const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
 const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
-/** LOTE 5 (F5-C) — detección de poca luz. Si los fps del loop caen por
- *  debajo del umbral durante el tiempo de acumulación, se avisa al
- *  usuario (máx LOW_LIGHT_MAX_WARNS por sesión de cámara). Recuperación:
- *  fps altos sostenidos resetean el acumulador y permiten re-avisar.
- *  Evidencia cam-lab SM-A135M 2026-10-14: 29 fps con luz → 10 fps en
- *  oscura (caída por exposición, hardware — no hay código que arreglar).
- *  Sin timers nuevos ni suscripciones nuevas: solo el onFrame del loop. */
-// LOTE 5.1 — telemetría t.fps es fps de PROCESADO (throttle ~15 máx; en
-//  A13 con buena luz ronda 8 — lote 4). Con umbral 12 el aviso sonaría
-//  SIEMPRE en el A13 incluso con buena luz (falso positivo garantizado).
-//  Con 5: luz buena ~8 (no avisa), oscura 2–4 (acumula y avisa). Recuperación
-//  10: vuelve a armarse apenas la luz mejora. LOW_LIGHT_RECOVERY_MS y
-//  LOW_LIGHT_MAX_WARNS sin cambios.
-const LOW_LIGHT_FPS_THRESHOLD = 5;
-const LOW_LIGHT_RECOVERY_FPS = 10;
-const LOW_LIGHT_ACCUM_MS = 6000;
-const LOW_LIGHT_RECOVERY_MS = 2000;
-const LOW_LIGHT_MAX_WARNS = 2;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
  *  ofrecen 60, solo evita negociar 60 cuando el hardware lo permite. */
 const IDEAL_PREVIEW_FPS = 30;
@@ -640,7 +619,6 @@ export default function CameraView() {
   const addCapturePage = useScannerStore((s) => s.addCapturePage);
   const settings = useScannerStore((s) => s.settings);
   const updateSettings = useScannerStore((s) => s.updateSettings);
-  const batchSavedCount = useScannerStore((s) => s.batchSavedCount);
 
   // ── Refs y estado ──
   const captureInputRef = useRef<HTMLInputElement | null>(null);
@@ -986,15 +964,6 @@ export default function CameraView() {
    *  que dispatchPhotoBlob ya hace). Lo lee el mark `capture_shot`. */
   const lastPhotoBlobLongSideRef = useRef<number | null>(null);
 
-  /** LOTE 5 (F5-C) — estado del aviso "poca luz" por sesión de cámara.
-   *  Reset por useEffect del loop al abrir cámara. Sin timers: solo
-   *  onFrame. */
-  const lowLightAccumMsRef = useRef(0);
-  const lowLightRecoveryMsRef = useRef(0);
-  const lowLightWarnCountRef = useRef(0);
-  const lowLightWarnedThisCycleRef = useRef(false);
-  const lowLightLastAtRef = useRef<number | null>(null);
-
   /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2):
    *  flash → decode → downscale → calidad → store → EDITOR INMEDIATO.
    *  El editor abre con un marco provisional y la detección de bordes
@@ -1278,20 +1247,20 @@ export default function CameraView() {
     if (!track) return { blob: null, timedOut: false };
     try {
       const capture = new ImageCapture(track);
-      // Dispara a resolución completa del hardware (4000×3000 / 3840×2160):
-      // sin photoConstraints — el sensor manda, el preview no limita...
-      // EXCEPTO cuando el sensor excede el tope seguro (48/108 MP): el
-      // F-SENSOR-PROFILER pide al ISP una foto dentro del tope EN la captura
-      // (capa 1) y el blob del gigante jamás llega a decodificarse.
+      // LOTE 5.3 — la resolución la manda FOTO_LADDER (2048×1536 → 1280×960 →
+      // desnudo). El cap anti-gigante del profiler ya no participa en la
+      // captura de Android; la Capa 2 post-decode sigue como red de seguridad.
+      // (profile se conserva: alimenta la Capa 2 con safeCapPx.)
       const profile = sensorProfileRef.current;
-      let settings = profile ? buildCappedPhotoSettings(profile) : undefined;
-      // LOTE 5 (F5-A): sin photoSettings del profiler (overCap=false) y en
-      // Android, NO disparar desnudo: empezar por la escalera rápida. El
-      // desnudo queda como ÚLTIMO recurso (cada peldaño solo se intenta si
-      // el anterior falló RÁPIDO). Evidencia cam-lab SM-A135M 2026-10-14:
-      // takePhoto desnudo ~15 s · 2048×1536 ~1.0 s.
-      const startedFromProfiler = settings !== undefined;
-      if (!settings && CAN_TAKEPHOTO) settings = FOTO_LADDER[0];
+      // LOTE 5.3 (F5.3-A): en Android la escalera es SIEMPRE el primer camino,
+      // sin importar overCap. Evidencia diag v6 2026-10-14 16:57/17:03: con
+      // overCap=true el profiler pedía {4032,3024} y el ISP hace la foto
+      // completa igual (~15 s en A135M; gap disparo→foto 17.6 s) — el intento
+      // capped NO aporta nada en los dispositivos lentos y en los rápidos el
+      // peldaño 2048 ya es rápido. El desnudo sigue siendo el ÚLTIMO recurso
+      // (solo si ambos peldaños fallan RÁPIDO). Evidencia cam-lab SM-A135M:
+      // takePhoto 2048×1536 ≈ 1.0 s (devuelve 1920×1920) vs desnudo ≈ 15 s.
+      let settings = FOTO_LADDER[0];
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
         // PERF/burst-budget — cada carrera de takePhoto queda ACOTADA por el
         // presupuesto global de la captura (legacy sin deadline: 5 s exactos
@@ -1361,22 +1330,15 @@ export default function CameraView() {
         return r;
       };
       let res = await timedAttempt(settings);
-      // LOTE 5 (F5-A) — reemplazo del reintento único por avance de
-      // escalera. MISMO guard que antes (fallo RÁPIDO = !res.blob &&
-      // !res.timedOut && res.err && presupuesto restante > 50 ms), pero
-      // el siguiente intento es el SIGUIENTE peldaño de FOTO_LADDER; el
-      // desnudo (attempt(undefined)) SOLO si la escalera se agotó.
+      // LOTE 5.3 (F5.3-A) — avance de escalera ÚNICO para Android: siguiente
+      // peldaño y luego desnudo. Guard intacto (fallo RÁPIDO = !res.blob &&
+      // !res.timedOut && res.err && presupuesto restante > 50 ms);
       // res.timedOut corta la escalera (sensor colgado → lista negra,
-      // comportamiento pre-lote5 intacto).
-      //
-      // Camino del profiler (overCap=true): cola = [undefined] — 1
-      // reintento al desnudo, EXACTO como antes (comportamiento pre-lote5).
-      // Camino escalera (overCap=false, Android): cola =
-      // [FOTO_LADDER[1], undefined] — siguiente peldaño y luego desnudo.
-      // iOS intacto: todo vive tras el guard CAN_TAKEPHOTO de arriba.
-      const retryQueue: (PhotoSettings | undefined)[] = startedFromProfiler
-        ? [undefined]
-        : [...FOTO_LADDER.slice(1), undefined];
+      // comportamiento pre-lote5 intacto). iOS: intacto tras CAN_TAKEPHOTO.
+      const retryQueue: (PhotoSettings | undefined)[] = [
+        ...FOTO_LADDER.slice(1),
+        undefined,
+      ];
       for (let i = 0; i < retryQueue.length; i++) {
         if (res.blob || res.timedOut || !res.err) break;
         if (deadlineAt !== undefined && deadlineAt - performance.now() <= 50)
@@ -1905,26 +1867,6 @@ export default function CameraView() {
       ) {
         recoverStream();
         return;
-      }
-      // FIX v4 4.6 — copy honesto: si takePhoto EXISTE pero no entregó foto
-      // en ESTE disparo, el texto «Cámara lenta» confundía (el frame no es
-      // lento: es la foto la que no respondió). El caso SIN ImageCapture
-      // con frame realmente bajo (<1280 px) conserva el texto clásico.
-      if (status === "live") {
-        if (canTakePhotoRef.current) {
-          toast.warning("La foto de alta resolución no respondió", {
-            description:
-              "Se usó el fotograma de vista previa. Las próximas capturas irán directas.",
-          });
-        } else {
-          const frameW = videoRef.current?.videoWidth ?? 0;
-          if (frameW > 0 && frameW < 1280) {
-            toast.warning("Cámara lenta: baja resolución esta vez", {
-              description:
-                "La foto de alta resolución no respondió; se guardó el fotograma de vista previa.",
-            });
-          }
-        }
       }
       // DUAL PIPELINE — fallback: el ganador ZSL pre-tap (estable, anti
       // tap-shock) compite por lapVar con snapA y el frame actual.
@@ -2698,12 +2640,6 @@ export default function CameraView() {
     standbyRef.current = false;
     setStandby(false);
     searchingSinceRef.current = null;
-    // LOTE 5 (F5-C) — reset del aviso "poca luz" por sesión de cámara.
-    lowLightAccumMsRef.current = 0;
-    lowLightRecoveryMsRef.current = 0;
-    lowLightWarnCountRef.current = 0;
-    lowLightWarnedThisCycleRef.current = false;
-    lowLightLastAtRef.current = null;
     loop.start(video, {
       onFrame: (t) => {
         // FIX v6 (6.2) — fallback del LATIDO: actualiza lastFrameAtRef en
@@ -2719,43 +2655,6 @@ export default function CameraView() {
         // pre-tap de 80–450 ms para la captura manual sin tap shock.
         feedRingFromVideo();
         const now = performance.now();
-        // LOTE 5 (F5-C) — aviso "poca luz": si los fps caen por oscuridad
-        // (sensor baja a ~10 fps en escena oscura — hardware, no código),
-        // guiar al usuario. Sin timers nuevos: solo el onFrame existente y
-        // el delta entre frames (performance.now). Máx 2 avisos por sesión
-        // de cámara; recuperación (fps ≥ 20 sostenidos 2 s) resetea el
-        // ciclo y permite re-avisar. Corre ANTES del throttle de UI (cada
-        // frame procesado) para precisión del acumulador.
-        if (lowLightLastAtRef.current !== null) {
-          const dt = now - lowLightLastAtRef.current;
-          if (t.fps < LOW_LIGHT_FPS_THRESHOLD) {
-            lowLightAccumMsRef.current += dt;
-            lowLightRecoveryMsRef.current = 0;
-            if (
-              lowLightAccumMsRef.current >= LOW_LIGHT_ACCUM_MS &&
-              !lowLightWarnedThisCycleRef.current &&
-              lowLightWarnCountRef.current < LOW_LIGHT_MAX_WARNS
-            ) {
-              lowLightWarnedThisCycleRef.current = true;
-              lowLightWarnCountRef.current += 1;
-              toast.message("Poca luz: la cámara va lenta", {
-                description: "Acércate a una luz o enciende el flash.",
-                id: "poca-luz",
-              });
-            }
-          } else if (t.fps >= LOW_LIGHT_RECOVERY_FPS) {
-            lowLightRecoveryMsRef.current += dt;
-            if (lowLightRecoveryMsRef.current >= LOW_LIGHT_RECOVERY_MS) {
-              lowLightAccumMsRef.current = 0;
-              lowLightWarnedThisCycleRef.current = false;
-              lowLightRecoveryMsRef.current = 0;
-            }
-          } else {
-            // Histéresis: fps entre 12 y 20 ni acumula ni recupera.
-            lowLightRecoveryMsRef.current = 0;
-          }
-        }
-        lowLightLastAtRef.current = now;
         if (now - lastTelemetryAt.current < 100) return; // throttle UI ~10 Hz
         lastTelemetryAt.current = now;
         const next: LiveUi = {
@@ -2845,7 +2744,6 @@ export default function CameraView() {
     const applied = await setTorchState(next);
     if (applied) {
       setFlashOn(next);
-      if (next) toast.success("Flash encendido", { duration: 1200 });
     } else {
       // Verificación falló: nada cambió físicamente; sincroniza y explica.
       setTorchOn((v) => v);
@@ -2948,7 +2846,6 @@ export default function CameraView() {
   const overlayStable = precisionLive
     ? (live.score ?? 0) > SHUTTER_SCORE
     : stable;
-  const scorePct = live.score !== null ? Math.round(live.score * 100) : null;
 
   // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
   // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
@@ -3125,32 +3022,6 @@ export default function CameraView() {
         </div>
       </header>
 
-      {/* ── Chip de lote: documentos guardados en cadena durante esta sesión ── */}
-      <AnimatePresence>
-        {batchSavedCount > 0 && (
-          <motion.div
-            key="batch-chip"
-            initial={{ opacity: 0, y: -10, scale: 0.92 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.95 }}
-            transition={{ type: "spring", stiffness: 420, damping: 28 }}
-            className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+58px)] z-20 -translate-x-1/2"
-            role="status"
-          >
-            <div className="flex items-center gap-1.5 rounded-full bg-[#34c759]/18 px-3 py-1.5 ring-1 ring-inset ring-[#34c759]/40 backdrop-blur-md">
-              <CheckCircle2
-                className="h-3.5 w-3.5 text-[#34c759]"
-                strokeWidth={2.4}
-                aria-hidden="true"
-              />
-              <span className="text-[12px] font-semibold tracking-tight text-white">
-                Lote · {batchSavedCount} {batchSavedCount === 1 ? "documento guardado" : "documentos guardados"}
-              </span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* ── Visor central ── */}
       <section
         ref={viewerRef}
@@ -3253,26 +3124,6 @@ export default function CameraView() {
           </div>
         )}
 
-        {/* IA calentando / buscando documento — FIX v5 (5.4): oculta durante
-            el modo espera (la pill de espera ocupa su sitio) */}
-        <AnimatePresence>
-          {precisionLive && live.searching && !processing && !standby && (
-            <motion.div
-              key="searching-pill"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-none absolute inset-x-0 top-5 z-30 flex justify-center px-6"
-            >
-              <div className="flex items-center gap-2 rounded-full bg-black/60 px-3.5 py-1.5 backdrop-blur-sm">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007aff]" aria-hidden="true" />
-                <p className="text-[12px] font-medium text-white/85">Buscando documento…</p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {/* FIX v5 (5.4) — pill del MODO ESPERA: análisis a 2 fps (ahorro de
             batería/CPU con el visor abierto sin documento). Tocarla (o
             cualquier parte de la cámara) reactiva; acercar un documento
@@ -3337,81 +3188,6 @@ export default function CameraView() {
                     </button>
                   </div>
                 </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Toast flotante: documento estable / listo para auto-captura */}
-        <AnimatePresence>
-          {autoCapture && overlayStable && !processing && (precisionLive || hasStream || status === "simulated") && (
-            <motion.div
-              key="stable-toast"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-none absolute inset-x-0 top-[42%] z-30 flex justify-center px-6"
-            >
-              <div className="flex items-center gap-2.5 rounded-[20px] bg-black/75 px-4 py-2.5 shadow-[0_4px_12px_rgba(0,0,0,0.3)] backdrop-blur-sm">
-                <span
-                  className={cn(
-                    "h-2 w-2 rounded-full",
-                    precisionLive ? "bg-[#007aff]" : "animate-pulse bg-[#007aff]"
-                  )}
-                  aria-hidden="true"
-                />
-                <p className="text-[14px] font-medium text-white">
-                  Mantén inmóvil el dispositivo…
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Meter de calidad EN VIVO (pipeline real) */}
-        <AnimatePresence>
-          {precisionLive && scorePct !== null && (
-            <motion.div
-              key="score-meter"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              transition={{ duration: 0.22 }}
-              className="pointer-events-none absolute bottom-9 left-3 z-20"
-              role="status"
-              aria-label={`Calidad de encuadre ${scorePct} por ciento`}
-            >
-              <div className="flex h-8 items-center gap-2.5 rounded-full bg-black/55 px-3 shadow-[0_4px_14px_rgba(0,0,0,0.35)] backdrop-blur-md">
-                <Gauge
-                  className={cn(
-                    "h-3.5 w-3.5",
-                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/80"
-                  )}
-                  strokeWidth={2.2}
-                  aria-hidden="true"
-                />
-                <div className="h-1 w-14 overflow-hidden rounded-full bg-white/20">
-                  <div
-                    className={cn(
-                      "h-full rounded-full transition-all duration-300 ease-out",
-                      scorePct > SHUTTER_SCORE * 100
-                        ? "bg-gradient-to-r from-[#30d158] to-[#34c759]"
-                        : scorePct > 55
-                          ? "bg-gradient-to-r from-[#007aff] to-[#4da2ff]"
-                          : "bg-white/50"
-                    )}
-                    style={{ width: `${Math.min(100, Math.max(4, scorePct))}%` }}
-                  />
-                </div>
-                <span
-                  className={cn(
-                    "min-w-7 text-right text-[11px] font-semibold tabular-nums",
-                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/85"
-                  )}
-                >
-                  {scorePct}
-                </span>
               </div>
             </motion.div>
           )}
