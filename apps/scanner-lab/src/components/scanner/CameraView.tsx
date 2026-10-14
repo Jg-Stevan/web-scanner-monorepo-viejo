@@ -971,11 +971,11 @@ export default function CameraView() {
    *  re-procesa solo). En gama baja esto convierte una espera de segundos
    *  frente a la cámara en una revisión instantánea. */
   const handleCaptureDataUrl = useCallback(
-    async (rawDataUrl: string) => {
-      if (processingRef.current) return;
+    async (rawDataUrl: string): Promise<string | null> => {
+      if (processingRef.current) return null;
       if (!rawDataUrl) {
         toast.error("No se pudo capturar la imagen");
-        return;
+        return null;
       }
       processingRef.current = true;
       setProcessing(true);
@@ -1166,9 +1166,11 @@ export default function CameraView() {
         if (bornQuad === null) {
           void applyAutoQuad(page.id, source);
         }
+        return page.id;
       } catch (err) {
         console.error("handleCaptureDataUrl falló:", err);
         toast.error("No se pudo procesar la imagen");
+        return null;
       } finally {
         processingRef.current = false;
         setProcessing(false);
@@ -1237,7 +1239,13 @@ export default function CameraView() {
        *  carrera interna puede perder contra el muro): el llamador la cuelga
        * del observador de foto huérfana cuando el presupuesto corta. SOLO
        * observación — no altera la carrera. */
-      onRawPhoto?: (photo: Promise<Blob>) => void
+      onRawPhoto?: (photo: Promise<Blob>) => void,
+      /** LOTE 5.4 (F5.4-A) — upgrade silencioso: si el ganador fue un
+       *  PELDAÑO (no el desnudo), takePhotoBlob dispara YA una foto
+       *  full-res del sensor (desnudo, ~15 s) y entrega la promesa al
+       *  llamador. Solo entrega la promesa — corre SIEMPRE fuera del
+       *  presupuesto del burst y NUNCA bloquea. */
+      onFastWin?: (upgrade: Promise<Blob>) => void
     ): Promise<{ blob: Blob | null; timedOut: boolean; wallCapped?: boolean }> => {
     // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
     // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
@@ -1261,6 +1269,10 @@ export default function CameraView() {
       // (solo si ambos peldaños fallan RÁPIDO). Evidencia cam-lab SM-A135M:
       // takePhoto 2048×1536 ≈ 1.0 s (devuelve 1920×1920) vs desnudo ≈ 15 s.
       let settings = FOTO_LADDER[0];
+      // LOTE 5.4 — settings del ÚLTIMO intento disparado; se lee SOLO si
+      // hubo blob ganador para decidir si corres upgrade (peldaño → sí,
+      // desnudo → ya es full-res, no).
+      let winnerSettings: PhotoSettings | undefined = settings;
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
         // PERF/burst-budget — cada carrera de takePhoto queda ACOTADA por el
         // presupuesto global de la captura (legacy sin deadline: 5 s exactos
@@ -1343,12 +1355,27 @@ export default function CameraView() {
         if (res.blob || res.timedOut || !res.err) break;
         if (deadlineAt !== undefined && deadlineAt - performance.now() <= 50)
           break;
+        winnerSettings = retryQueue[i]!;
         res = await timedAttempt(retryQueue[i]!);
       }
       // FIX v4 4.1 — lista negra temporal: marcar si expiró, rehabilitar si
       // respondió (un takePhoto que vuelve a funcionar vuelve a usarse).
       if (res.blob) takePhotoBrokenRef.current = false;
       else if (res.timedOut) takePhotoBrokenRef.current = true;
+      // LOTE 5.4 (F5.4-A) — el upgrade solo tiene sentido si lo que ganó
+      // fue un PELDAÑO (2048/1280): si ganó el desnudo ya es full-res.
+      // Fire-and-forget: la promesa NUNCA se espera aquí (el desnudo tarda
+      // ~15 s); su catch vive en el runner del llamador. Sin timedAttempt
+      // (no debe tocar lastPhotoAttemptRef ni el meta del ganador) y SIN
+      // tocar takePhotoBrokenRef (un desnudo lento/roto NO lista-negrea la
+      // escalera, que ya entregó la foto del flujo).
+      if (res.blob && winnerSettings !== undefined && onFastWin) {
+        try {
+          onFastWin(capture.takePhoto(undefined));
+        } catch {
+          /* throw sincrónico raro del sensor: nunca rompe la captura */
+        }
+      }
       if (!res.blob) {
         return {
           blob: null,
@@ -1679,6 +1706,60 @@ export default function CameraView() {
     // intento): si el presupuesto corta, el observador de la foto huérfana
     // sigue su rastro SIN tocar la captura (cero escrituras al store).
     let rawPhotoPromise: Promise<Blob> | null = null;
+    let upgradePromise: Promise<Blob> | null = null;
+    /** LOTE 5.4 (F5.4-B) — upgrade silencioso de la página: cuando la foto
+     *  full-res del sensor aterrice (~15-18 s), reemplaza el ORIGINAL de la
+     *  página creada por este disparo (1920 → 4032) y re-detecta el quad.
+     *  Todo el trabajo vive FUERA del flujo crítico (el usuario ya está en
+     *  el editor). Fallos silenciosos: si no llega o llega roto, la página
+     *  queda como está (1920). Telemetría gratuita vía watchOrphanPhoto. */
+    const runSilentUpgrade = async (
+      upgrade: Promise<Blob> | null,
+      pageId: string | null,
+      firedAtMs: number
+    ): Promise<void> => {
+      if (!upgrade || !pageId) return;
+      watchOrphanPhoto(
+        upgrade.then(
+          (b) => b ?? new Blob(),
+          () => new Blob()
+        ),
+        firedAtMs
+      );
+      try {
+        const blob = await upgrade;
+        if (!blob || blob.size === 0) return;
+        // ¿Sigue existiendo la página? (el usuario pudo borrarla)
+        const alive = useScannerStore
+          .getState()
+          .capturePages.some((pg) => pg.id === pageId);
+        if (!alive) return;
+        // Solo SUBE: si el lado mayor no supera claramente al del peldaño
+        // (1920), la página no se toca.
+        const longSide = await readBlobLongSide(blob);
+        if (longSide === null || longSide < 2048) return;
+        const rawUrl = await blobToDataUrl(blob);
+        // LOTE 5.4 — guard mínimo de tipos (blobToDataUrl resuelve null si
+        // el FileReader cae): sin URL no hay upgrade (silencioso, como todo
+        // el runner).
+        if (!rawUrl) return;
+        const decoded = await loadImage(rawUrl);
+        // Mismo tratamiento que el camino de siempre: tope técnico 4032.
+        const scaledUrl = await downscaleImage(decoded, PROCESSED_MAX_LONG_SIDE);
+        const finalUrl = scaledUrl ?? rawUrl;
+        const source = scaledUrl ? await loadImage(scaledUrl) : decoded;
+        useScannerStore.getState().updateCapturePage(pageId, {
+          original: finalUrl,
+          autoQuadPending: true,
+          quality: await evaluateQuality(source),
+        });
+        // Re-detección del quad sobre la foto nueva (FOV 4:3 ≠ peldaño 1:1):
+        // la pill «Ajustando recorte…» del editor cubre la espera.
+        void applyAutoQuad(pageId, source);
+      } catch {
+        /* silencioso: el upgrade JAMÁS rompe nada */
+      }
+    };
     if (burstDeadline !== undefined) {
       if (performance.now() >= burstDeadline) {
         // El torch/flash (applyConstraints no abortable) consumió el muro
@@ -1690,9 +1771,15 @@ export default function CameraView() {
         const w = await waitForPhotoBudget(
           () =>
             canPhoto
-              ? takePhotoBlob(burstDeadline, (p) => {
-                  rawPhotoPromise = p;
-                })
+              ? takePhotoBlob(
+                  burstDeadline,
+                  (p) => {
+                    rawPhotoPromise = p;
+                  },
+                  (p) => {
+                    upgradePromise = p;
+                  }
+                )
               : Promise.resolve({ blob: null, timedOut: false }),
           { deadlineAt: burstDeadline, sampler }
         );
@@ -1708,7 +1795,11 @@ export default function CameraView() {
         }
       }
     } else {
-      shot = canPhoto ? await takePhotoBlob() : null;
+      shot = canPhoto
+        ? await takePhotoBlob(undefined, undefined, (p) => {
+            upgradePromise = p;
+          })
+        : null;
     }
     const burstExtra = {
       samples: burstSamples,
@@ -1921,7 +2012,10 @@ export default function CameraView() {
         performance.now() - burstT0,
         { ...burstExtra, photoBytes: photoBlob.size }
       );
-      void handleCaptureDataUrl(photoUrl);
+      const upgradePageId = await handleCaptureDataUrl(photoUrl);
+      if (upgradePromise) {
+        void runSilentUpgrade(upgradePromise, upgradePageId, burstT0);
+      }
       return;
     }
     if (burstDeadline !== undefined) {
