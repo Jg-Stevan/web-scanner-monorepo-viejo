@@ -151,8 +151,38 @@ const IS_ANDROID =
 /** takePhoto() fiable SOLO en Android (Chrome). Safari moderno expone
  *  ImageCapture pero takePhoto() se cuelga → NO usar en iOS. */
 const CAN_TAKEPHOTO = IS_ANDROID && typeof ImageCapture !== "undefined";
-const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
-const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
+/** LOTE 5 (F5-A) — escalera rápida de photoSettings para takePhoto en
+ *  Android. Evidencia cam-lab SM-A135M 2026-10-14: el takePhoto DESNUDO
+ *  (sin photoSettings) tarda ~15 s (proceso full-res del ISP) y
+ *  2048×1536 tarda ~1.0 s. El desnudo queda como ÚLTIMO recurso (ningún
+ *  dispositivo queda peor que hoy: cada peldaño solo se intenta si el
+ *  anterior falló RÁPIDO). */
+const FOTO_LADDER: Array<{ imageWidth: number; imageHeight: number }> = [
+  { imageWidth: 2048, imageHeight: 1536 },
+  { imageWidth: 1280, imageHeight: 960 },
+];
+// LOTE 5 (F5-B) — preview OCR-grade en ambas plataformas. Evidencia cam-lab
+// SM-A135M 2026-10-14: el stream a 1920×1440 corre a 26.7 fps con nitidez
+// OCR-grade (Laplaciano crop ≈ 457; umbral OCR = 100). Antes Android pedía
+// 960×540 (0.5 MP) para fluidez y la captura de respaldo (ring ZSL/snapshot)
+// nacía a 0.5 MP; ahora nace OCR-grade (igual que el régimen que iOS ya
+// corría). «ideal» nunca rechaza (regla E3 intacta). El loop de detección
+// sigue remuestreando a 400 px y el ring ya escala sus copias a ≤1280 px
+// (FIX v4 4.5) → sin cambios aguas abajo.
+const IDEAL_PREVIEW_WIDTH = 1920;
+const IDEAL_PREVIEW_HEIGHT = 1440;
+/** LOTE 5 (F5-C) — detección de poca luz. Si los fps del loop caen por
+ *  debajo del umbral durante el tiempo de acumulación, se avisa al
+ *  usuario (máx LOW_LIGHT_MAX_WARNS por sesión de cámara). Recuperación:
+ *  fps altos sostenidos resetean el acumulador y permiten re-avisar.
+ *  Evidencia cam-lab SM-A135M 2026-10-14: 29 fps con luz → 10 fps en
+ *  oscura (caída por exposición, hardware — no hay código que arreglar).
+ *  Sin timers nuevos ni suscripciones nuevas: solo el onFrame del loop. */
+const LOW_LIGHT_FPS_THRESHOLD = 12;
+const LOW_LIGHT_RECOVERY_FPS = 20;
+const LOW_LIGHT_ACCUM_MS = 4000;
+const LOW_LIGHT_RECOVERY_MS = 2000;
+const LOW_LIGHT_MAX_WARNS = 2;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
  *  ofrecen 60, solo evita negociar 60 cuando el hardware lo permite. */
 const IDEAL_PREVIEW_FPS = 30;
@@ -935,6 +965,29 @@ export default function CameraView() {
    *  del dispatch (nada dispara capture_shot → nada que telemetrizar). */
   const pendingBurstRef = useRef<BurstStats | null>(null);
 
+  /** LOTE 5 (F5-A/F5-D) — último intento ganador de takePhoto (photoSettings
+   *  pedido + ms del intento). Lo escribe takePhotoBlob y lo lee el mark
+   *  `capture_shot` para diag v6. Nullable: caminos sin takePhoto (legacy,
+   *  galería, frames) lo dejan en null → meta aditivo ausente (pre-v6
+   *  intacto). */
+  const lastPhotoAttemptRef = useRef<{
+    photoSettingsReq: string;
+    takePhotoMs: number;
+  } | null>(null);
+
+  /** LOTE 5 (F5-D) — lado mayor del blob ganador (sniff de readBlobLongSide
+   *  que dispatchPhotoBlob ya hace). Lo lee el mark `capture_shot`. */
+  const lastPhotoBlobLongSideRef = useRef<number | null>(null);
+
+  /** LOTE 5 (F5-C) — estado del aviso "poca luz" por sesión de cámara.
+   *  Reset por useEffect del loop al abrir cámara. Sin timers: solo
+   *  onFrame. */
+  const lowLightAccumMsRef = useRef(0);
+  const lowLightRecoveryMsRef = useRef(0);
+  const lowLightWarnCountRef = useRef(0);
+  const lowLightWarnedThisCycleRef = useRef(false);
+  const lowLightLastAtRef = useRef<number | null>(null);
+
   /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2):
    *  flash → decode → downscale → calidad → store → EDITOR INMEDIATO.
    *  El editor abre con un marco provisional y la detección de bordes
@@ -971,40 +1024,65 @@ export default function CameraView() {
         // bgJobsAtShot del meta. Null en rutas sin corte (foto normal,
         // legacy, galería) → meta byte-a-byte con pre-v4 (gate 3).
         const pipeMeta = burstMeta === null ? null : collectBurstPipeMeta();
+        // LOTE 5 (F5-D) — meta aditivo del intento ganador de takePhoto
+        // (photoSettings pedido + ms del attempt) y del sniff del blob
+        // ganador (lado mayor). Refs poblados arriba en takePhotoBlob y
+        // dispatchPhotoBlob. Ausentes en rutas sin takePhoto (legacy,
+        // galería, frames puros) → meta idéntico al de antes (marks
+        // v1/v1.1 intactos).
+        const photoAttemptMeta = lastPhotoAttemptRef.current;
+        const photoLongSideMeta = lastPhotoBlobLongSideRef.current;
+        const hasPhotoMeta =
+          photoAttemptMeta !== null || photoLongSideMeta !== null;
         perfProbe.mark(
           "capture_shot",
-          burstMeta === null
+          burstMeta === null && !hasPhotoMeta
             ? undefined
             : {
-                burstExitReason: burstMeta.exitReason,
-                burstFrames: burstMeta.frames,
-                burstWaitedMs: burstMeta.waitedMs,
-                burstSamples: burstMeta.samples,
-                burstSampleCostMs: burstMeta.lastSampleCostMs,
-                // v3 Fase D (v4.2) — campo ADITIVO OPCIONAL: ms que la gracia
-                // esperó a la foto huérfana tras el corte. Ausente cuando la
-                // gracia no corrió → meta idéntico al de antes (marks
-                // v1/v1.1 intactos, nada renombrado ni eliminado).
-                ...(burstMeta.graceWaitedMs !== null
-                  ? { grace: burstMeta.graceWaitedMs }
-                  : {}),
-                // v4 (v4.3) — tramo opaco, SOLO en capturas con corte:
-                // total recordBurst→mark + jobs del editor al aterrizar +
-                // sub-marks del pipe de foto (ausentes si el dispatch fue de
-                // frames). Campos aditivos opcionales — marks v1/v1.1
-                // intactos, cero nombres nuevos de mark.
-                ...(pipeMeta !== null
+                ...(burstMeta !== null
                   ? {
-                      pipeToMarkMs: pipeMeta.pipeToMarkMs,
-                      bgJobsAtShot: pipeMeta.bgJobsAtShot,
-                      ...(pipeMeta.pipeSniffMs !== null
-                        ? { pipeSniffMs: pipeMeta.pipeSniffMs }
+                      burstExitReason: burstMeta.exitReason,
+                      burstFrames: burstMeta.frames,
+                      burstWaitedMs: burstMeta.waitedMs,
+                      burstSamples: burstMeta.samples,
+                      burstSampleCostMs: burstMeta.lastSampleCostMs,
+                      // v3 Fase D (v4.2) — campo ADITIVO OPCIONAL: ms que la gracia
+                      // esperó a la foto huérfana tras el corte. Ausente cuando la
+                      // gracia no corrió → meta idéntico al de antes (marks
+                      // v1/v1.1 intactos, nada renombrado ni eliminado).
+                      ...(burstMeta.graceWaitedMs !== null
+                        ? { grace: burstMeta.graceWaitedMs }
                         : {}),
-                      ...(pipeMeta.pipeDataUrlMs !== null
-                        ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
+                      // v4 (v4.3) — tramo opaco, SOLO en capturas con corte:
+                      // total recordBurst→mark + jobs del editor al aterrizar +
+                      // sub-marks del pipe de foto (ausentes si el dispatch fue de
+                      // frames). Campos aditivos opcionales — marks v1/v1.1
+                      // intactos, cero nombres nuevos de mark.
+                      ...(pipeMeta !== null
+                        ? {
+                            pipeToMarkMs: pipeMeta.pipeToMarkMs,
+                            bgJobsAtShot: pipeMeta.bgJobsAtShot,
+                            ...(pipeMeta.pipeSniffMs !== null
+                              ? { pipeSniffMs: pipeMeta.pipeSniffMs }
+                              : {}),
+                            ...(pipeMeta.pipeDataUrlMs !== null
+                              ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
+                              : {}),
+                            ...(pipeMeta.heapProbe
+                              ? { heapProbe: pipeMeta.heapProbe }
+                              : {}),
+                          }
                         : {}),
-                      ...(pipeMeta.heapProbe ? { heapProbe: pipeMeta.heapProbe } : {}),
                     }
+                  : {}),
+                ...(photoAttemptMeta !== null
+                  ? {
+                      photoSettingsReq: photoAttemptMeta.photoSettingsReq,
+                      takePhotoMs: photoAttemptMeta.takePhotoMs,
+                    }
+                  : {}),
+                ...(photoLongSideMeta !== null
+                  ? { photoOutLongSide: photoLongSideMeta }
                   : {}),
               }
         );
@@ -1199,7 +1277,14 @@ export default function CameraView() {
       // F-SENSOR-PROFILER pide al ISP una foto dentro del tope EN la captura
       // (capa 1) y el blob del gigante jamás llega a decodificarse.
       const profile = sensorProfileRef.current;
-      const settings = profile ? buildCappedPhotoSettings(profile) : undefined;
+      let settings = profile ? buildCappedPhotoSettings(profile) : undefined;
+      // LOTE 5 (F5-A): sin photoSettings del profiler (overCap=false) y en
+      // Android, NO disparar desnudo: empezar por la escalera rápida. El
+      // desnudo queda como ÚLTIMO recurso (cada peldaño solo se intenta si
+      // el anterior falló RÁPIDO). Evidencia cam-lab SM-A135M 2026-10-14:
+      // takePhoto desnudo ~15 s · 2048×1536 ~1.0 s.
+      const startedFromProfiler = settings !== undefined;
+      if (!settings && CAN_TAKEPHOTO) settings = FOTO_LADDER[0];
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
         // PERF/burst-budget — cada carrera de takePhoto queda ACOTADA por el
         // presupuesto global de la captura (legacy sin deadline: 5 s exactos
@@ -1250,20 +1335,46 @@ export default function CameraView() {
           };
         }
       };
-      let res = await attempt(settings);
-      // Reintento sin photoSettings SOLO si el primer intento falló RÁPIDO
-      // (constraints del profiler rechazadas, InvalidStateError…): mejor
-      // foto sin tope que perder la captura. Si expiró por timeout, el
-      // sensor quedó colgado — reintentar solo doblaría la espera.
-      // PERF/burst-budget: tampoco con el presupuesto ya agotado.
-      if (
-        !res.blob &&
-        settings &&
-        !res.timedOut &&
-        res.err &&
-        (deadlineAt === undefined || deadlineAt - performance.now() > 50)
-      ) {
-        res = await attempt(undefined);
+      // LOTE 5 (F5-D) — wrapper del intento: mide los ms del attempt y
+      // deja expuesto al diag el photoSettings pedido del GANADOR. El mark
+      // capture_shot (emitido abajo en handleCaptureDataUrl) lee este ref.
+      const timedAttempt = async (
+        ps: PhotoSettings | undefined
+      ): Promise<TakePhotoAttempt> => {
+        const t0 = performance.now();
+        const r = await attempt(ps);
+        if (r.blob) {
+          lastPhotoAttemptRef.current = {
+            photoSettingsReq: ps
+              ? `${ps.imageWidth}x${ps.imageHeight}`
+              : "naked",
+            takePhotoMs: Math.round(performance.now() - t0),
+          };
+        }
+        return r;
+      };
+      let res = await timedAttempt(settings);
+      // LOTE 5 (F5-A) — reemplazo del reintento único por avance de
+      // escalera. MISMO guard que antes (fallo RÁPIDO = !res.blob &&
+      // !res.timedOut && res.err && presupuesto restante > 50 ms), pero
+      // el siguiente intento es el SIGUIENTE peldaño de FOTO_LADDER; el
+      // desnudo (attempt(undefined)) SOLO si la escalera se agotó.
+      // res.timedOut corta la escalera (sensor colgado → lista negra,
+      // comportamiento pre-lote5 intacto).
+      //
+      // Camino del profiler (overCap=true): cola = [undefined] — 1
+      // reintento al desnudo, EXACTO como antes (comportamiento pre-lote5).
+      // Camino escalera (overCap=false, Android): cola =
+      // [FOTO_LADDER[1], undefined] — siguiente peldaño y luego desnudo.
+      // iOS intacto: todo vive tras el guard CAN_TAKEPHOTO de arriba.
+      const retryQueue: (PhotoSettings | undefined)[] = startedFromProfiler
+        ? [undefined]
+        : [...FOTO_LADDER.slice(1), undefined];
+      for (let i = 0; i < retryQueue.length; i++) {
+        if (res.blob || res.timedOut || !res.err) break;
+        if (deadlineAt !== undefined && deadlineAt - performance.now() <= 50)
+          break;
+        res = await timedAttempt(retryQueue[i]!);
       }
       // FIX v4 4.1 — lista negra temporal: marcar si expiró, rehabilitar si
       // respondió (un takePhoto que vuelve a funcionar vuelve a usarse).
@@ -1288,6 +1399,12 @@ export default function CameraView() {
       let clamped: Blob;
       if (deadlineAt !== undefined) {
         const sniffed = await readBlobLongSide(res.blob);
+        // LOTE 5 (F5-D) — el sniff del blob ganador (lado mayor) queda
+        // expuesto al diag via ref: el mark capture_shot lo lee para
+        // camera.photoOutLongSide. Solo en camino con presupuesto (donde
+        // el sniff ya corre); el camino legacy lo deja en null (campo
+        // nullable, sin romper nada).
+        lastPhotoBlobLongSideRef.current = sniffed;
         clamped =
           sniffed !== null && sniffed <= capPx
             ? res.blob
@@ -1651,6 +1768,10 @@ export default function CameraView() {
         const sniffT0 = performance.now();
         const sniffed = await readBlobLongSide(blob);
         noteBurstPipeSniff(performance.now() - sniffT0);
+        // LOTE 5 (F5-D) — lado mayor del blob de gracia (el sniff que ya
+        // hace dispatchPhotoBlob) expuesto al diag via ref: el mark
+        // capture_shot lo lee para camera.photoOutLongSide.
+        lastPhotoBlobLongSideRef.current = sniffed;
         const clamped =
           sniffed !== null && sniffed <= capPx
             ? blob
@@ -2368,8 +2489,22 @@ export default function CameraView() {
       // (phase "early"). UNA vez por sesión de cámara.
       if (!diagCameraReadyRef.current) {
         diagCameraReadyRef.current = true;
+        // LOTE 5 (F5-D) — resolución REAL del track (track.getSettings),
+        // capturada en el mark camera_ready para diag v6 (camera.streamW/H).
+        // Solo si getSettings expone width/height (algunos UA tardan); si no,
+        // los campos quedan null (aditivos, sin romper nada).
+        const camSettings = streamRef.current?.getVideoTracks()[0]?.getSettings();
         perfProbe.mark("camera_ready", {
-          ms: Math.max(0, Math.round(performance.now() - diagCameraOpenT0Ref.current)),
+          ms: Math.max(
+            0,
+            Math.round(performance.now() - diagCameraOpenT0Ref.current)
+          ),
+          ...(typeof camSettings?.width === "number"
+            ? { streamW: camSettings.width }
+            : {}),
+          ...(typeof camSettings?.height === "number"
+            ? { streamH: camSettings.height }
+            : {}),
         });
         void perfProbe.fpsSample(3000).then((s) => {
           if (s) perfProbe.mark("fps_camera", { fps: s.fps, phase: "early" });
@@ -2556,6 +2691,12 @@ export default function CameraView() {
     standbyRef.current = false;
     setStandby(false);
     searchingSinceRef.current = null;
+    // LOTE 5 (F5-C) — reset del aviso "poca luz" por sesión de cámara.
+    lowLightAccumMsRef.current = 0;
+    lowLightRecoveryMsRef.current = 0;
+    lowLightWarnCountRef.current = 0;
+    lowLightWarnedThisCycleRef.current = false;
+    lowLightLastAtRef.current = null;
     loop.start(video, {
       onFrame: (t) => {
         // FIX v6 (6.2) — fallback del LATIDO: actualiza lastFrameAtRef en
@@ -2571,6 +2712,43 @@ export default function CameraView() {
         // pre-tap de 80–450 ms para la captura manual sin tap shock.
         feedRingFromVideo();
         const now = performance.now();
+        // LOTE 5 (F5-C) — aviso "poca luz": si los fps caen por oscuridad
+        // (sensor baja a ~10 fps en escena oscura — hardware, no código),
+        // guiar al usuario. Sin timers nuevos: solo el onFrame existente y
+        // el delta entre frames (performance.now). Máx 2 avisos por sesión
+        // de cámara; recuperación (fps ≥ 20 sostenidos 2 s) resetea el
+        // ciclo y permite re-avisar. Corre ANTES del throttle de UI (cada
+        // frame procesado) para precisión del acumulador.
+        if (lowLightLastAtRef.current !== null) {
+          const dt = now - lowLightLastAtRef.current;
+          if (t.fps < LOW_LIGHT_FPS_THRESHOLD) {
+            lowLightAccumMsRef.current += dt;
+            lowLightRecoveryMsRef.current = 0;
+            if (
+              lowLightAccumMsRef.current >= LOW_LIGHT_ACCUM_MS &&
+              !lowLightWarnedThisCycleRef.current &&
+              lowLightWarnCountRef.current < LOW_LIGHT_MAX_WARNS
+            ) {
+              lowLightWarnedThisCycleRef.current = true;
+              lowLightWarnCountRef.current += 1;
+              toast.message("Poca luz: la cámara va lenta", {
+                description: "Acércate a una luz o enciende el flash.",
+                id: "poca-luz",
+              });
+            }
+          } else if (t.fps >= LOW_LIGHT_RECOVERY_FPS) {
+            lowLightRecoveryMsRef.current += dt;
+            if (lowLightRecoveryMsRef.current >= LOW_LIGHT_RECOVERY_MS) {
+              lowLightAccumMsRef.current = 0;
+              lowLightWarnedThisCycleRef.current = false;
+              lowLightRecoveryMsRef.current = 0;
+            }
+          } else {
+            // Histéresis: fps entre 12 y 20 ni acumula ni recupera.
+            lowLightRecoveryMsRef.current = 0;
+          }
+        }
+        lowLightLastAtRef.current = now;
         if (now - lastTelemetryAt.current < 100) return; // throttle UI ~10 Hz
         lastTelemetryAt.current = now;
         const next: LiveUi = {
