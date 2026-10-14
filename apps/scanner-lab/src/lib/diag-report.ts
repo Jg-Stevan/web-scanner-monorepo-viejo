@@ -199,6 +199,10 @@ export interface DiagReport {
       /** LOTE 2 (F2-G) — nº de upgrades fast→full completados en la sesión
        *  (marks editor_preview_upgraded del preview escalonado). */
       previewUpgrades: number;
+      /** LOTE 3 (F3-B) — decodeMs del primer render (meta.decodeMs del
+       *  último editor_first_render con cached:false que lo traiga numérico;
+       *  null si ninguno — builds previos al lote 3 o fallback canvas). */
+      firstRenderDecodeMs: number | null;
       fpsAuto: number | null;
       filterMedianMs: number | null;
       filterCount: number;
@@ -380,6 +384,16 @@ export async function buildDiagReport(): Promise<DiagReport> {
       fr.meta.previewTier
     ) {
       firstRenderTier = fr.meta.previewTier;
+    }
+  }
+  // LOTE 3 (F3-B) — decode del primer render: del ÚLTIMO mark
+  // editor_first_render con trabajo real (cached:false) que traiga
+  // meta.decodeMs numérico (misma lógica que firstRenderTier); null si
+  // ninguno (builds previos al lote 3 o fallback canvas local).
+  let firstRenderDecodeMs: number | null = null;
+  for (const fr of marksOf("editor_first_render")) {
+    if (fr.meta?.cached === false && typeof fr.meta?.decodeMs === "number") {
+      firstRenderDecodeMs = fr.meta.decodeMs;
     }
   }
   // LOTE 2 (F2-G) — upgrades fast→full completados (pasada FULL del preview
@@ -754,6 +768,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
         firstRenderMs,
         firstRenders,
         firstRenderTier,
+        firstRenderDecodeMs,
         previewUpgrades,
         fpsAuto: metaNum(marksOf("fps_auto").pop(), "fps"),
         filterMedianMs: median(filterMs),
@@ -1028,6 +1043,11 @@ export function buildDiagTxt(r: DiagReport): string {
   // LOTE 2 (F2-G) — línea extra SOLO si hay datos del preview escalonado.
   if (s.editor.firstRenderTier !== null || s.editor.previewUpgrades > 0) {
     push(`Preview escalonado        : fast→full · upgrade ${s.editor.previewUpgrades}`);
+  }
+  // LOTE 3 (F3-B) — línea SOLO si hay dato (decode del primer render;
+  // etiqueta alineada a la misma columna de 26 chars del bloque editor).
+  if (s.editor.firstRenderDecodeMs !== null) {
+    push(`Decode primer render      : ${Math.round(s.editor.firstRenderDecodeMs)} ms`);
   }
   push(`FPS pan/zoom (auto)       : ${s.editor.fpsAuto ?? DASH}`);
   push(`Filtros aplicados         : ${s.editor.filterCount} · mediana ${fmtMs(s.editor.filterMedianMs)}`);

@@ -750,11 +750,15 @@ export default function EditorView() {
           firstRenderPidRef.current = page.id;
           // LOTE 2 (F2-E) §2.3.1 — mark igual que hoy (mismo orden de
           // campos) + previewTier del tier que pintó.
+          // LOTE 3 (F3-B) — decodeMs de la adquisición de la fuente del
+          // warp (blob-first del tier fast O fallback; null si el pipeline
+          // que respondió no lo midió — fallback canvas local).
           perfProbe.mark("editor_first_render", {
             engine: entry.engine,
             cached: false,
             ms: filterMs,
             previewTier: "fast",
+            decodeMs: typeof res.decodeMs === "number" ? res.decodeMs : null,
           });
         }
       } catch {
