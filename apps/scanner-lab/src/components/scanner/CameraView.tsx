@@ -167,6 +167,24 @@ const FOTO_LADDER: Array<{ imageWidth: number; imageHeight: number }> = [
 // régimen de Android; la foto real llega por la escalera F5-A (~1 s).
 // iOS conserva 1920×1440 (allí el disparo manual es input nativo y el
 // régimen alto ya es probado).
+/** LOTE 5.5 — ¿esta captura va a «calidad primero»? Lee el ajuste del
+ *  usuario: "calidad" fuerza el camino full-res (la página NACE a la
+ *  resolución del sensor, «como antes»), "rapida" conserva la escalera
+ *  2048 + upgrade silencioso (5.3/5.4), y "auto" manda a calidad SOLO a
+ *  los equipos con 8+ GB (deviceMemory === 8; el A135M reporta 4).
+ *  try/catch: navegador sin datos → rápido. Se lee en cada captura,
+ *  NUNCA en render (cero re-renders por el ajuste). */
+function isQualityFirstPhoto(): boolean {
+  try {
+    const mode = useScannerStore.getState().settings.photoMode ?? "auto";
+    if (mode === "calidad") return true;
+    if (mode === "rapida") return false;
+    const dm = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    return CAN_TAKEPHOTO && dm === 8;
+  } catch {
+    return false;
+  }
+}
 const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
 const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
@@ -1260,6 +1278,11 @@ export default function CameraView() {
       // captura de Android; la Capa 2 post-decode sigue como red de seguridad.
       // (profile se conserva: alimenta la Capa 2 con safeCapPx.)
       const profile = sensorProfileRef.current;
+      // LOTE 5.5 — modo «calidad primero»: UNA carrera larga contra el
+      // sensor con el DESNUDO de primero (la página nace full-res). Si el
+      // desnudo falla RÁPIDO, la cola cae a los peldaños (D.4). Sin
+      // upgrade en segundo plano: el usuario ya pagó la espera.
+      const qualityFirst = isQualityFirstPhoto();
       // LOTE 5.3 (F5.3-A): en Android la escalera es SIEMPRE el primer camino,
       // sin importar overCap. Evidencia diag v6 2026-10-14 16:57/17:03: con
       // overCap=true el profiler pedía {4032,3024} y el ISP hace la foto
@@ -1268,7 +1291,7 @@ export default function CameraView() {
       // peldaño 2048 ya es rápido. El desnudo sigue siendo el ÚLTIMO recurso
       // (solo si ambos peldaños fallan RÁPIDO). Evidencia cam-lab SM-A135M:
       // takePhoto 2048×1536 ≈ 1.0 s (devuelve 1920×1920) vs desnudo ≈ 15 s.
-      let settings = FOTO_LADDER[0];
+      let settings = qualityFirst ? undefined : FOTO_LADDER[0];
       // LOTE 5.4 — settings del ÚLTIMO intento disparado; se lee SOLO si
       // hubo blob ganador para decidir si corres upgrade (peldaño → sí,
       // desnudo → ya es full-res, no).
@@ -1279,7 +1302,7 @@ export default function CameraView() {
         // como siempre). Si no queda presupuesto, ni se dispara la foto.
         let raceMs = 5000;
         if (deadlineAt !== undefined) {
-          raceMs = Math.min(5000, deadlineAt - performance.now());
+          raceMs = Math.min(qualityFirst ? 20000 : 5000, deadlineAt - performance.now());
           if (raceMs <= 50) {
             return {
               blob: null,
@@ -1347,10 +1370,9 @@ export default function CameraView() {
       // !res.timedOut && res.err && presupuesto restante > 50 ms);
       // res.timedOut corta la escalera (sensor colgado → lista negra,
       // comportamiento pre-lote5 intacto). iOS: intacto tras CAN_TAKEPHOTO.
-      const retryQueue: (PhotoSettings | undefined)[] = [
-        ...FOTO_LADDER.slice(1),
-        undefined,
-      ];
+      const retryQueue: (PhotoSettings | undefined)[] = qualityFirst
+        ? [...FOTO_LADDER] // 5.5 calidad: el desnudo ya corrió de primero; los peldaños son el plan B si falló RÁPIDO
+        : [...FOTO_LADDER.slice(1), undefined];
       for (let i = 0; i < retryQueue.length; i++) {
         if (res.blob || res.timedOut || !res.err) break;
         if (deadlineAt !== undefined && deadlineAt - performance.now() <= 50)
@@ -1697,6 +1719,8 @@ export default function CameraView() {
      *  FileReader de la conversión SÍ se aborta de verdad. Cooldown,
      *  estabilidad del shutter y photoSettings: INTACTOS. */
     const canPhoto = canTakePhotoRef.current && !takePhotoBrokenRef.current;
+    // LOTE 5.5 — modo de ESTA captura, leído una vez.
+    const qualityFirstCapture = isQualityFirstPhoto();
     let shot: { blob: Blob | null; timedOut: boolean; wallCapped?: boolean } | null =
       null;
     let bail: "time_cap" | "stable" | null = null;
@@ -1719,6 +1743,8 @@ export default function CameraView() {
       firedAtMs: number
     ): Promise<void> => {
       if (!upgrade || !pageId) return;
+      // LOTE 5.5 — pill del editor mientras el upgrade vuela.
+      useScannerStore.getState().updateCapturePage(pageId, { upgrading: true });
       watchOrphanPhoto(
         upgrade.then(
           (b) => b ?? new Blob(),
@@ -1752,15 +1778,29 @@ export default function CameraView() {
           original: finalUrl,
           autoQuadPending: true,
           quality: await evaluateQuality(source),
+          upgrading: false,
         });
         // Re-detección del quad sobre la foto nueva (FOV 4:3 ≠ peldaño 1:1):
         // la pill «Ajustando recorte…» del editor cubre la espera.
         void applyAutoQuad(pageId, source);
       } catch {
         /* silencioso: el upgrade JAMÁS rompe nada */
+      } finally {
+        // LOTE 5.5 — la pill se retira SIEMPRE (éxito, early-return o
+        // fallo). Sobre una página borrada = no-op (id inexistente).
+        useScannerStore.getState().updateCapturePage(pageId, { upgrading: false });
       }
     };
-    if (burstDeadline !== undefined) {
+    if (qualityFirstCapture && canPhoto) {
+      // LOTE 5.5 — calidad primero: UNA carrera de 20 s contra el sensor,
+      // sin muro del burst ni sampler (la espera es del ISP; burstSamples
+      // queda 0/null — campos nullable, recordBurst los tolera). Si expira
+      // → timedOut → lista negra + frame fallback de siempre (comportamiento
+      // pre-5.3 conocido).
+      shot = await takePhotoBlob(performance.now() + 20000, (p) => {
+        rawPhotoPromise = p;
+      });
+    } else if (burstDeadline !== undefined) {
       if (performance.now() >= burstDeadline) {
         // El torch/flash (applyConstraints no abortable) consumió el muro
         // ENTERO: la foto ni se dispara — frames YA, sin toast engañoso.
@@ -1796,9 +1836,15 @@ export default function CameraView() {
       }
     } else {
       shot = canPhoto
-        ? await takePhotoBlob(undefined, undefined, (p) => {
-            upgradePromise = p;
-          })
+        ? await takePhotoBlob(
+            qualityFirstCapture ? performance.now() + 20000 : undefined,
+            undefined,
+            qualityFirstCapture
+              ? undefined
+              : (p) => {
+                  upgradePromise = p;
+                }
+          )
         : null;
     }
     const burstExtra = {

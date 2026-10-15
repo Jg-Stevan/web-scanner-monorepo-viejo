@@ -843,3 +843,24 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 **NO-objetivos respetados:** whitelist cerrada de 3 archivos (`CameraView.tsx`, `diag-report.ts` SOLO la línea `DIAG_BUILD`, `CHANGES.md`) · `packages/**`, store, `package.json`, `bun.lock` intocados · sin dependencias nuevas · sin imports nuevos · sin marks nuevos ni meta cambiada.
 
 **Verificado:** `bun run lint` (eslint) = 0 · `bun run app:check` (tsc) = 0 · `git diff f4e9294...HEAD --stat` = EXACTAMENTE 3 archivos. Pendiente del dueño (QA física SM-A135M): (1) flujo IGUAL de rápido que el 5.3 (captura→guardada ~1.6 s, fps ~11/9); (2) captura una página, espera ~20-30 s SIN cerrar la app → la página se afina sola (PNG ~70 KB → ~230 KB); (3) ⚠️ **ENCUADRE tras el upgrade** — el quad se re-detecta sobre la foto 4:3: el acta debe seguir saliendo COMPLETA y bien recortada (la pill «Ajustando recorte…» puede aparecer un instante si estás mirando la página cuando aterriza — esperado); (4) OCR re-corrido sobre la página upgraded: igual o mejor; (5) diag v6: `photoSettingsReq: "2048x1536"` + `takePhotoMs ~1050` INTACTOS + las huérfanas del informe ahora registran las llegadas del upgrade (arrivalMs ~15-18 s, bytes ~2.8 MB) + build «lote5.4»; (6) exportar PDF ANTES de que aterrice el upgrade = 1920 (exportar después = 4032) — regla práctica: exportar al final de la jornada, nunca antes de ~20 s de la última captura.
+
+## LOTE 5.5 — editor-alta-calidad (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` · **Base:** `perf/lote5-4-upgrade-silencioso` @ `b072009`. Petición del dueño: «que se pueda ver la calidad de la imagen como antes, desde el visor del editor, en los dispositivos que pueden permitírselos».
+
+**Qué entrega:** (1) ajuste «Calidad de foto» (Auto/Calidad completa/Rápida) — Auto manda a calidad a los equipos de 8+ GB (deviceMemory===8; el A135M reporta 4); (2) modo CALIDAD: la página NACE a la resolución del sensor (desnudo con carrera de 20 s, sin escalera delante, sin upgrade — «como antes» pero con presupuesto honesto); (3) modo RÁPIDO intacto (5.3+5.4: escalera 2048 + upgrade silencioso); (4) pill «Afinando a calidad completa…» en el editor mientras el upgrade vuela (flag `upgrading` en CapturePage, retirada en finally).
+
+### Cambios (whitelist cerrada: 6 archivos)
+**F5.5-A** `types.ts` — `ScannerSettings.photoMode: "auto"|"calidad"|"rapida"` + default "auto"; **F5.5-B** `CapturePage.upgrading?: boolean`. Primera vez desde el lote 4 que se toca `packages/` (estado de producto, no telemetría).
+**F5.5-C** `CameraView.tsx` — helper `isQualityFirstPhoto()` (getState en cada captura, cero re-renders); takePhotoBlob: settings inicial `qualityFirst ? undefined : FOTO_LADDER[0]`, raceMs `min(qualityFirst ? 20000 : 5000, …)`, retryQueue calidad = `[...FOTO_LADDER]` (peldaños como plan B si el desnudo falla RÁPIDO).
+**F5.5-D** call-sites — rama `if (qualityFirstCapture && canPhoto)` con carrera de 20 s (sin muro ni sampler; si expira → lista negra + frame fallback, comportamiento pre-5.3 conocido); legacy con deadline/`onFastWin` condicionados.
+**F5.5-F** `runSilentUpgrade` — `upgrading: true` al despegar, `false` en el patch de éxito y en `finally` (idempotente; página borrada = no-op).
+**F5.5-G** `EditorView.tsx` — pill hermana de la de auto-quad (`bottom-[136px]`, pueden coexistir).
+**F5.5-H** `SettingsView.tsx` — fila «Calidad de foto» (Select 3 posiciones) sobre «Calidad PDF».
+**F5.5-I** `diag-report.ts` — DIAG_BUILD lote5.5 (1 línea; el modo se ve solo en el informe: "naked"+takePhotoMs grande+4032 vs 2048x1536+~1050+1920).
+
+**CONSERVADOS:** escalera 5.3 byte a byte en modo rápido · upgrade silencioso 5.4 (runner, guardas, watchOrphanPhoto) · lista negra · Capa 2 · gracia/huérfanas · meta de marks v1/v1.1 sin campos nuevos · vista limpia · editor/OCR/PDF (cero cambios) · persistencia de settings sin tocar page-store (lectura `?? "auto"`).
+
+**NO-objetivos:** store.ts, page-store.ts, sensor-profiler, package.json, bun.lock intocados · sin dependencias nuevas · sin marks nuevos.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` (tsc) = 0 · `git diff b072009...HEAD --stat` = EXACTAMENTE 6 archivos. Pendiente del dueño (QA física): (1) Auto en A13 = rápido (1.6 s / 1920 / pill «Afinando…» ~15-20 s); (2) Calidad en A13 = espera ~15-18 s → página nace 4032 (diag: "naked" + takePhotoMs ~15000 — PRIMERA medición del desnudo sin competencia); (3) ⚠️ encuadre en modo calidad (foto 4:3 → quad auto); (4) Rápida = todo como 5.4; (5) diag build lote5.5.

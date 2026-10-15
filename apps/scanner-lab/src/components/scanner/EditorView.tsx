@@ -2900,6 +2900,23 @@ export default function EditorView() {
             </div>
           </motion.div>
         )}
+        {page?.upgrading === true && mode === "review" && (
+          <motion.div
+            key="upgrade-pill"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="pointer-events-none absolute inset-x-0 bottom-[136px] z-30 flex justify-center px-6"
+          >
+            <div className="flex items-center gap-2 rounded-full bg-[#1c1c1e]/92 px-4 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.35)] ring-1 ring-inset ring-white/10 backdrop-blur-xl">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007aff]" />
+              <span className="text-[12.5px] font-medium text-white/85">
+                Afinando a calidad completa…
+              </span>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {mode === "review" && (

@@ -36,7 +36,7 @@ import {
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/lote5-foton lote5.4";
+export const DIAG_BUILD = "perf/lote5-foton lote5.5";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */

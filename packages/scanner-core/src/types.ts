@@ -174,6 +174,9 @@ export interface CapturePage {
    *  se aplica el quad SOLO si el usuario no recortó a mano (quadManual).
    *  Runtime-only: no se persiste ni viaja a ScanPage. */
   autoQuadPending?: boolean;
+  /** LOTE 5.5 — true = hay un upgrade silencioso (5.4) en vuelo para esta
+   *  página: el editor muestra la pill «Afinando a calidad completa…». */
+  upgrading?: boolean;
 }
 
 /** Clave de cache/estado de una página en sesión (id|quad|filtro|rotación).
@@ -198,6 +201,12 @@ export interface ScannerSettings {
    *  siempre. El torch manual (linterna) es estado de SESIÓN aparte y
    * manda: si el usuario lo dejó ON, no se apaga tras el disparo. */
   flashMode: "off" | "auto" | "on";
+  /** LOTE 5.5 — modo de captura: "auto" decide por el equipo (Chrome
+   *  reporta deviceMemory redondeado a potencia de 2 → 8 = 8+ GB reales;
+   *  el SM-A135M reporta 4), "calidad" = la página NACE full-res (espera
+   *  del sensor, «como antes"), "rapida" = escalera 2048 + upgrade
+   *  silencioso (lotes 5.3/5.4, intacto). */
+  photoMode: "auto" | "calidad" | "rapida";
 }
 
 export const DEFAULT_SETTINGS: ScannerSettings = {
@@ -213,6 +222,7 @@ export const DEFAULT_SETTINGS: ScannerSettings = {
   /** FIX v5 (5.5): sin flash por defecto — el disparo con LED es una
    *  decisión del usuario (ahorro de batería + reflejos especulares). */
   flashMode: "off",
+  photoMode: "auto",
 };
 
 export function defaultQuad(): Quad {
