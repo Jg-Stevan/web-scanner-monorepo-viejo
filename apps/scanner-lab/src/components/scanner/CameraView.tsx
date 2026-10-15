@@ -444,6 +444,18 @@ function quadDrift(a: Quad, b: Quad): number {
   return sum / 4 / Math.SQRT2;
 }
 
+/** LOTE 5.7.1 (framing persistente) — el meta de perfProbe.mark solo
+ *  acepta escalares: el quad viaja aplanado como q0..q7 (x0,y0,…,x3,y3,
+ *  fracciones 0-1, 3 decimales). */
+function quadMeta(quad: Quad): Record<string, number> {
+  const out: Record<string, number> = {};
+  quad.forEach((c, i) => {
+    out[`q${i * 2}`] = Math.round(c.x * 1000) / 1000;
+    out[`q${i * 2 + 1}`] = Math.round(c.y * 1000) / 1000;
+  });
+  return out;
+}
+
 /** FIX v5 (5.2) — dimensiones NATURALES de una fuente de captura (imagen
  *  o canvas). Helpers separados: el narrowing de instanceof solo es fiable
  *  sobre un parámetro fresco tipado como la unión (en el scope de captura,
@@ -951,10 +963,28 @@ export default function CameraView() {
         if (quadDrift(page.quad, detected) < 0.02) {
           // LOTE 5.6 — la detección aterrizó (sin drift): origen = detect.
           apply({ autoQuadPending: false, quadSource: "detect" });
+          // LOTE 5.7.1 — mark persistente (sin drift: detected ≈ page.quad).
+          perfProbe.mark("page_framing", {
+            phase: "detect",
+            pageId: page.id,
+            src: "detect",
+            origW: page.origW ?? null,
+            origH: page.origH ?? null,
+            ...quadMeta(page.quad),
+          });
           return;
         }
         // LOTE 5.6 — origen = detect (la página ahora recorta por el quad detectado).
         apply({ quad: detected, autoQuadPending: false, quadSource: "detect" });
+        // LOTE 5.7.1 — mark persistente (el quad detectado REEMPLAZÓ al vivo).
+        perfProbe.mark("page_framing", {
+          phase: "detect",
+          pageId: page.id,
+          src: "detect",
+          origW: page.origW ?? null,
+          origH: page.origH ?? null,
+          ...quadMeta(detected),
+        });
       } catch {
         apply({ autoQuadPending: false });
       } finally {
@@ -1164,6 +1194,18 @@ export default function CameraView() {
           quality,
         };
         addCapturePage(page);
+        // LOTE 5.7.1 (framing persistente) — la telemetría de encuadre viaja
+        // como MARK de sesión (sobrevive al guardado/cierre), no solo como
+        // lectura del store vivo. Evento "born": el quad con el que NACIÓ la
+        // página (overlay nato o marco provisional) + dims del original.
+        perfProbe.mark("page_framing", {
+          phase: "born",
+          pageId: page.id,
+          src: bornQuad !== null ? "overlay" : "none",
+          origW: iw > 0 ? iw : null,
+          origH: ih > 0 ? ih : null,
+          ...quadMeta(page.quad),
+        });
         // DIAG v1.1 (spec sub-marks) — tramo 2: imagen ya decodificada,
         // capada a 4032 y medida (px y bytes FINALES que van al store).
         perfProbe.mark("capture_processed", {

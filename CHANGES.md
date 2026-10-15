@@ -911,3 +911,29 @@ inmóvil…» NO vuelve (vista limpia). **F5.7-D** diag lote5.7.
 
 **Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff Parte B =
 3 archivos · auto-shutter/captura/quad byte a byte (solo UI de feedback).
+
+## LOTE 5.7.1 — framing persistente (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre el 5.7). El diag
+del 15/10 mostró la limitación del 5.6: la telemetría de encuadre lee las
+páginas VIVAS del store al exportar — los exports del flujo completo
+(post-guardado) salieron con `framing: []`; solo los tempranos trajeron datos.
+El diag final del Tecno necesita TODAS las páginas.
+
+**F5.7.1-A/B/C** `CameraView.tsx` — helper `quadMeta` (el meta de mark es
+escalar: quad aplanado q0..q7) + marks `page_framing` (born al nacer la
+página con quad/dims; detect en ambas ramas de aterrizaje de applyAutoQuad).
+**F5.7.1-D** `diag-report.ts` — framing = store vivo (verdad manual/pending,
+gana) + páginas solo-marks en orden de nacimiento (persisten toda la sesión;
+el detect reemplaza quad/src). `photoAspect` con fallback por marks. TXT
+idéntico (ahora con filas para toda la sesión; eliminadas reaparecen:
+forense). **F5.7.1-E** diag lote5.7.1.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 3
+archivos · captura/quad/detección byte a byte (solo marks + lectura).
+
+**Desviación (1, micro):** el código F5.7.1-D de la spec traía
+`d ? d.quad : b.quad` — `d` ES el array del quad detectado
+(`detectById.set(pageId, q)`, no un objeto con `.quad`) → TS2339. Corregido
+a `d ?? b.quad` (idéntico al comentario de la spec: «el detect reemplaza
+quad y src del born»).

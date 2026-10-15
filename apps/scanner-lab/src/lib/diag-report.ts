@@ -36,7 +36,7 @@ import {
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/lote5-foton lote5.7";
+export const DIAG_BUILD = "perf/lote5-foton lote5.7.1";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
@@ -783,36 +783,119 @@ export async function buildDiagReport(): Promise<DiagReport> {
     /* store no disponible: queda false */
   }
 
-  // LOTE 5.6 (diag-encuadre) — telemetría de encuadre por página: qué hay
-  // VIVO en la sesión al exportar (origen del quad, dims del original,
-  // manual/pending). Mismo orden de creación que resolutions (el orden del
-  // array del store). El bbox % de la foto que cubre el quad + el Δaspecto
-  // stream-vs-foto (camera.photoAspect) adjudican la disputa
-  // recorte-detector vs encuadre-cámara.
+  // LOTE 5.6 + 5.7.1 (diag-encuadre, framing persistente) — telemetría de
+  // encuadre por página. DOS fuentes unidas por pageId:
+  //  (1) store vivo al exportar — verdad completa (manual/pending) para las
+  //      páginas aún presentes; gana si ambas fuentes existen.
+  //  (2) marks "page_framing" (born/detect) — PERSISTENTES: traen TODAS las
+  //      páginas nacidas en la sesión aunque el store ya no las tenga
+  //      (guardado, cierre, eliminadas en el editor). Orden: born (ts).
+  //      El bbox % de la foto + el Δaspecto stream-vs-foto (camera.
+  //      photoAspect) adjudican la disputa recorte-detector vs encuadre-cámara.
   let framing: DiagReport["session"]["pages"]["framing"] = [];
   let photoAspect: number | null = null;
+  const entryFromQuad = (
+    src: "detect" | "overlay" | "none" | "?",
+    manual: boolean,
+    pending: boolean,
+    quad: Array<{ x: number; y: number }>,
+    origW: number | null,
+    origH: number | null,
+  ) => {
+    const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    const xs = quad.map((c) => c.x);
+    const ys = quad.map((c) => c.y);
+    return {
+      src,
+      manual,
+      pending,
+      quad: quad.flatMap((c) => [r3(c.x), r3(c.y)]),
+      bboxW: Math.round((Math.max(...xs) - Math.min(...xs)) * 1000) / 10,
+      bboxH: Math.round((Math.max(...ys) - Math.min(...ys)) * 1000) / 10,
+      origW,
+      origH,
+    };
+  };
+  const liveIds = new Set<string>();
   try {
     const livePages = useScannerStore.getState().capturePages;
-    const r3 = (v: number) => Math.round(v * 1000) / 1000;
     framing = livePages.map((p) => {
-      const xs = p.quad.map((c) => c.x);
-      const ys = p.quad.map((c) => c.y);
-      return {
-        src: p.quadSource ?? "?",
-        manual: p.quadManual === true,
-        pending: p.autoQuadPending === true,
-        quad: p.quad.flatMap((c) => [r3(c.x), r3(c.y)]),
-        bboxW: Math.round((Math.max(...xs) - Math.min(...xs)) * 1000) / 10,
-        bboxH: Math.round((Math.max(...ys) - Math.min(...ys)) * 1000) / 10,
-        origW: p.origW ?? null,
-        origH: p.origH ?? null,
-      };
+      liveIds.add(p.id);
+      return entryFromQuad(
+        p.quadSource ?? "?",
+        p.quadManual === true,
+        p.autoQuadPending === true,
+        p.quad,
+        p.origW ?? null,
+        p.origH ?? null,
+      );
     });
     for (const p of livePages) {
       if (p.origW && p.origH) photoAspect = p.origW / p.origH;
     }
   } catch {
     /* store no disponible: framing queda vacío (informe comparable) */
+  }
+  // LOTE 5.7.1 — marks page_framing: born + último detect por página. Solo
+  // añaden páginas que ya NO están en el store vivo (las vivas conservan su
+  // verdad manual/pending). El detect reemplaza quad y src del born.
+  try {
+    const bornById = new Map<
+      string,
+      {
+        src: "overlay" | "none";
+        origW: number | null;
+        origH: number | null;
+        quad: Array<{ x: number; y: number }>;
+      }
+    >();
+    const detectById = new Map<string, Array<{ x: number; y: number }>>();
+    for (const m of marksOf("page_framing")) {
+      const meta = m.meta ?? {};
+      const pageId = String(meta.pageId ?? "");
+      if (!pageId) continue;
+      const q: Array<{ x: number; y: number }> = [];
+      let ok = true;
+      for (let i = 0; i < 4; i += 1) {
+        const x = meta[`q${i * 2}`];
+        const y = meta[`q${i * 2 + 1}`];
+        if (typeof x !== "number" || typeof y !== "number") {
+          ok = false;
+          break;
+        }
+        q.push({ x, y });
+      }
+      if (!ok) continue;
+      if (meta.phase === "detect") {
+        detectById.set(pageId, q);
+      } else {
+        bornById.set(pageId, {
+          src: meta.src === "overlay" ? "overlay" : "none",
+          origW: typeof meta.origW === "number" ? meta.origW : null,
+          origH: typeof meta.origH === "number" ? meta.origH : null,
+          quad: q,
+        });
+      }
+    }
+    for (const [pageId, b] of bornById) {
+      if (liveIds.has(pageId)) continue;
+      const d = detectById.get(pageId);
+      framing.push(
+        entryFromQuad(
+          d ? "detect" : b.src,
+          false,
+          false,
+          d ?? b.quad, // (spec traía `d.quad` — d ES el array del detect: TS2339)
+          b.origW,
+          b.origH,
+        ),
+      );
+      if (b.origW && b.origH && photoAspect === null) {
+        photoAspect = b.origW / b.origH;
+      }
+    }
+  } catch {
+    /* marks no disponibles: queda lo del store vivo (comportamiento 5.6) */
   }
 
   // v1.1 — batería FRESCA al momento del informe (el snapshot cacheado la
