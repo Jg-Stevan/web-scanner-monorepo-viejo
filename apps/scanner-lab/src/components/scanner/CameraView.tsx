@@ -25,6 +25,7 @@ import {
   FileText,
   Flashlight,
   FlashlightOff,
+  Gauge,          // ← LOTE 5.7 (restaurado con el puntuador)
   ImagePlus,
   Layers,
   LayoutGrid,
@@ -441,6 +442,18 @@ function quadDrift(a: Quad, b: Quad): number {
     sum += Math.hypot(a[i]!.x - b[i]!.x, a[i]!.y - b[i]!.y);
   }
   return sum / 4 / Math.SQRT2;
+}
+
+/** LOTE 5.7.1 (framing persistente) — el meta de perfProbe.mark solo
+ *  acepta escalares: el quad viaja aplanado como q0..q7 (x0,y0,…,x3,y3,
+ *  fracciones 0-1, 3 decimales). */
+function quadMeta(quad: Quad): Record<string, number> {
+  const out: Record<string, number> = {};
+  quad.forEach((c, i) => {
+    out[`q${i * 2}`] = Math.round(c.x * 1000) / 1000;
+    out[`q${i * 2 + 1}`] = Math.round(c.y * 1000) / 1000;
+  });
+  return out;
 }
 
 /** FIX v5 (5.2) — dimensiones NATURALES de una fuente de captura (imagen
@@ -948,10 +961,30 @@ export default function CameraView() {
         // NO se reemplaza: el reproceso de preview cambiaría la cache por
         // un recorte visualmente idéntico (salto/parpadeo injustificado).
         if (quadDrift(page.quad, detected) < 0.02) {
-          apply({ autoQuadPending: false });
+          // LOTE 5.6 — la detección aterrizó (sin drift): origen = detect.
+          apply({ autoQuadPending: false, quadSource: "detect" });
+          // LOTE 5.7.1 — mark persistente (sin drift: detected ≈ page.quad).
+          perfProbe.mark("page_framing", {
+            phase: "detect",
+            pageId: page.id,
+            src: "detect",
+            origW: page.origW ?? null,
+            origH: page.origH ?? null,
+            ...quadMeta(page.quad),
+          });
           return;
         }
-        apply({ quad: detected, autoQuadPending: false });
+        // LOTE 5.6 — origen = detect (la página ahora recorta por el quad detectado).
+        apply({ quad: detected, autoQuadPending: false, quadSource: "detect" });
+        // LOTE 5.7.1 — mark persistente (el quad detectado REEMPLAZÓ al vivo).
+        perfProbe.mark("page_framing", {
+          phase: "detect",
+          pageId: page.id,
+          src: "detect",
+          origW: page.origW ?? null,
+          origH: page.origH ?? null,
+          ...quadMeta(detected),
+        });
       } catch {
         apply({ autoQuadPending: false });
       } finally {
@@ -1116,6 +1149,8 @@ export default function CameraView() {
         // (±2 %) para que el mapeo directo sea fiel — si difiere (p. ej.
         // foto 16:9 de un preview 4:3), el mapeo mentiría → background.
         const t = liveRef.current;
+        const iw = sourceNaturalWidth(source);   // LOTE 5.6 — hoist para origW/H
+        const ih = sourceNaturalHeight(source);  // LOTE 5.6
         let bornQuad: Quad | null = null;
         if (
           t.corners &&
@@ -1124,8 +1159,7 @@ export default function CameraView() {
         ) {
           const vw = videoRef.current?.videoWidth ?? 0;
           const vh = videoRef.current?.videoHeight ?? 0;
-          const iw = sourceNaturalWidth(source);
-          const ih = sourceNaturalHeight(source);
+          // iw/ih ya están en scope (hoist 5.6) — el bloque sigue igual.
           if (
             vw > 0 &&
             vh > 0 &&
@@ -1149,6 +1183,9 @@ export default function CameraView() {
           // background vía applyAutoQuad, sin bloquear la revisión.
           quad: bornQuad ?? defaultQuad(),
           autoQuadPending: bornQuad === null,
+          quadSource: bornQuad !== null ? "overlay" : "none", // LOTE 5.6 (solo telemetría)
+          origW: iw > 0 ? iw : undefined,                     // LOTE 5.6
+          origH: ih > 0 ? ih : undefined,                     // LOTE 5.6
           // F-DEFAULT-BW: «Mejora automática» (Ajustes › Procesamiento) decide
           // el filtro por defecto de cada captura — ON = B/N adaptativo (lo que
           // pidió el usuario), OFF = Original puro. Cambiable en el editor.
@@ -1157,6 +1194,18 @@ export default function CameraView() {
           quality,
         };
         addCapturePage(page);
+        // LOTE 5.7.1 (framing persistente) — la telemetría de encuadre viaja
+        // como MARK de sesión (sobrevive al guardado/cierre), no solo como
+        // lectura del store vivo. Evento "born": el quad con el que NACIÓ la
+        // página (overlay nato o marco provisional) + dims del original.
+        perfProbe.mark("page_framing", {
+          phase: "born",
+          pageId: page.id,
+          src: bornQuad !== null ? "overlay" : "none",
+          origW: iw > 0 ? iw : null,
+          origH: ih > 0 ? ih : null,
+          ...quadMeta(page.quad),
+        });
         // DIAG v1.1 (spec sub-marks) — tramo 2: imagen ya decodificada,
         // capada a 4032 y medida (px y bytes FINALES que van al store).
         perfProbe.mark("capture_processed", {
@@ -2992,6 +3041,8 @@ export default function CameraView() {
   const overlayStable = precisionLive
     ? (live.score ?? 0) > SHUTTER_SCORE
     : stable;
+  const scorePct =
+    live.score !== null ? Math.round(live.score * 100) : null; // LOTE 5.7 — puntuador
 
   // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
   // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
@@ -3334,6 +3385,56 @@ export default function CameraView() {
                     </button>
                   </div>
                 </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* LOTE 5.7 — Puntuador de encuadre EN VIVO (restaurado del pre-5.3):
+            esquina inferior izquierda, compacto, pointer-events-none (no tapa
+            el visor ni captura toques). Verde al superar el umbral del shutter. */}
+        <AnimatePresence>
+          {precisionLive && scorePct !== null && (
+            <motion.div
+              key="score-meter"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.22 }}
+              className="pointer-events-none absolute bottom-9 left-3 z-20"
+              role="status"
+              aria-label={`Calidad de encuadre ${scorePct} por ciento`}
+            >
+              <div className="flex h-8 items-center gap-2.5 rounded-full bg-black/55 px-3 shadow-[0_4px_14px_rgba(0,0,0,0.35)] backdrop-blur-md">
+                <Gauge
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/80"
+                  )}
+                  strokeWidth={2.2}
+                  aria-hidden="true"
+                />
+                <div className="h-1 w-14 overflow-hidden rounded-full bg-white/20">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-300 ease-out",
+                      scorePct > SHUTTER_SCORE * 100
+                        ? "bg-gradient-to-r from-[#30d158] to-[#34c759]"
+                        : scorePct > 55
+                          ? "bg-gradient-to-r from-[#007aff] to-[#4da2ff]"
+                          : "bg-white/50"
+                    )}
+                    style={{ width: `${Math.min(100, Math.max(4, scorePct))}%` }}
+                  />
+                </div>
+                <span
+                  className={cn(
+                    "min-w-7 text-right text-[11px] font-semibold tabular-nums",
+                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/85"
+                  )}
+                >
+                  {scorePct}
+                </span>
               </div>
             </motion.div>
           )}

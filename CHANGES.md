@@ -889,3 +889,66 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 **F5.5-J** `CameraView.tsx` — el dispatch de la foto (`photoUrl`) solo se rige por el muro cuando NO es calidad-primero (`burstDeadline !== undefined && !qualityFirstCapture`); en calidad el FileReader corre sin deadline. Modo rápido: byte a byte igual.
 
 **Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 3 archivos. QA esperado (SM-A135M, modo Calidad): captura→guardada ~6-7 s (tibia) / ~16-18 s (fría) → página a 4032; diag `naked` + `photoOutLongSide 4080` + byReason `photo` (adiós time_cap); A566E sin cambios (4032, ~1.8 s).
+
+## LOTE 5.6 — diag-encuadre (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre 2df2799). Reporte
+del dueño (TECNO-KN3): la página del editor sale recortada arriba/abajo
+respecto al visor. Dos hipótesis: quad/detección muerde vs el encuadre
+(stream 9:16 vs foto 3:4) captura menos de lo visto. Decisión: DATOS REALES
+primero — telemetría pura, cero cambios de comportamiento.
+
+**F5.6-A** `types.ts` — `CapturePage.quadSource? ("overlay"|"detect"|"none")`
++ `origW?/origH?` (runtime-only, como `autoQuadPending`).
+**F5.6-B/C** `CameraView.tsx` — origen anotado al nacer (overlay/none) y al
+aterrizar `applyAutoQuad` (detect); hoist de iw/ih para medir el original.
+**F5.6-D** `diag-report.ts` — `pages.framing[]` (src/manual/pending/quad
+fracciones/bbox% de la foto/dims) + `camera.photoAspect` + sección TXT
+«ENCUADRE (por página)» con Δaspecto stream-vs-foto. Aditivo, sin bump de
+versión. Lectura: bbox ≈ 85-100% con recorte visible ⇒ la foto no trae lo
+visto (camino cámara); bbox ≈ 55-80% ⇒ el quad muerde (camino detector).
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 4
+archivos · captura/quad/detección byte a byte (solo anotación y hoist).
+
+## LOTE 5.7 — puntuador (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre el 5.6). El dueño
+pidió de vuelta el medidor de calidad de encuadre (esquina inferior
+izquierda) que la vista limpia del 5.3 retiró. La estabilidad nunca se fue:
+el auto-shutter siguió midiendo — el usuario quedó sin feedback.
+
+**F5.7-A/B** `CameraView.tsx` — re-import `Gauge` + derivado `scorePct`
+(`live.score` ya existía). **F5.7-C** bloque score-meter restaurado verbatim
+del pre-5.3 (bottom-9 left-3, barra + %, verde > umbral del shutter,
+pointer-events-none, role="status" + aria-label). El toast centrado «Mantén
+inmóvil…» NO vuelve (vista limpia). **F5.7-D** diag lote5.7.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff Parte B =
+3 archivos · auto-shutter/captura/quad byte a byte (solo UI de feedback).
+
+## LOTE 5.7.1 — framing persistente (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre el 5.7). El diag
+del 15/10 mostró la limitación del 5.6: la telemetría de encuadre lee las
+páginas VIVAS del store al exportar — los exports del flujo completo
+(post-guardado) salieron con `framing: []`; solo los tempranos trajeron datos.
+El diag final del Tecno necesita TODAS las páginas.
+
+**F5.7.1-A/B/C** `CameraView.tsx` — helper `quadMeta` (el meta de mark es
+escalar: quad aplanado q0..q7) + marks `page_framing` (born al nacer la
+página con quad/dims; detect en ambas ramas de aterrizaje de applyAutoQuad).
+**F5.7.1-D** `diag-report.ts` — framing = store vivo (verdad manual/pending,
+gana) + páginas solo-marks en orden de nacimiento (persisten toda la sesión;
+el detect reemplaza quad/src). `photoAspect` con fallback por marks. TXT
+idéntico (ahora con filas para toda la sesión; eliminadas reaparecen:
+forense). **F5.7.1-E** diag lote5.7.1.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 3
+archivos · captura/quad/detección byte a byte (solo marks + lectura).
+
+**Desviación (1, micro):** el código F5.7.1-D de la spec traía
+`d ? d.quad : b.quad` — `d` ES el array del quad detectado
+(`detectById.set(pageId, q)`, no un objeto con `.quad`) → TS2339. Corregido
+a `d ?? b.quad` (idéntico al comentario de la spec: «el detect reemplaza
+quad y src del born»).
