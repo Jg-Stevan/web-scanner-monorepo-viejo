@@ -25,6 +25,7 @@
   "files": ["dist", "README.md"],
   "scripts": {
     "build": "bunx tsc --project tsconfig.build.json",
+    "publish:stage": "bun run build && bun make-publish-package.mjs",
     "prepublishOnly": "bun run build && bunx tsc --noEmit"
   },
   "peerDependencies": {
