@@ -2,6 +2,8 @@
 
 > ⚠️ **Regla de oro:** lee [`AGENTS.md`](./AGENTS.md) antes de escribir código — lo que existe en el lab se copia, no se re-inventa.
 
+> 🔬 **Saga de encuadre en pausa** (veredicto del recorte pendiente de dispositivo): protocolo de retoma en [`docs/RETOMA-saga-encuadre.md`](./docs/RETOMA-saga-encuadre.md).
+
 Monorepo de digitalización de documentos con estética **pixel-perfect de iOS**. Toda la interfaz está en **español**.
 
 [![Quality Gate](https://github.com/Jg-Stevan/web-scanner/actions/workflows/quality.yml/badge.svg)](https://github.com/Jg-Stevan/web-scanner/actions/workflows/quality.yml)
