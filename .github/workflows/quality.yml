@@ -1,0 +1,49 @@
+name: Quality Gate
+
+# Gate de calidad en PR y push a main: tipos + lint + build estático de
+# ambas apps. NO despliega (eso lo hace deploy-pages.yml). El gate tsc que
+# deploy-pages.yml dejó fuera a propósito en la migración vive aquí: el
+# deploy nunca se pone rojo por un PR malo; el PR sí.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (workspace raíz)
+        run: bun install --frozen-lockfile
+
+      - name: Type check — packages/scanner-core
+        run: bun run core:check
+
+      - name: Type check — apps/scanner-lab
+        run: bun run app:check
+
+      - name: Type check — apps/digitalizador-e14
+        run: bun run e14:check
+
+      - name: Lint — apps/scanner-lab
+        run: bun run lint
+
+      - name: Lint — apps/digitalizador-e14
+        run: bun run lint:e14
+
+      - name: Build estático scanner-lab (sanity)
+        run: bun run build:static
+
+      - name: Build estático digitalizador-e14 (sanity)
+        run: bun run build:e14
