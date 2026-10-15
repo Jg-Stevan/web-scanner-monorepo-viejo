@@ -36,7 +36,7 @@ import {
 import { useScannerStore } from "@jg-stevan/scanner-core/store";
 
 /** Build que originó este informe (rama @ commit corto). */
-export const DIAG_BUILD = "perf/lote4-gracia-enhance @ 20054b2 lote4";
+export const DIAG_BUILD = "perf/lote5-foton lote5.5.1";
 
 /** Sección QA del informe (v3 — spec diag-test-estandar-qa): solo viaja
  *  cuando el guión corrió (o se abortó a mitad). */
@@ -74,9 +74,11 @@ export interface DiagTier {
 export interface DiagReport {
   format: "scannerlab-diag-report";
   /** v1 → v2 (sub-marks) → v3 (test estándar QA) → v4 (burst-budget) →
-   *  v5 (burst v2-A13): SOLO campos adicionales — todo campo v1 conserva
-   *  nombre y significado (informes de los lotes 1-4 comparables 1:1). */
-  version: 5;
+   *  v5 (burst v2-A13) → v6 (lote5-foton: camera.streamW/H +
+   *  photoSettingsReq/photoOutLongSide/takePhotoMs): SOLO campos
+   *  adicionales — todo campo v1 conserva nombre y significado (informes
+   *  de los lotes 1-5 comparables 1:1). */
+  version: 6;
   generatedAt: string;
   app: { build: string };
   device: DiagDeviceSnapshot;
@@ -94,6 +96,20 @@ export interface DiagReport {
        *  capture_stable): el dato que cuantifica la demora del shutter en
        *  gama baja, con o sin guión QA. */
       autoShutterWaitMs: number[];
+      /** LOTE 5 (F5-D) v6 — resolución REAL del stream (track.getSettings),
+       *  capturada en el mark camera_ready. Nullable: algunos UA tardan en
+       *  exponer width/height en el primer frame. */
+      streamW: number | null;
+      streamH: number | null;
+      /** LOTE 5 (F5-D) v6 — photoSettings pedido al takePhoto ganador
+       *  (p. ej. "2048x1536" o "naked"; null si no hubo takePhoto en la
+       *  captura: galería, demo, frames puros). */
+      photoSettingsReq: string | null;
+      /** LOTE 5 (F5-D) v6 — lado mayor del blob ganador (sniff de
+       *  readBlobLongSide que dispatchPhotoBlob/takePhotoBlob ya hacen). */
+      photoOutLongSide: number | null;
+      /** LOTE 5 (F5-D) v6 — mediana de los intentos ganadores de la sesión. */
+      takePhotoMs: number | null;
     };
     pages: {
       count: number;
@@ -263,6 +279,13 @@ function marksOf(ev: string): PerfProbeMark[] {
 function metaNum(m: PerfProbeMark | undefined, key: string): number | null {
   const v = m?.meta?.[key];
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** LOTE 5 (F5-D) — lee un meta string de un mark (simétrico a metaNum).
+ *  Null si falta o no es string no vacío (campo aditivo nullable). */
+function metaStr(m: PerfProbeMark | undefined, key: string): string | null {
+  const v = m?.meta?.[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 function median(values: number[]): number | null {
@@ -550,6 +573,14 @@ export async function buildDiagReport(): Promise<DiagReport> {
     seriesMB: number[];
   } | null> = [];
   const longTaskEntries = perfProbe.longTaskEntries;
+  // LOTE 5 (F5-D) v6 — aditivo: photoSettings pedido, ms del attempt
+  // ganador y lado mayor del blob (metas del mark capture_shot, poblados
+  // arriba en CameraView.takePhotoBlob y dispatchPhotoBlob). SOLO
+  // capturas con takePhoto traen el meta (galería/demo/frames puros →
+  // arrays vacíos y últimos nullables, campo null sin romper nada).
+  let lastPhotoSettingsReq: string | null = null;
+  const takePhotoMsValues: number[] = [];
+  let lastPhotoOutLongSide: number | null = null;
   for (const s of shotMarks) {
     const fired = lastBefore(firedShots, s.ts);
     if (fired) burstAcquisitionMs.push(Math.max(0, s.ts - fired.ts));
@@ -650,6 +681,21 @@ export async function buildDiagReport(): Promise<DiagReport> {
         burstWindowCongestion.push({ count, totalMs });
       }
     }
+    // LOTE 5 (F5-D) v6 — aditivo: lee el meta del intento ganador de
+    // takePhoto y del sniff del blob (aditivo al mark capture_shot;
+    // ausente en rutas sin takePhoto → campo null, sin romper nada).
+    const psr = metaStr(s, "photoSettingsReq");
+    if (psr !== null) {
+      lastPhotoSettingsReq = psr;
+    }
+    const tpMs = metaNum(s, "takePhotoMs");
+    if (tpMs !== null) {
+      takePhotoMsValues.push(tpMs);
+    }
+    const pol = metaNum(s, "photoOutLongSide");
+    if (pol !== null) {
+      lastPhotoOutLongSide = pol;
+    }
   }
   // v4.2 (v3 Fase D) — bloque de la gracia. Derivación:
   //  · photoGrace = capturas rescatadas por la gracia (reason photo_grace).
@@ -747,7 +793,7 @@ export async function buildDiagReport(): Promise<DiagReport> {
 
   return {
     format: "scannerlab-diag-report",
-    version: 5,
+    version: 6,
     generatedAt: new Date().toISOString(),
     app: { build: DIAG_BUILD },
     device,
@@ -762,6 +808,14 @@ export async function buildDiagReport(): Promise<DiagReport> {
         fpsEarly,
         fpsLate,
         autoShutterWaitMs,
+        // LOTE 5 (F5-D) v6 — aditivos nullable: resolución REAL del track
+        // (mark camera_ready) + telemetría del takePhoto ganador (mark
+        // capture_shot). Null si el mark no trajo el meta.
+        streamW: metaNum(cameraReady[cameraReady.length - 1], "streamW"),
+        streamH: metaNum(cameraReady[cameraReady.length - 1], "streamH"),
+        photoSettingsReq: lastPhotoSettingsReq,
+        photoOutLongSide: lastPhotoOutLongSide,
+        takePhotoMs: median(takePhotoMsValues),
       },
       pages: {
         count: savedPages.length,
@@ -915,6 +969,12 @@ export function buildDiagTxt(r: DiagReport): string {
   push(`Arranque app → lista      : ${fmtMs(s.boot.appReadyMs)}`);
   push(`Cámara: abrir → lista     : ${fmtMs(s.camera.readyMs)}`);
   push(`FPS cámara                : ${s.camera.fpsEarly ?? DASH} · tarde: ${s.camera.fpsLate ?? DASH}`);
+  // LOTE 5 (F5-D) v6 — telemetría del stream real y del takePhoto ganador.
+  // Aditivo: ausente si el mark no trajo el meta (camino legacy/galería).
+  push(`Stream cámara             : ${s.camera.streamW ?? DASH} × ${s.camera.streamH ?? DASH}`);
+  push(`Foto: settings pedido     : ${s.camera.photoSettingsReq ?? DASH}`);
+  push(`Foto: salida lado mayor   : ${s.camera.photoOutLongSide ?? DASH} px`);
+  push(`Foto: takePhoto (mediana) : ${fmtMs(s.camera.takePhotoMs)}`);
   // v3 — espera del auto-shutter (estable→disparo) por página + modo del
   // guión (auto/manual/mixto — solo cuando el test QA corrió).
   if (s.camera.autoShutterWaitMs.length > 0) {

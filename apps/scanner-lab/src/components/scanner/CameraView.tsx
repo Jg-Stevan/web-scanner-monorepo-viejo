@@ -20,13 +20,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Camera,
-  CheckCircle2,
   ChevronRight,
   FileDown,
   FileText,
   Flashlight,
   FlashlightOff,
-  Gauge,
   ImagePlus,
   Layers,
   LayoutGrid,
@@ -62,7 +60,6 @@ import {
 } from "@jg-stevan/scanner-core/frame-loop";
 import { SHUTTER_SCORE, type ShutterHealth } from "@jg-stevan/scanner-core/quality";
 import {
-  buildCappedPhotoSettings,
   clampBlobToSafeCap,
   getSensorSafeCap,
   profileSensor,
@@ -151,6 +148,43 @@ const IS_ANDROID =
 /** takePhoto() fiable SOLO en Android (Chrome). Safari moderno expone
  *  ImageCapture pero takePhoto() se cuelga → NO usar en iOS. */
 const CAN_TAKEPHOTO = IS_ANDROID && typeof ImageCapture !== "undefined";
+/** LOTE 5 (F5-A) — escalera rápida de photoSettings para takePhoto en
+ *  Android. Evidencia cam-lab SM-A135M 2026-10-14: el takePhoto DESNUDO
+ *  (sin photoSettings) tarda ~15 s (proceso full-res del ISP) y
+ *  2048×1536 tarda ~1.0 s. El desnudo queda como ÚLTIMO recurso (ningún
+ *  dispositivo queda peor que hoy: cada peldaño solo se intenta si el
+ *  anterior falló RÁPIDO). */
+const FOTO_LADDER: Array<{ imageWidth: number; imageHeight: number }> = [
+  { imageWidth: 2048, imageHeight: 1536 },
+  { imageWidth: 1280, imageHeight: 960 },
+];
+// LOTE 5.1 — REVERT de F5-B: el preview 1920×1440 en Android ahoga el hilo
+// principal en gama baja. Evidencia diag v6 SM-A135M 2026-10-14 15:55: fps
+// de cámara 2, long tasks 216/133.4 s, captura→guardada 21.5 s, 0 muestras
+// del sampler. El cam-lab medía los fps del STREAM crudo (26.7 @ 1440×1920),
+// no el presupuesto por-frame del loop (detección 400 px + histograma 96 px
+// + ring ZSL + snapshots). El preview ligero 960×540 vuelve a ser el
+// régimen de Android; la foto real llega por la escalera F5-A (~1 s).
+// iOS conserva 1920×1440 (allí el disparo manual es input nativo y el
+// régimen alto ya es probado).
+/** LOTE 5.5 — ¿esta captura va a «calidad primero»? Lee el ajuste del
+ *  usuario: "calidad" fuerza el camino full-res (la página NACE a la
+ *  resolución del sensor, «como antes»), "rapida" conserva la escalera
+ *  2048 + upgrade silencioso (5.3/5.4), y "auto" manda a calidad SOLO a
+ *  los equipos con 8+ GB (deviceMemory === 8; el A135M reporta 4).
+ *  try/catch: navegador sin datos → rápido. Se lee en cada captura,
+ *  NUNCA en render (cero re-renders por el ajuste). */
+function isQualityFirstPhoto(): boolean {
+  try {
+    const mode = useScannerStore.getState().settings.photoMode ?? "auto";
+    if (mode === "calidad") return true;
+    if (mode === "rapida") return false;
+    const dm = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    return CAN_TAKEPHOTO && dm === 8;
+  } catch {
+    return false;
+  }
+}
 const IDEAL_PREVIEW_WIDTH = CAN_TAKEPHOTO ? 960 : 1920;
 const IDEAL_PREVIEW_HEIGHT = CAN_TAKEPHOTO ? 540 : 1440;
 /** Tope suave de FPS del preview: «ideal» NO rechaza cámaras que solo
@@ -603,7 +637,6 @@ export default function CameraView() {
   const addCapturePage = useScannerStore((s) => s.addCapturePage);
   const settings = useScannerStore((s) => s.settings);
   const updateSettings = useScannerStore((s) => s.updateSettings);
-  const batchSavedCount = useScannerStore((s) => s.batchSavedCount);
 
   // ── Refs y estado ──
   const captureInputRef = useRef<HTMLInputElement | null>(null);
@@ -751,7 +784,7 @@ export default function CameraView() {
   const upgradeStreamResolution = useCallback(
     (track: MediaStreamTrack | null | undefined): void => {
       if (!track) return;
-      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview 540p intencional
+      if (CAN_TAKEPHOTO) return; // Android: takePhoto manda, preview ligero 960×540 (LOTE 5.1)
       if (!autoRef.current) return;
       if (typeof track.applyConstraints !== "function") return;
       if (track.readyState !== "live") return;
@@ -935,6 +968,20 @@ export default function CameraView() {
    *  del dispatch (nada dispara capture_shot → nada que telemetrizar). */
   const pendingBurstRef = useRef<BurstStats | null>(null);
 
+  /** LOTE 5 (F5-A/F5-D) — último intento ganador de takePhoto (photoSettings
+   *  pedido + ms del intento). Lo escribe takePhotoBlob y lo lee el mark
+   *  `capture_shot` para diag v6. Nullable: caminos sin takePhoto (legacy,
+   *  galería, frames) lo dejan en null → meta aditivo ausente (pre-v6
+   *  intacto). */
+  const lastPhotoAttemptRef = useRef<{
+    photoSettingsReq: string;
+    takePhotoMs: number;
+  } | null>(null);
+
+  /** LOTE 5 (F5-D) — lado mayor del blob ganador (sniff de readBlobLongSide
+   *  que dispatchPhotoBlob ya hace). Lo lee el mark `capture_shot`. */
+  const lastPhotoBlobLongSideRef = useRef<number | null>(null);
+
   /** Pipeline tras obtener la imagen (FLUJO ADOBE SCAN + F-DEFER-CROP v6.2):
    *  flash → decode → downscale → calidad → store → EDITOR INMEDIATO.
    *  El editor abre con un marco provisional y la detección de bordes
@@ -942,11 +989,11 @@ export default function CameraView() {
    *  re-procesa solo). En gama baja esto convierte una espera de segundos
    *  frente a la cámara en una revisión instantánea. */
   const handleCaptureDataUrl = useCallback(
-    async (rawDataUrl: string) => {
-      if (processingRef.current) return;
+    async (rawDataUrl: string): Promise<string | null> => {
+      if (processingRef.current) return null;
       if (!rawDataUrl) {
         toast.error("No se pudo capturar la imagen");
-        return;
+        return null;
       }
       processingRef.current = true;
       setProcessing(true);
@@ -971,40 +1018,65 @@ export default function CameraView() {
         // bgJobsAtShot del meta. Null en rutas sin corte (foto normal,
         // legacy, galería) → meta byte-a-byte con pre-v4 (gate 3).
         const pipeMeta = burstMeta === null ? null : collectBurstPipeMeta();
+        // LOTE 5 (F5-D) — meta aditivo del intento ganador de takePhoto
+        // (photoSettings pedido + ms del attempt) y del sniff del blob
+        // ganador (lado mayor). Refs poblados arriba en takePhotoBlob y
+        // dispatchPhotoBlob. Ausentes en rutas sin takePhoto (legacy,
+        // galería, frames puros) → meta idéntico al de antes (marks
+        // v1/v1.1 intactos).
+        const photoAttemptMeta = lastPhotoAttemptRef.current;
+        const photoLongSideMeta = lastPhotoBlobLongSideRef.current;
+        const hasPhotoMeta =
+          photoAttemptMeta !== null || photoLongSideMeta !== null;
         perfProbe.mark(
           "capture_shot",
-          burstMeta === null
+          burstMeta === null && !hasPhotoMeta
             ? undefined
             : {
-                burstExitReason: burstMeta.exitReason,
-                burstFrames: burstMeta.frames,
-                burstWaitedMs: burstMeta.waitedMs,
-                burstSamples: burstMeta.samples,
-                burstSampleCostMs: burstMeta.lastSampleCostMs,
-                // v3 Fase D (v4.2) — campo ADITIVO OPCIONAL: ms que la gracia
-                // esperó a la foto huérfana tras el corte. Ausente cuando la
-                // gracia no corrió → meta idéntico al de antes (marks
-                // v1/v1.1 intactos, nada renombrado ni eliminado).
-                ...(burstMeta.graceWaitedMs !== null
-                  ? { grace: burstMeta.graceWaitedMs }
-                  : {}),
-                // v4 (v4.3) — tramo opaco, SOLO en capturas con corte:
-                // total recordBurst→mark + jobs del editor al aterrizar +
-                // sub-marks del pipe de foto (ausentes si el dispatch fue de
-                // frames). Campos aditivos opcionales — marks v1/v1.1
-                // intactos, cero nombres nuevos de mark.
-                ...(pipeMeta !== null
+                ...(burstMeta !== null
                   ? {
-                      pipeToMarkMs: pipeMeta.pipeToMarkMs,
-                      bgJobsAtShot: pipeMeta.bgJobsAtShot,
-                      ...(pipeMeta.pipeSniffMs !== null
-                        ? { pipeSniffMs: pipeMeta.pipeSniffMs }
+                      burstExitReason: burstMeta.exitReason,
+                      burstFrames: burstMeta.frames,
+                      burstWaitedMs: burstMeta.waitedMs,
+                      burstSamples: burstMeta.samples,
+                      burstSampleCostMs: burstMeta.lastSampleCostMs,
+                      // v3 Fase D (v4.2) — campo ADITIVO OPCIONAL: ms que la gracia
+                      // esperó a la foto huérfana tras el corte. Ausente cuando la
+                      // gracia no corrió → meta idéntico al de antes (marks
+                      // v1/v1.1 intactos, nada renombrado ni eliminado).
+                      ...(burstMeta.graceWaitedMs !== null
+                        ? { grace: burstMeta.graceWaitedMs }
                         : {}),
-                      ...(pipeMeta.pipeDataUrlMs !== null
-                        ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
+                      // v4 (v4.3) — tramo opaco, SOLO en capturas con corte:
+                      // total recordBurst→mark + jobs del editor al aterrizar +
+                      // sub-marks del pipe de foto (ausentes si el dispatch fue de
+                      // frames). Campos aditivos opcionales — marks v1/v1.1
+                      // intactos, cero nombres nuevos de mark.
+                      ...(pipeMeta !== null
+                        ? {
+                            pipeToMarkMs: pipeMeta.pipeToMarkMs,
+                            bgJobsAtShot: pipeMeta.bgJobsAtShot,
+                            ...(pipeMeta.pipeSniffMs !== null
+                              ? { pipeSniffMs: pipeMeta.pipeSniffMs }
+                              : {}),
+                            ...(pipeMeta.pipeDataUrlMs !== null
+                              ? { pipeDataUrlMs: pipeMeta.pipeDataUrlMs }
+                              : {}),
+                            ...(pipeMeta.heapProbe
+                              ? { heapProbe: pipeMeta.heapProbe }
+                              : {}),
+                          }
                         : {}),
-                      ...(pipeMeta.heapProbe ? { heapProbe: pipeMeta.heapProbe } : {}),
                     }
+                  : {}),
+                ...(photoAttemptMeta !== null
+                  ? {
+                      photoSettingsReq: photoAttemptMeta.photoSettingsReq,
+                      takePhotoMs: photoAttemptMeta.takePhotoMs,
+                    }
+                  : {}),
+                ...(photoLongSideMeta !== null
+                  ? { photoOutLongSide: photoLongSideMeta }
                   : {}),
               }
         );
@@ -1112,9 +1184,11 @@ export default function CameraView() {
         if (bornQuad === null) {
           void applyAutoQuad(page.id, source);
         }
+        return page.id;
       } catch (err) {
         console.error("handleCaptureDataUrl falló:", err);
         toast.error("No se pudo procesar la imagen");
+        return null;
       } finally {
         processingRef.current = false;
         setProcessing(false);
@@ -1183,7 +1257,13 @@ export default function CameraView() {
        *  carrera interna puede perder contra el muro): el llamador la cuelga
        * del observador de foto huérfana cuando el presupuesto corta. SOLO
        * observación — no altera la carrera. */
-      onRawPhoto?: (photo: Promise<Blob>) => void
+      onRawPhoto?: (photo: Promise<Blob>) => void,
+      /** LOTE 5.4 (F5.4-A) — upgrade silencioso: si el ganador fue un
+       *  PELDAÑO (no el desnudo), takePhotoBlob dispara YA una foto
+       *  full-res del sensor (desnudo, ~15 s) y entrega la promesa al
+       *  llamador. Solo entrega la promesa — corre SIEMPRE fuera del
+       *  presupuesto del burst y NUNCA bloquea. */
+      onFastWin?: (upgrade: Promise<Blob>) => void
     ): Promise<{ blob: Blob | null; timedOut: boolean; wallCapped?: boolean }> => {
     // FIX v6 (6.1) — guard de plataforma PRIMERO: Safari moderno expone
     // ImageCapture pero takePhoto() se cuelga (5 s de visor congelado por
@@ -1193,20 +1273,36 @@ export default function CameraView() {
     if (!track) return { blob: null, timedOut: false };
     try {
       const capture = new ImageCapture(track);
-      // Dispara a resolución completa del hardware (4000×3000 / 3840×2160):
-      // sin photoConstraints — el sensor manda, el preview no limita...
-      // EXCEPTO cuando el sensor excede el tope seguro (48/108 MP): el
-      // F-SENSOR-PROFILER pide al ISP una foto dentro del tope EN la captura
-      // (capa 1) y el blob del gigante jamás llega a decodificarse.
+      // LOTE 5.3 — la resolución la manda FOTO_LADDER (2048×1536 → 1280×960 →
+      // desnudo). El cap anti-gigante del profiler ya no participa en la
+      // captura de Android; la Capa 2 post-decode sigue como red de seguridad.
+      // (profile se conserva: alimenta la Capa 2 con safeCapPx.)
       const profile = sensorProfileRef.current;
-      const settings = profile ? buildCappedPhotoSettings(profile) : undefined;
+      // LOTE 5.5 — modo «calidad primero»: UNA carrera larga contra el
+      // sensor con el DESNUDO de primero (la página nace full-res). Si el
+      // desnudo falla RÁPIDO, la cola cae a los peldaños (D.4). Sin
+      // upgrade en segundo plano: el usuario ya pagó la espera.
+      const qualityFirst = isQualityFirstPhoto();
+      // LOTE 5.3 (F5.3-A): en Android la escalera es SIEMPRE el primer camino,
+      // sin importar overCap. Evidencia diag v6 2026-10-14 16:57/17:03: con
+      // overCap=true el profiler pedía {4032,3024} y el ISP hace la foto
+      // completa igual (~15 s en A135M; gap disparo→foto 17.6 s) — el intento
+      // capped NO aporta nada en los dispositivos lentos y en los rápidos el
+      // peldaño 2048 ya es rápido. El desnudo sigue siendo el ÚLTIMO recurso
+      // (solo si ambos peldaños fallan RÁPIDO). Evidencia cam-lab SM-A135M:
+      // takePhoto 2048×1536 ≈ 1.0 s (devuelve 1920×1920) vs desnudo ≈ 15 s.
+      let settings = qualityFirst ? undefined : FOTO_LADDER[0];
+      // LOTE 5.4 — settings del ÚLTIMO intento disparado; se lee SOLO si
+      // hubo blob ganador para decidir si corres upgrade (peldaño → sí,
+      // desnudo → ya es full-res, no).
+      let winnerSettings: PhotoSettings | undefined = settings;
       const attempt = async (ps?: PhotoSettings): Promise<TakePhotoAttempt> => {
         // PERF/burst-budget — cada carrera de takePhoto queda ACOTADA por el
         // presupuesto global de la captura (legacy sin deadline: 5 s exactos
         // como siempre). Si no queda presupuesto, ni se dispara la foto.
         let raceMs = 5000;
         if (deadlineAt !== undefined) {
-          raceMs = Math.min(5000, deadlineAt - performance.now());
+          raceMs = Math.min(qualityFirst ? 20000 : 5000, deadlineAt - performance.now());
           if (raceMs <= 50) {
             return {
               blob: null,
@@ -1250,25 +1346,58 @@ export default function CameraView() {
           };
         }
       };
-      let res = await attempt(settings);
-      // Reintento sin photoSettings SOLO si el primer intento falló RÁPIDO
-      // (constraints del profiler rechazadas, InvalidStateError…): mejor
-      // foto sin tope que perder la captura. Si expiró por timeout, el
-      // sensor quedó colgado — reintentar solo doblaría la espera.
-      // PERF/burst-budget: tampoco con el presupuesto ya agotado.
-      if (
-        !res.blob &&
-        settings &&
-        !res.timedOut &&
-        res.err &&
-        (deadlineAt === undefined || deadlineAt - performance.now() > 50)
-      ) {
-        res = await attempt(undefined);
+      // LOTE 5 (F5-D) — wrapper del intento: mide los ms del attempt y
+      // deja expuesto al diag el photoSettings pedido del GANADOR. El mark
+      // capture_shot (emitido abajo en handleCaptureDataUrl) lee este ref.
+      const timedAttempt = async (
+        ps: PhotoSettings | undefined
+      ): Promise<TakePhotoAttempt> => {
+        const t0 = performance.now();
+        const r = await attempt(ps);
+        if (r.blob) {
+          lastPhotoAttemptRef.current = {
+            photoSettingsReq: ps
+              ? `${ps.imageWidth}x${ps.imageHeight}`
+              : "naked",
+            takePhotoMs: Math.round(performance.now() - t0),
+          };
+        }
+        return r;
+      };
+      let res = await timedAttempt(settings);
+      // LOTE 5.3 (F5.3-A) — avance de escalera ÚNICO para Android: siguiente
+      // peldaño y luego desnudo. Guard intacto (fallo RÁPIDO = !res.blob &&
+      // !res.timedOut && res.err && presupuesto restante > 50 ms);
+      // res.timedOut corta la escalera (sensor colgado → lista negra,
+      // comportamiento pre-lote5 intacto). iOS: intacto tras CAN_TAKEPHOTO.
+      const retryQueue: (PhotoSettings | undefined)[] = qualityFirst
+        ? [...FOTO_LADDER] // 5.5 calidad: el desnudo ya corrió de primero; los peldaños son el plan B si falló RÁPIDO
+        : [...FOTO_LADDER.slice(1), undefined];
+      for (let i = 0; i < retryQueue.length; i++) {
+        if (res.blob || res.timedOut || !res.err) break;
+        if (deadlineAt !== undefined && deadlineAt - performance.now() <= 50)
+          break;
+        winnerSettings = retryQueue[i]!;
+        res = await timedAttempt(retryQueue[i]!);
       }
       // FIX v4 4.1 — lista negra temporal: marcar si expiró, rehabilitar si
       // respondió (un takePhoto que vuelve a funcionar vuelve a usarse).
       if (res.blob) takePhotoBrokenRef.current = false;
       else if (res.timedOut) takePhotoBrokenRef.current = true;
+      // LOTE 5.4 (F5.4-A) — el upgrade solo tiene sentido si lo que ganó
+      // fue un PELDAÑO (2048/1280): si ganó el desnudo ya es full-res.
+      // Fire-and-forget: la promesa NUNCA se espera aquí (el desnudo tarda
+      // ~15 s); su catch vive en el runner del llamador. Sin timedAttempt
+      // (no debe tocar lastPhotoAttemptRef ni el meta del ganador) y SIN
+      // tocar takePhotoBrokenRef (un desnudo lento/roto NO lista-negrea la
+      // escalera, que ya entregó la foto del flujo).
+      if (res.blob && winnerSettings !== undefined && onFastWin) {
+        try {
+          onFastWin(capture.takePhoto(undefined));
+        } catch {
+          /* throw sincrónico raro del sensor: nunca rompe la captura */
+        }
+      }
       if (!res.blob) {
         return {
           blob: null,
@@ -1288,6 +1417,12 @@ export default function CameraView() {
       let clamped: Blob;
       if (deadlineAt !== undefined) {
         const sniffed = await readBlobLongSide(res.blob);
+        // LOTE 5 (F5-D) — el sniff del blob ganador (lado mayor) queda
+        // expuesto al diag via ref: el mark capture_shot lo lee para
+        // camera.photoOutLongSide. Solo en camino con presupuesto (donde
+        // el sniff ya corre); el camino legacy lo deja en null (campo
+        // nullable, sin romper nada).
+        lastPhotoBlobLongSideRef.current = sniffed;
         clamped =
           sniffed !== null && sniffed <= capPx
             ? res.blob
@@ -1584,6 +1719,8 @@ export default function CameraView() {
      *  FileReader de la conversión SÍ se aborta de verdad. Cooldown,
      *  estabilidad del shutter y photoSettings: INTACTOS. */
     const canPhoto = canTakePhotoRef.current && !takePhotoBrokenRef.current;
+    // LOTE 5.5 — modo de ESTA captura, leído una vez.
+    const qualityFirstCapture = isQualityFirstPhoto();
     let shot: { blob: Blob | null; timedOut: boolean; wallCapped?: boolean } | null =
       null;
     let bail: "time_cap" | "stable" | null = null;
@@ -1593,7 +1730,77 @@ export default function CameraView() {
     // intento): si el presupuesto corta, el observador de la foto huérfana
     // sigue su rastro SIN tocar la captura (cero escrituras al store).
     let rawPhotoPromise: Promise<Blob> | null = null;
-    if (burstDeadline !== undefined) {
+    let upgradePromise: Promise<Blob> | null = null;
+    /** LOTE 5.4 (F5.4-B) — upgrade silencioso de la página: cuando la foto
+     *  full-res del sensor aterrice (~15-18 s), reemplaza el ORIGINAL de la
+     *  página creada por este disparo (1920 → 4032) y re-detecta el quad.
+     *  Todo el trabajo vive FUERA del flujo crítico (el usuario ya está en
+     *  el editor). Fallos silenciosos: si no llega o llega roto, la página
+     *  queda como está (1920). Telemetría gratuita vía watchOrphanPhoto. */
+    const runSilentUpgrade = async (
+      upgrade: Promise<Blob> | null,
+      pageId: string | null,
+      firedAtMs: number
+    ): Promise<void> => {
+      if (!upgrade || !pageId) return;
+      // LOTE 5.5 — pill del editor mientras el upgrade vuela.
+      useScannerStore.getState().updateCapturePage(pageId, { upgrading: true });
+      watchOrphanPhoto(
+        upgrade.then(
+          (b) => b ?? new Blob(),
+          () => new Blob()
+        ),
+        firedAtMs
+      );
+      try {
+        const blob = await upgrade;
+        if (!blob || blob.size === 0) return;
+        // ¿Sigue existiendo la página? (el usuario pudo borrarla)
+        const alive = useScannerStore
+          .getState()
+          .capturePages.some((pg) => pg.id === pageId);
+        if (!alive) return;
+        // Solo SUBE: si el lado mayor no supera claramente al del peldaño
+        // (1920), la página no se toca.
+        const longSide = await readBlobLongSide(blob);
+        if (longSide === null || longSide < 2048) return;
+        const rawUrl = await blobToDataUrl(blob);
+        // LOTE 5.4 — guard mínimo de tipos (blobToDataUrl resuelve null si
+        // el FileReader cae): sin URL no hay upgrade (silencioso, como todo
+        // el runner).
+        if (!rawUrl) return;
+        const decoded = await loadImage(rawUrl);
+        // Mismo tratamiento que el camino de siempre: tope técnico 4032.
+        const scaledUrl = await downscaleImage(decoded, PROCESSED_MAX_LONG_SIDE);
+        const finalUrl = scaledUrl ?? rawUrl;
+        const source = scaledUrl ? await loadImage(scaledUrl) : decoded;
+        useScannerStore.getState().updateCapturePage(pageId, {
+          original: finalUrl,
+          autoQuadPending: true,
+          quality: await evaluateQuality(source),
+          upgrading: false,
+        });
+        // Re-detección del quad sobre la foto nueva (FOV 4:3 ≠ peldaño 1:1):
+        // la pill «Ajustando recorte…» del editor cubre la espera.
+        void applyAutoQuad(pageId, source);
+      } catch {
+        /* silencioso: el upgrade JAMÁS rompe nada */
+      } finally {
+        // LOTE 5.5 — la pill se retira SIEMPRE (éxito, early-return o
+        // fallo). Sobre una página borrada = no-op (id inexistente).
+        useScannerStore.getState().updateCapturePage(pageId, { upgrading: false });
+      }
+    };
+    if (qualityFirstCapture && canPhoto) {
+      // LOTE 5.5 — calidad primero: UNA carrera de 20 s contra el sensor,
+      // sin muro del burst ni sampler (la espera es del ISP; burstSamples
+      // queda 0/null — campos nullable, recordBurst los tolera). Si expira
+      // → timedOut → lista negra + frame fallback de siempre (comportamiento
+      // pre-5.3 conocido).
+      shot = await takePhotoBlob(performance.now() + 20000, (p) => {
+        rawPhotoPromise = p;
+      });
+    } else if (burstDeadline !== undefined) {
       if (performance.now() >= burstDeadline) {
         // El torch/flash (applyConstraints no abortable) consumió el muro
         // ENTERO: la foto ni se dispara — frames YA, sin toast engañoso.
@@ -1604,9 +1811,15 @@ export default function CameraView() {
         const w = await waitForPhotoBudget(
           () =>
             canPhoto
-              ? takePhotoBlob(burstDeadline, (p) => {
-                  rawPhotoPromise = p;
-                })
+              ? takePhotoBlob(
+                  burstDeadline,
+                  (p) => {
+                    rawPhotoPromise = p;
+                  },
+                  (p) => {
+                    upgradePromise = p;
+                  }
+                )
               : Promise.resolve({ blob: null, timedOut: false }),
           { deadlineAt: burstDeadline, sampler }
         );
@@ -1622,7 +1835,17 @@ export default function CameraView() {
         }
       }
     } else {
-      shot = canPhoto ? await takePhotoBlob() : null;
+      shot = canPhoto
+        ? await takePhotoBlob(
+            qualityFirstCapture ? performance.now() + 20000 : undefined,
+            undefined,
+            qualityFirstCapture
+              ? undefined
+              : (p) => {
+                  upgradePromise = p;
+                }
+          )
+        : null;
     }
     const burstExtra = {
       samples: burstSamples,
@@ -1651,6 +1874,10 @@ export default function CameraView() {
         const sniffT0 = performance.now();
         const sniffed = await readBlobLongSide(blob);
         noteBurstPipeSniff(performance.now() - sniffT0);
+        // LOTE 5 (F5-D) — lado mayor del blob de gracia (el sniff que ya
+        // hace dispatchPhotoBlob) expuesto al diag via ref: el mark
+        // capture_shot lo lee para camera.photoOutLongSide.
+        lastPhotoBlobLongSideRef.current = sniffed;
         const clamped =
           sniffed !== null && sniffed <= capPx
             ? blob
@@ -1778,26 +2005,6 @@ export default function CameraView() {
         recoverStream();
         return;
       }
-      // FIX v4 4.6 — copy honesto: si takePhoto EXISTE pero no entregó foto
-      // en ESTE disparo, el texto «Cámara lenta» confundía (el frame no es
-      // lento: es la foto la que no respondió). El caso SIN ImageCapture
-      // con frame realmente bajo (<1280 px) conserva el texto clásico.
-      if (status === "live") {
-        if (canTakePhotoRef.current) {
-          toast.warning("La foto de alta resolución no respondió", {
-            description:
-              "Se usó el fotograma de vista previa. Las próximas capturas irán directas.",
-          });
-        } else {
-          const frameW = videoRef.current?.videoWidth ?? 0;
-          if (frameW > 0 && frameW < 1280) {
-            toast.warning("Cámara lenta: baja resolución esta vez", {
-              description:
-                "La foto de alta resolución no respondió; se guardó el fotograma de vista previa.",
-            });
-          }
-        }
-      }
       // DUAL PIPELINE — fallback: el ganador ZSL pre-tap (estable, anti
       // tap-shock) compite por lapVar con snapA y el frame actual.
       // PERF/burst-budget — §C: este dispatch ya recolecta ≤3 candidatos
@@ -1827,7 +2034,13 @@ export default function CameraView() {
     // intocable: una foto algo blanda a 3264 px siempre supera a un frame
     // perfecto de 720p (el enhance afina; retomar cuesta un toque).
     let photoUrl: string | null = null;
-    if (burstDeadline !== undefined) {
+    // LOTE 5.5.1 — en calidad-primero el presupuesto de la captura es la
+    // carrera de 20 s: la foto puede volver legalmente tarde (el clamp de
+    // un 12 MP cuesta ~4.5 s en gama baja). El muro del auto-shutter NO la
+    // corta. Evidencia diag 2026-10-14 20:22-20:27 SM-A135M modo calidad:
+    // naked ganó a 1.17 s (4080 px) pero el retorno a ~5.7 s vencía el muro
+    // → la foto full-res se descartaba por frames de 960 (time_cap ×5).
+    if (burstDeadline !== undefined && !qualityFirstCapture) {
       if (burstDeadline - performance.now() <= 50) {
         // Foto en mano pero SIN presupuesto para el FileReader (un 12 MP
         // cuesta 1–3 s en gama baja): el muro se respeta → frames YA.
@@ -1851,7 +2064,10 @@ export default function CameraView() {
         performance.now() - burstT0,
         { ...burstExtra, photoBytes: photoBlob.size }
       );
-      void handleCaptureDataUrl(photoUrl);
+      const upgradePageId = await handleCaptureDataUrl(photoUrl);
+      if (upgradePromise) {
+        void runSilentUpgrade(upgradePromise, upgradePageId, burstT0);
+      }
       return;
     }
     if (burstDeadline !== undefined) {
@@ -2368,8 +2584,22 @@ export default function CameraView() {
       // (phase "early"). UNA vez por sesión de cámara.
       if (!diagCameraReadyRef.current) {
         diagCameraReadyRef.current = true;
+        // LOTE 5 (F5-D) — resolución REAL del track (track.getSettings),
+        // capturada en el mark camera_ready para diag v6 (camera.streamW/H).
+        // Solo si getSettings expone width/height (algunos UA tardan); si no,
+        // los campos quedan null (aditivos, sin romper nada).
+        const camSettings = streamRef.current?.getVideoTracks()[0]?.getSettings();
         perfProbe.mark("camera_ready", {
-          ms: Math.max(0, Math.round(performance.now() - diagCameraOpenT0Ref.current)),
+          ms: Math.max(
+            0,
+            Math.round(performance.now() - diagCameraOpenT0Ref.current)
+          ),
+          ...(typeof camSettings?.width === "number"
+            ? { streamW: camSettings.width }
+            : {}),
+          ...(typeof camSettings?.height === "number"
+            ? { streamH: camSettings.height }
+            : {}),
         });
         void perfProbe.fpsSample(3000).then((s) => {
           if (s) perfProbe.mark("fps_camera", { fps: s.fps, phase: "early" });
@@ -2660,7 +2890,6 @@ export default function CameraView() {
     const applied = await setTorchState(next);
     if (applied) {
       setFlashOn(next);
-      if (next) toast.success("Flash encendido", { duration: 1200 });
     } else {
       // Verificación falló: nada cambió físicamente; sincroniza y explica.
       setTorchOn((v) => v);
@@ -2763,7 +2992,6 @@ export default function CameraView() {
   const overlayStable = precisionLive
     ? (live.score ?? 0) > SHUTTER_SCORE
     : stable;
-  const scorePct = live.score !== null ? Math.round(live.score * 100) : null;
 
   // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
   // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
@@ -2940,32 +3168,6 @@ export default function CameraView() {
         </div>
       </header>
 
-      {/* ── Chip de lote: documentos guardados en cadena durante esta sesión ── */}
-      <AnimatePresence>
-        {batchSavedCount > 0 && (
-          <motion.div
-            key="batch-chip"
-            initial={{ opacity: 0, y: -10, scale: 0.92 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.95 }}
-            transition={{ type: "spring", stiffness: 420, damping: 28 }}
-            className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+58px)] z-20 -translate-x-1/2"
-            role="status"
-          >
-            <div className="flex items-center gap-1.5 rounded-full bg-[#34c759]/18 px-3 py-1.5 ring-1 ring-inset ring-[#34c759]/40 backdrop-blur-md">
-              <CheckCircle2
-                className="h-3.5 w-3.5 text-[#34c759]"
-                strokeWidth={2.4}
-                aria-hidden="true"
-              />
-              <span className="text-[12px] font-semibold tracking-tight text-white">
-                Lote · {batchSavedCount} {batchSavedCount === 1 ? "documento guardado" : "documentos guardados"}
-              </span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* ── Visor central ── */}
       <section
         ref={viewerRef}
@@ -3068,26 +3270,6 @@ export default function CameraView() {
           </div>
         )}
 
-        {/* IA calentando / buscando documento — FIX v5 (5.4): oculta durante
-            el modo espera (la pill de espera ocupa su sitio) */}
-        <AnimatePresence>
-          {precisionLive && live.searching && !processing && !standby && (
-            <motion.div
-              key="searching-pill"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-none absolute inset-x-0 top-5 z-30 flex justify-center px-6"
-            >
-              <div className="flex items-center gap-2 rounded-full bg-black/60 px-3.5 py-1.5 backdrop-blur-sm">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007aff]" aria-hidden="true" />
-                <p className="text-[12px] font-medium text-white/85">Buscando documento…</p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {/* FIX v5 (5.4) — pill del MODO ESPERA: análisis a 2 fps (ahorro de
             batería/CPU con el visor abierto sin documento). Tocarla (o
             cualquier parte de la cámara) reactiva; acercar un documento
@@ -3152,81 +3334,6 @@ export default function CameraView() {
                     </button>
                   </div>
                 </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Toast flotante: documento estable / listo para auto-captura */}
-        <AnimatePresence>
-          {autoCapture && overlayStable && !processing && (precisionLive || hasStream || status === "simulated") && (
-            <motion.div
-              key="stable-toast"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-none absolute inset-x-0 top-[42%] z-30 flex justify-center px-6"
-            >
-              <div className="flex items-center gap-2.5 rounded-[20px] bg-black/75 px-4 py-2.5 shadow-[0_4px_12px_rgba(0,0,0,0.3)] backdrop-blur-sm">
-                <span
-                  className={cn(
-                    "h-2 w-2 rounded-full",
-                    precisionLive ? "bg-[#007aff]" : "animate-pulse bg-[#007aff]"
-                  )}
-                  aria-hidden="true"
-                />
-                <p className="text-[14px] font-medium text-white">
-                  Mantén inmóvil el dispositivo…
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Meter de calidad EN VIVO (pipeline real) */}
-        <AnimatePresence>
-          {precisionLive && scorePct !== null && (
-            <motion.div
-              key="score-meter"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              transition={{ duration: 0.22 }}
-              className="pointer-events-none absolute bottom-9 left-3 z-20"
-              role="status"
-              aria-label={`Calidad de encuadre ${scorePct} por ciento`}
-            >
-              <div className="flex h-8 items-center gap-2.5 rounded-full bg-black/55 px-3 shadow-[0_4px_14px_rgba(0,0,0,0.35)] backdrop-blur-md">
-                <Gauge
-                  className={cn(
-                    "h-3.5 w-3.5",
-                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/80"
-                  )}
-                  strokeWidth={2.2}
-                  aria-hidden="true"
-                />
-                <div className="h-1 w-14 overflow-hidden rounded-full bg-white/20">
-                  <div
-                    className={cn(
-                      "h-full rounded-full transition-all duration-300 ease-out",
-                      scorePct > SHUTTER_SCORE * 100
-                        ? "bg-gradient-to-r from-[#30d158] to-[#34c759]"
-                        : scorePct > 55
-                          ? "bg-gradient-to-r from-[#007aff] to-[#4da2ff]"
-                          : "bg-white/50"
-                    )}
-                    style={{ width: `${Math.min(100, Math.max(4, scorePct))}%` }}
-                  />
-                </div>
-                <span
-                  className={cn(
-                    "min-w-7 text-right text-[11px] font-semibold tabular-nums",
-                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/85"
-                  )}
-                >
-                  {scorePct}
-                </span>
               </div>
             </motion.div>
           )}

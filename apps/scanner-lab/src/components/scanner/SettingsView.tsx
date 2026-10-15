@@ -341,6 +341,29 @@ export default function SettingsView() {
         </SettingsGroup>
 
         <SettingsGroup label="Exportación" delay={0.15}>
+          <SettingsRow
+            title="Calidad de foto"
+            subtitle="Auto: equipos con 8+ GB RAM fotografían a resolución completa (espera del sensor). El resto: rápida (1-2 s + afinado en segundo plano)."
+          >
+            <Select
+              value={settings.photoMode ?? "auto"}
+              onValueChange={(v) =>
+                updateSettings({ photoMode: v as ScannerSettings["photoMode"] })
+              }
+            >
+              <SelectTrigger
+                aria-label="Calidad de foto"
+                className="h-9 rounded-lg border-[#e5e5ea] bg-[#f2f2f7] dark:border-[#3a3a3c] dark:bg-[#2c2c2e] px-3.5 text-[14px] font-medium text-[#3c3c43] dark:text-white shadow-none focus-visible:ring-[3px] focus-visible:ring-[#007aff]/25 focus-visible:border-[#007aff]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto</SelectItem>
+                <SelectItem value="calidad">Calidad completa</SelectItem>
+                <SelectItem value="rapida">Rápida</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
           <SettingsRow title="Calidad PDF">
             <Select
               value={settings.exportQuality}
