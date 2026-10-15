@@ -1,47 +1,36 @@
-# 📱 Escáner de Documentos — Clon iOS
+# 📱 Escáner de Documentos — Lab + PWA E-14
 
 > ⚠️ **Regla de oro:** lee [`AGENTS.md`](./AGENTS.md) antes de escribir código — lo que existe en el lab se copia, no se re-inventa.
 
-Aplicación web de digitalización de documentos con estética **pixel-perfect de iOS**, construida como reproducción fiel de 4 diseños originales (Cámara, Editor de perspectiva, Digitalización y Biblioteca). Toda la interfaz está en **español**.
+Monorepo de digitalización de documentos con estética **pixel-perfect de iOS**. Toda la interfaz está en **español**.
 
-![Versión](https://img.shields.io/badge/versión-6.3.0-007AFF)
+[![Quality Gate](https://github.com/Jg-Stevan/web-scanner/actions/workflows/quality.yml/badge.svg)](https://github.com/Jg-Stevan/web-scanner/actions/workflows/quality.yml)
+![Versión](https://img.shields.io/badge/versión-0.2.1-007AFF)
 ![Framework](https://img.shields.io/badge/Next.js-16-black)
 ![Licencia](https://img.shields.io/badge/licencia-MIT-34C759)
 
 ---
 
-## 🆕 Novedades v5.0.0
+## 🏗 Arquitectura en 5 líneas
 
-- **PWA instalable**: «Instalar app» desde Ajustes (Android/Chrome: prompt nativo · iOS: guía de «Añadir a pantalla de inicio»), Service Worker network-first (sin caché vieja al actualizar) y funcionar **sin conexión**
-- **Benchmark del dispositivo**: Ajustes › Rendimiento del dispositivo mide CPU/canvas y ajusta la resolución de procesado (4032/3200/2560 px) para que ningún teléfono se cuelgue
-- **Perspectiva mejorada**: cascada de detección multi-umbral (papeles con poco contraste y bordes rotos ya se detectan) y warp a resolución completa del sensor (4032)
-- **Rotación instantánea** (~0,2 s): rotar ya NO reprocesa el documento completo
-- **Guardar como imagen**: botón «Imagen» en el editor descarga la página actual en PNG
-- **Importación robusta**: las fotos de galería/cámara nativa (12–48 MP, EXIF, HEIC) ya no fallan con «No se pudo procesar la imagen»
-- **Soporte HEIC completo**: las fotos HEIC/HEIF de iPhone se convierten solas en el navegador (libheif embebido, descarga bajo demanda) — también en Android/Chrome y en los «.jpg» que en realidad traen contenido HEIC
-- **Filtro por defecto «B/N adaptativo»** en cada captura nueva
-- **Ajustes simplificados**: sin perfiles de documento (detección siempre automática) y sin la página de demo en el editor
-- **Dimensiones móviles**: viewport-fit=cover + dvh (sin huecos con las barras del navegador ni recortes en la PWA instalada)
+Monorepo con **Bun**: `apps/scanner-lab` (el lab del escáner — la app original de este repo) · `apps/digitalizador-e14` (demo pública de digitalización de actas E-14) · `packages/scanner-core` (tipos, store y lógica compartida). Deploy dual en **GitHub Pages**: raíz = digitalizador-e14 · [`/lab/`](https://jg-stevan.github.io/web-scanner/lab/) = scanner-lab. El CI ([Quality Gate](.github/workflows/quality.yml)) valida tipos + lint + build estático de ambas apps en cada PR.
 
-## 🆕 Novedades v6.1
+## 🆕 Novedades — escáner 5.x
 
-- **Prioridad de resolución en la captura (gama baja)**: la foto a resolución del sensor SIEMPRE gana — un fotograma de vista previa de 720p/1080p ya no puede sustituirla (antes, en teléfonos de entrada, la imagen guardada quedaba ilegible). Si la foto del sensor tarda demasiado (>8 s) se avisa y el fotograma se usa solo como último recurso
-- **OCR bajo demanda**: el reconocimiento automático al capturar se apaga por defecto (Ajustes › OCR automático) para ahorrar memoria y batería; el texto se extrae cuando quieras con el botón «Texto» del editor
-- **Procesado mínimo de 3200 px también en gama baja**: más lento en dispositivos de entrada, pero el texto nunca deja de ser legible
+- **Captura calidad-primero a resolución completa (4032 px)**: la foto del sensor SIEMPRE gana sobre el preview, y el editor aterriza en segundo plano con upgrade silencioso — en gama baja la foto full-res ya no se descarta (hotfix 5.5.1)
+- **Auto-shutter con puntuador de encuadre en vivo**: medidor % + barra en la esquina inferior izquierda, verde al superar el umbral del disparo automático (restaurado en 5.7 sobre la vista limpia)
+- **Telemetría de encuadre por página (5.6 · 5.7.1)**: la telemetría viaja como marks `page_framing` (born/detect por página), sobrevive al guardado de la sesión y el informe de diagnóstico trae TODAS las páginas — datos reales para adjudicar recorte-detector vs encuadre-cámara
+- **PWA instalable + benchmark del dispositivo + HEIC completo**: «Instalar app», Service Worker network-first, medición CPU/canvas que ajusta la resolución de procesado (4032/3200/2560 px) y fotos HEIC/HEIF de iPhone convertidas solas en el navegador
 
-## 🆕 Novedades v6.2
+## 📊 Compatibilidad real
 
-- **Captura fluida (F-DEFER-CROP)**: el editor abre AL INSTANTE tras capturar — la detección de bordes ya no bloquea la revisión. Un pill «Ajustando recorte…» indica que el recorte automático aterriza en segundo plano y el preview se actualiza solo; si ajustas el recorte a mano, tu decisión manda. En gama baja esto elimina los segundos de espera frente a la cámara sin sacrificar el recorte automático ni la calidad
+| Dispositivo | SO | Resolución guardada | Captura→guardada | Auto-shutter | OCR | Estado |
+|---|---|---|---|---|---|---|
+| iPhone (Safari) | iOS 26.6 | 4032 px | 0.31–0.46 s | 0.7–0.8 s auto | 2.4–2.9 s | ✅ calidad 4032 |
+| Samsung Galaxy A13 (SM-A135M) | Android | 4032 px (naked→4080) | 1.6–1.9 s rápido · 16–17 s frío | auto (modo calidad) | 40 s frío | ✅ con degradación esperada de gama baja |
+| Tecno KN3 | Android | — | — | — | — | 🔬 en veredicto (diag de encuadre) |
 
-## 🆕 Novedades v6.3
-
-- **Dual Pipeline de cámara**: el preview pide 960×540 @ 30 FPS (tope suave) para un visor fluido y sin calentamiento en gama baja, mientras la FOTO sale a resolución completa del sensor vía `ImageCapture.takePhoto()` (12–48 MP) — el análisis de bordes sigue viendo lo mismo (remuestreo a 400 px)
-- **Sensor Profiler (F-SENSOR-PROFILER)**: mide la resolución nativa del sensor y, en cámaras de 48/108 MP, pide al ISP la foto dentro de un tope seguro por gama (4032 px alta · 3200 px media/baja) — el blob gigante jamás se decodifica y la pestaña ya no crashea; red de seguridad adicional post-decode
-- **Estabilizador de quietud (F-STAB)**: la auto-captura exige 280 ms de quietud medida con el sensor inercial (`DeviceMotion`: aceleración ≤ 1.25 m/s², rotación ≤ 14 °/s) más una ventana sostenida del disparo k-de-n — adiós a los disparos mientras acomodas el teléfono (en desktop, y en iOS sin permiso de motion, degrada con elegancia: la auto-captura sigue funcionando)
-- **Captura anti tap-shock (F-ZSL)**: buffer Best-Shot de los últimos 8 fotogramas — si la foto de alta resolución no responde, el frame más nítido capturado 80–450 ms ANTES de tu toque sustituye a la foto sacudida por el impacto del dedo (patrón Zero Shutter Lag de las cámaras nativas)
-- **Throttling adaptativo (F-PERF)**: el bucle de detección empieza a ~15 FPS y se relaja hasta ~5 FPS si el hilo principal satura (y se recupera solo) — menos stuttering y menos calor en gama baja
-- **Filtro «Texto claro» reconstruido (F-TEXT-CLEAN)**: nuevo pipeline con LUT sigmoidal, afilado solo en bordes de tinta (el papel nunca se toca) y reconstrucción cromática que PRESERVA el color de la tinta (bolígrafos azules y sellos rojos ya no se aplastan a negro) — cero píxeles fosforitos y sin halos de croma en la frontera del papel; worker y fallback comparten la misma matemática exacta
-- **Limpieza**: eliminado artefacto ZIP de 6.5 MB committeado por error (`public/downloads/`)
+*Medido con el diag incorporado (Ajustes › Diagnóstico): exports TXT/JSON con telemetría por página (ENCUADRE, burst, filtros, OCR). Los números de la tabla son medianas de sesión real.*
 
 ---
 
@@ -51,7 +40,7 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 - Cámara **en vivo** con `getUserMedia` — **Dual Pipeline**: preview ligero 960×540 @ 30 FPS + foto a resolución del sensor vía `ImageCapture.takePhoto()` con tope seguro por gama (Sensor Profiler)
 - Selección automática de la lente trasera con enfoque real y **linterna (torch)** con reintento y verificación (sondas secuenciales compatibles con Android)
 - **Detección de bordes en tiempo real** en un Web Worker (`public/scanner/detection-worker.js`, motor propio Sobel/DFS con motor OpenCV opcional) con **throttling adaptativo** contra la saturación de gama baja
-- Marco azul de detección con handles en las esquinas, indicador de estabilidad y **auto-captura** (k-de-n frames estables + **compuerta de quietud** por sensor inercial)
+- Marco azul de detección con handles en las esquinas, indicador de estabilidad, **puntuador de encuadre en vivo** y **auto-captura** (k-de-n frames estables + **compuerta de quietud** por sensor inercial)
 - **Captura manual con buffer ZSL**: si la foto del sensor no responde, el frame pre-toque más nítido (anti tap-shock) entra como fallback premium
 - Sesión **multi-página** con contador, importación desde galería y página de demo
 
@@ -84,6 +73,7 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 ### ⚙️ Ajustes
 - Tema claro/oscuro/sistema, mejora automática por captura, OCR automático y calidad PDF
 - Panel **"Tu biblioteca"** con estadísticas ampliadas (palabras OCR, papelera, páginas/doc), atajos de teclado y gestos documentados
+- **Diagnóstico**: exports TXT/JSON con telemetría por página (encuadre, burst, filtros, OCR) y benchmark del dispositivo
 
 ### 🌓 Otros
 - **Modo oscuro** completo en todas las vistas
@@ -105,6 +95,7 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 | OCR | Dual: servidor (modelo de visión) o **Tesseract.js 5 local (spa+eng)** en estático |
 | PDF | jsPDF 4 |
 | Iconos / animaciones | lucide-react · framer-motion · sonner |
+| CI | GitHub Actions — Quality Gate (tipos + lint + build estático) |
 
 ---
 
@@ -117,79 +108,48 @@ Aplicación web de digitalización de documentos con estética **pixel-perfect d
 ### Instalación
 
 ```bash
-# 1. Instalar dependencias
-bun install        # o: npm install
+# 1. Instalar dependencias del workspace
+bun install
 
-# 2. (Opcional) configurar variables de entorno
-cp .env.example .env
+# 2. Arrancar el lab del escáner
+bun run dev
 
-# 3. Arrancar en desarrollo
-bun run dev        # o: npm run dev
+# (o la demo E-14)
+bun run dev:e14
 ```
 
 Abre <http://localhost:3000> en el navegador.
 
-### Scripts disponibles
+### Scripts disponibles (raíz del monorepo)
 
 | Comando | Descripción |
 |---|---|
-| `bun run dev` | Servidor de desarrollo (puerto 3000) |
-| `bun run build` | Build de producción (standalone) |
-| `bun run start` | Servir el build de producción |
-| `bun run lint` | ESLint |
-| `bun run db:push` | Sincronizar el schema de Prisma con SQLite *(no requerido por el escáner)* |
+| `bun run dev` / `bun run dev:e14` | Servidor de desarrollo (scanner-lab / digitalizador-e14) |
+| `bun run build:static` / `bun run build:e14` | Build estático de cada app (GitHub Pages) |
+| `bun run core:check` | Type check de `packages/scanner-core` |
+| `bun run app:check` / `bun run e14:check` | Type check de cada app |
+| `bun run lint` / `bun run lint:e14` | ESLint de cada app |
 
 > **Nota sobre el OCR:** en desarrollo con servidor la app puede usar `/api/ocr` (modelo de visión). En el despliegue estático de GitHub Pages **funciona 100 % con Tesseract.js local** (spa+eng, ~3 MB descargados la primera vez) sin intentar la ruta de servidor. Filtros, detección de bordes, recorte, rotación y PDF son 100 % locales en el navegador: **ni tus documentos ni tus fotos salen de tu dispositivo**.
 
 ---
 
-## 📁 Estructura del proyecto
+## 📁 Estructura del monorepo
 
 ```
-├── public/
-│   ├── scanner/detection-worker.js   # Web Worker de OpenCV (detección de bordes)
-│   └── vendor/opencv-4.5.5.js        # Build core-only de OpenCV.js
-├── src/
-│   ├── app/
-│   │   ├── page.tsx                  # Shell con phone-frame (única ruta visible)
-│   │   ├── layout.tsx                # Metadata + PWA (manifest, iconos, safe-areas)
-│   │   └── globals.css               # Sistema de diseño iOS (#007AFF, #F2F2F7…)
-│   ├── components/
-│   │   ├── scanner/                  # Vistas (Camera, Editor, Library, Onboarding, Settings…)
-│   │   └── ui/                       # shadcn/ui
-│   └── lib/scanner/
-│       ├── types.ts                  # Tipos del dominio (ScanPage, Quad, filtros…)
-│       ├── store.ts                  # Store Zustand de la app (+ papelera)
-│       ├── page-store.ts             # Persistencia IndexedDB
-│       ├── image-processor.ts        # Filtros, recorte, rotación, calidad (hasta 4032 px) + importación robusta (HEIC incluido)
-│       ├── detector-client.ts        # Cliente del Web Worker de detección
-│       ├── pwa.ts                    # Registro del Service Worker + prompt de instalación
-│       ├── image-modes.ts            # Filtros por píxel (Texto claro: pipeline F-TEXT-CLEAN)
-│       ├── ocr.ts                    # OCR local (Tesseract) con salvavidas de servidor
-│       ├── text-export.ts            # Exportar/copiar/compartir texto OCR
-│       ├── quality.ts                # Métricas de calidad + compuerta sostenida del disparo
-│       ├── motion-stabilizer.ts      # Compuerta de quietud por DeviceMotion (F-STAB)
-│       ├── sensor-profiler.ts        # Tope seguro de captura por gama (F-SENSOR-PROFILER)
-│       ├── pdf-export.ts             # Exportación PDF (jsPDF)
-│       └── tags.ts / format.ts / mock-data.ts
-├── design-specs.md                   # Especificación de los 4 diseños originales
+├── apps/
+│   ├── scanner-lab/            # El lab del escáner (app Next.js, /lab/ en Pages)
+│   │   └── src/
+│   │       ├── components/scanner/   # Vistas (Camera, Editor, Library, Settings…)
+│   │       └── lib/scanner/          # Tipos, store, filtros, OCR, PDF, telemetría
+│   └── digitalizador-e14/      # Demo pública de actas E-14 (raíz de Pages)
+│       └── src/lib/e14/        # Pipeline de 6 etapas, score, gate, completitud
+├── packages/
+│   └── scanner-core/           # Tipos, store y lógica compartida
+├── AGENTS.md                   # Reglas de trabajo (leer antes de codificar)
+├── CHANGES.md                  # Historial de lotes y decisiones
+└── .github/workflows/          # quality.yml (gate) + deploy-pages.yml (deploy)
 ```
-
----
-
-## 🎨 Sistema de diseño iOS
-
-| Token | Valor |
-|---|---|
-| Azul primario | `#007AFF` |
-| Fondo claro | `#F2F2F7` |
-| Rojo destructivo | `#FF3B30` |
-| Verde éxito | `#34C759` |
-| Gris secundario | `#8E8E93` |
-| Tipografía | SF Pro / system-ui |
-| Radio de tarjeta | 12px · Vista "phone" 44px |
-
-La app se muestra dentro de un **phone-frame** centrado en escritorio y a pantalla completa en móvil, con safe-areas y home indicator.
 
 ---
 
