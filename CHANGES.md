@@ -895,3 +895,19 @@ visto (camino cámara); bbox ≈ 55-80% ⇒ el quad muerde (camino detector).
 
 **Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 4
 archivos · captura/quad/detección byte a byte (solo anotación y hoist).
+
+## LOTE 5.7 — puntuador (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre el 5.6). El dueño
+pidió de vuelta el medidor de calidad de encuadre (esquina inferior
+izquierda) que la vista limpia del 5.3 retiró. La estabilidad nunca se fue:
+el auto-shutter siguió midiendo — el usuario quedó sin feedback.
+
+**F5.7-A/B** `CameraView.tsx` — re-import `Gauge` + derivado `scorePct`
+(`live.score` ya existía). **F5.7-C** bloque score-meter restaurado verbatim
+del pre-5.3 (bottom-9 left-3, barra + %, verde > umbral del shutter,
+pointer-events-none, role="status" + aria-label). El toast centrado «Mantén
+inmóvil…» NO vuelve (vista limpia). **F5.7-D** diag lote5.7.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff Parte B =
+3 archivos · auto-shutter/captura/quad byte a byte (solo UI de feedback).

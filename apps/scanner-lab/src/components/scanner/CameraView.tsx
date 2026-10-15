@@ -25,6 +25,7 @@ import {
   FileText,
   Flashlight,
   FlashlightOff,
+  Gauge,          // ← LOTE 5.7 (restaurado con el puntuador)
   ImagePlus,
   Layers,
   LayoutGrid,
@@ -2998,6 +2999,8 @@ export default function CameraView() {
   const overlayStable = precisionLive
     ? (live.score ?? 0) > SHUTTER_SCORE
     : stable;
+  const scorePct =
+    live.score !== null ? Math.round(live.score * 100) : null; // LOTE 5.7 — puntuador
 
   // QA (spec test estándar v1.1 · marca nueva) — capture_stable: el overlay
   // de estabilidad APARECIÓ para el encuadre actual (flanco de subida de
@@ -3340,6 +3343,56 @@ export default function CameraView() {
                     </button>
                   </div>
                 </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* LOTE 5.7 — Puntuador de encuadre EN VIVO (restaurado del pre-5.3):
+            esquina inferior izquierda, compacto, pointer-events-none (no tapa
+            el visor ni captura toques). Verde al superar el umbral del shutter. */}
+        <AnimatePresence>
+          {precisionLive && scorePct !== null && (
+            <motion.div
+              key="score-meter"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.22 }}
+              className="pointer-events-none absolute bottom-9 left-3 z-20"
+              role="status"
+              aria-label={`Calidad de encuadre ${scorePct} por ciento`}
+            >
+              <div className="flex h-8 items-center gap-2.5 rounded-full bg-black/55 px-3 shadow-[0_4px_14px_rgba(0,0,0,0.35)] backdrop-blur-md">
+                <Gauge
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/80"
+                  )}
+                  strokeWidth={2.2}
+                  aria-hidden="true"
+                />
+                <div className="h-1 w-14 overflow-hidden rounded-full bg-white/20">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-300 ease-out",
+                      scorePct > SHUTTER_SCORE * 100
+                        ? "bg-gradient-to-r from-[#30d158] to-[#34c759]"
+                        : scorePct > 55
+                          ? "bg-gradient-to-r from-[#007aff] to-[#4da2ff]"
+                          : "bg-white/50"
+                    )}
+                    style={{ width: `${Math.min(100, Math.max(4, scorePct))}%` }}
+                  />
+                </div>
+                <span
+                  className={cn(
+                    "min-w-7 text-right text-[11px] font-semibold tabular-nums",
+                    scorePct > SHUTTER_SCORE * 100 ? "text-[#34c759]" : "text-white/85"
+                  )}
+                >
+                  {scorePct}
+                </span>
               </div>
             </motion.div>
           )}
