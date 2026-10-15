@@ -174,6 +174,19 @@ export interface CapturePage {
    *  se aplica el quad SOLO si el usuario no recortó a mano (quadManual).
    *  Runtime-only: no se persiste ni viaja a ScanPage. */
   autoQuadPending?: boolean;
+  /** LOTE 5.6 (diag-encuadre — SOLO telemetría): de dónde nació el quad de
+   *  ESTA página. "overlay" = quad nato del visor (solo cuando el aspecto
+   *  del stream coincide con el de la foto); "detect" = detección en
+   *  background sobre la foto (applyAutoQuad aterrizó); "none" = marco
+   *  provisional (nació provisional y la detección no aterrizó/falló).
+   *  undefined = página creada antes del campo. Runtime-only: no se
+   *  persiste ni viaja a ScanPage. */
+  quadSource?: "overlay" | "detect" | "none";
+  /** LOTE 5.6 — dimensiones naturales (px) del ORIGINAL, medidas al
+   *  aterrizar el data URL. Insumo del diag de encuadre (aspecto foto vs
+   *  stream). Runtime-only. */
+  origW?: number;
+  origH?: number;
   /** LOTE 5.5 — true = hay un upgrade silencioso (5.4) en vuelo para esta
    *  página: el editor muestra la pill «Afinando a calidad completa…». */
   upgrading?: boolean;

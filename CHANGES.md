@@ -874,3 +874,24 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 **F5.5-J** `CameraView.tsx` — el dispatch de la foto (`photoUrl`) solo se rige por el muro cuando NO es calidad-primero (`burstDeadline !== undefined && !qualityFirstCapture`); en calidad el FileReader corre sin deadline. Modo rápido: byte a byte igual.
 
 **Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 3 archivos. QA esperado (SM-A135M, modo Calidad): captura→guardada ~6-7 s (tibia) / ~16-18 s (fría) → página a 4032; diag `naked` + `photoOutLongSide 4080` + byReason `photo` (adiós time_cap); A566E sin cambios (4032, ~1.8 s).
+
+## LOTE 5.6 — diag-encuadre (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre 2df2799). Reporte
+del dueño (TECNO-KN3): la página del editor sale recortada arriba/abajo
+respecto al visor. Dos hipótesis: quad/detección muerde vs el encuadre
+(stream 9:16 vs foto 3:4) captura menos de lo visto. Decisión: DATOS REALES
+primero — telemetría pura, cero cambios de comportamiento.
+
+**F5.6-A** `types.ts` — `CapturePage.quadSource? ("overlay"|"detect"|"none")`
++ `origW?/origH?` (runtime-only, como `autoQuadPending`).
+**F5.6-B/C** `CameraView.tsx` — origen anotado al nacer (overlay/none) y al
+aterrizar `applyAutoQuad` (detect); hoist de iw/ih para medir el original.
+**F5.6-D** `diag-report.ts` — `pages.framing[]` (src/manual/pending/quad
+fracciones/bbox% de la foto/dims) + `camera.photoAspect` + sección TXT
+«ENCUADRE (por página)» con Δaspecto stream-vs-foto. Aditivo, sin bump de
+versión. Lectura: bbox ≈ 85-100% con recorte visible ⇒ la foto no trae lo
+visto (camino cámara); bbox ≈ 55-80% ⇒ el quad muerde (camino detector).
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 4
+archivos · captura/quad/detección byte a byte (solo anotación y hoist).

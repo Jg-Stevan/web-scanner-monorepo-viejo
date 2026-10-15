@@ -948,10 +948,12 @@ export default function CameraView() {
         // NO se reemplaza: el reproceso de preview cambiaría la cache por
         // un recorte visualmente idéntico (salto/parpadeo injustificado).
         if (quadDrift(page.quad, detected) < 0.02) {
-          apply({ autoQuadPending: false });
+          // LOTE 5.6 — la detección aterrizó (sin drift): origen = detect.
+          apply({ autoQuadPending: false, quadSource: "detect" });
           return;
         }
-        apply({ quad: detected, autoQuadPending: false });
+        // LOTE 5.6 — origen = detect (la página ahora recorta por el quad detectado).
+        apply({ quad: detected, autoQuadPending: false, quadSource: "detect" });
       } catch {
         apply({ autoQuadPending: false });
       } finally {
@@ -1116,6 +1118,8 @@ export default function CameraView() {
         // (±2 %) para que el mapeo directo sea fiel — si difiere (p. ej.
         // foto 16:9 de un preview 4:3), el mapeo mentiría → background.
         const t = liveRef.current;
+        const iw = sourceNaturalWidth(source);   // LOTE 5.6 — hoist para origW/H
+        const ih = sourceNaturalHeight(source);  // LOTE 5.6
         let bornQuad: Quad | null = null;
         if (
           t.corners &&
@@ -1124,8 +1128,7 @@ export default function CameraView() {
         ) {
           const vw = videoRef.current?.videoWidth ?? 0;
           const vh = videoRef.current?.videoHeight ?? 0;
-          const iw = sourceNaturalWidth(source);
-          const ih = sourceNaturalHeight(source);
+          // iw/ih ya están en scope (hoist 5.6) — el bloque sigue igual.
           if (
             vw > 0 &&
             vh > 0 &&
@@ -1149,6 +1152,9 @@ export default function CameraView() {
           // background vía applyAutoQuad, sin bloquear la revisión.
           quad: bornQuad ?? defaultQuad(),
           autoQuadPending: bornQuad === null,
+          quadSource: bornQuad !== null ? "overlay" : "none", // LOTE 5.6 (solo telemetría)
+          origW: iw > 0 ? iw : undefined,                     // LOTE 5.6
+          origH: ih > 0 ? ih : undefined,                     // LOTE 5.6
           // F-DEFAULT-BW: «Mejora automática» (Ajustes › Procesamiento) decide
           // el filtro por defecto de cada captura — ON = B/N adaptativo (lo que
           // pidió el usuario), OFF = Original puro. Cambiable en el editor.
