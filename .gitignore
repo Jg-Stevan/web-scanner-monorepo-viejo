@@ -58,3 +58,7 @@ server.log
 /tool-results
 tool-results/
 dev.log
+
+# Artefactos locales de auditoría/diseño (fuera del producto)
+/tmp-audit/
+/download/
