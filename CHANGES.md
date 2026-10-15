@@ -864,3 +864,13 @@ bun run dev        # abrir en móvil (HTTPS requerido para cámara/DeviceMotion)
 **NO-objetivos:** store.ts, page-store.ts, sensor-profiler, package.json, bun.lock intocados · sin dependencias nuevas · sin marks nuevos.
 
 **Verificado:** `bun run lint` = 0 · `bun run app:check` (tsc) = 0 · `git diff b072009...HEAD --stat` = EXACTAMENTE 6 archivos. Pendiente del dueño (QA física): (1) Auto en A13 = rápido (1.6 s / 1920 / pill «Afinando…» ~15-20 s); (2) Calidad en A13 = espera ~15-18 s → página nace 4032 (diag: "naked" + takePhotoMs ~15000 — PRIMERA medición del desnudo sin competencia); (3) ⚠️ encuadre en modo calidad (foto 4:3 → quad auto); (4) Rápida = todo como 5.4; (5) diag build lote5.5.
+
+## LOTE 5.5.1 — hotfix-muro-calidad (2026-10-15)
+
+**Rama:** `perf/lote5-5-editor-alta-calidad` (commit sobre cc00b84). Bug del QA físico: modo «Calidad completa» en SM-A135M guardaba TODAS las páginas a 960 px.
+
+**Causa raíz (diag 20:22-20:27):** la foto full-res SÍ se capturaba (naked ganó a 1.17 s, sniff 4080 px) pero el clamp 4080→4032 (~4.5 s en gama baja) hacía volver a takePhotoBlob a ~5.7 s, el muro del auto-shutter (~5 s) ya estaba vencido y el dispatch post-foto descartaba la foto en mano por frames del preview (960). El A566E no lo sufría (todo < 1.8 s).
+
+**F5.5-J** `CameraView.tsx` — el dispatch de la foto (`photoUrl`) solo se rige por el muro cuando NO es calidad-primero (`burstDeadline !== undefined && !qualityFirstCapture`); en calidad el FileReader corre sin deadline. Modo rápido: byte a byte igual.
+
+**Verificado:** `bun run lint` = 0 · `bun run app:check` = 0 · diff = 3 archivos. QA esperado (SM-A135M, modo Calidad): captura→guardada ~6-7 s (tibia) / ~16-18 s (fría) → página a 4032; diag `naked` + `photoOutLongSide 4080` + byReason `photo` (adiós time_cap); A566E sin cambios (4032, ~1.8 s).

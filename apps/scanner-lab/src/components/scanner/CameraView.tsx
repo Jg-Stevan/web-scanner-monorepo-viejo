@@ -2034,7 +2034,13 @@ export default function CameraView() {
     // intocable: una foto algo blanda a 3264 px siempre supera a un frame
     // perfecto de 720p (el enhance afina; retomar cuesta un toque).
     let photoUrl: string | null = null;
-    if (burstDeadline !== undefined) {
+    // LOTE 5.5.1 — en calidad-primero el presupuesto de la captura es la
+    // carrera de 20 s: la foto puede volver legalmente tarde (el clamp de
+    // un 12 MP cuesta ~4.5 s en gama baja). El muro del auto-shutter NO la
+    // corta. Evidencia diag 2026-10-14 20:22-20:27 SM-A135M modo calidad:
+    // naked ganó a 1.17 s (4080 px) pero el retorno a ~5.7 s vencía el muro
+    // → la foto full-res se descartaba por frames de 960 (time_cap ×5).
+    if (burstDeadline !== undefined && !qualityFirstCapture) {
       if (burstDeadline - performance.now() <= 50) {
         // Foto en mano pero SIN presupuesto para el FileReader (un 12 MP
         // cuesta 1–3 s en gama baja): el muro se respeta → frames YA.
