@@ -32,3 +32,31 @@ canvas/navigator/localStorage del navegador, con guards de entorno).
 
 Proyecto vivo: https://github.com/Jg-Stevan/web-scanner (apps de referencia:
 apps/scanner-lab = consumidor completo de todos los módulos).
+
+## Módulos (17)
+
+| Módulo | Responsabilidad |
+|---|---|
+| `store` | Estado global Zustand (documentos, páginas, ajustes, papelera) |
+| `types` | Tipos + helpers runtime (`isTrashed`, `trashDaysLeft`, …) |
+| `image-processor` | Pipeline de imágenes: warp de perspectiva, filtros, escalado |
+| `image-modes` | Modos de imagen (B/N adaptativo, escala de grises, …) |
+| `frame-loop` | Bucle de cámara con throttling adaptativo |
+| `detector-client` | Puente TS ⇄ Web Worker de detección de bordes (OpenCV) |
+| `quality` | Score de calidad de captura (`SHUTTER_SCORE`, 0-10) |
+| `ocr` | OCR bajo demanda (local Tesseract / remoto según entorno) |
+| `pdf-export` | Exportación PDF adaptativa (jspdf, presupuesto de bytes §8) |
+| `text-export` | Exportación TXT / compartir texto OCR |
+| `format` | Formateo (bytes, tiempo relativo, …) |
+| `tags` | Etiquetas de documentos |
+| `page-store` | Persistencia IndexedDB de páginas |
+| `sensor-profiler` | Tope de resolución del sensor (F-SENSOR · 4032 px fijo) |
+| `motion-stabilizer` | Compuerta de quietud (F-STAB) |
+| `pwa` | Registro de Service Worker |
+| `mock-data` | Datos de hidratación inicial (interno) |
+
+## Assets que tu app debe servir en su `public/`
+
+`scanner/detection-worker.js`, `vendor/opencv-4.5.5.js`, `vendor/opencv-4.5.5-core.js`,
+`sw.js` y `manifest.webmanifest` — el core los localiza vía
+`process.env.NEXT_PUBLIC_BASE_PATH`.
